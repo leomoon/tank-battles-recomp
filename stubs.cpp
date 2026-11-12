@@ -1,5 +1,6 @@
 /* Original port hooks; no game code. */
 #include "stubs.h"
+#include "hle_inventory.h"
 #include <cstdlib>
 #include <cstdio>
 #ifdef TB_DIAGNOSTIC_TESTS
@@ -27,6 +28,7 @@ void tank_battles_register_override(uint32_t nid, tank_battles_override_fn handl
     static uint32_t next_alias = 0x54420000u;
     while (ps3_hle_has(next_alias)) ++next_alias;
     const uint32_t alias = next_alias++;
+    tank_battles_record_override(nid, alias);
     // Dispatch through the SDK under a private NID to preserve its TOC guard,
     // callback pumping, ABI adaptation and in-flight tracking.
     ps3_hle_register_ctx(alias, "Tank Battles port override", handler);

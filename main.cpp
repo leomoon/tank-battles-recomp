@@ -33,6 +33,7 @@
 #include "ppu_recomp.h"
 #include "boot_diagnostics.h"
 #include "stubs.h"
+#include "hle_inventory.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -455,6 +456,11 @@ int main(int argc, char** argv)
 
     tank_battles_register_overrides();
     tank_battles_milestone("port overrides registered");
+    if (!tank_battles_write_hle_inventory()) return 1;
+    if (getenv("TB_HLE_AUDIT_ONLY")) {
+        fprintf(stderr, "[audit] registration-only startup; guest not dispatched\n");
+        return 0;
+    }
 #ifdef TB_DIAGNOSTIC_TESTS
     if (!tank_battles_verify_test_override()) return 1;
     if (getenv("TB_DIAGNOSTIC_STALL")) {

@@ -180,6 +180,7 @@ add_executable(${PROJECT_NAME}
     main.cpp
     stubs.cpp
     boot_diagnostics.cpp
+    hle_inventory.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${RECOMP_SOURCES}
@@ -191,7 +192,9 @@ if(TANK_BATTLES_DIAGNOSTIC_TESTS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE TB_DIAGNOSTIC_TESTS)
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--wrap=ps3_hle_call")
+    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--wrap=ps3_hle_call"
+        "-Wl,--wrap=ps3_hle_register" "-Wl,--wrap=ps3_hle_register_ctx"
+        "-Wl,--wrap=ps3_hle_register_fast")
 endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include

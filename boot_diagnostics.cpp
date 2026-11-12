@@ -2,6 +2,7 @@
 #include "stubs.h"
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #if defined(__linux__)
 #include "ppu_recomp.h"
 #include <signal.h>
@@ -15,6 +16,8 @@ struct Snapshot {
     std::atomic<uint32_t> sequence{0}, seen{0}, cia{0}, lr{0}, nid{0};
 };
 static Snapshot snapshots[64];
+static uint32_t trace_nid;
+static std::atomic<uint32_t> traced_calls{0};
 static std::atomic<const char*> milestone{"process start"};
 
 // Only lock-free atomics and async-signal-safe writes are used by the handler.
@@ -62,6 +65,7 @@ static void report_signal(int number) {
     }
 }
 void tank_battles_diagnostics_init() {
+    if (const char* value = getenv("TB_TRACE_NID")) trace_nid = static_cast<uint32_t>(strtoul(value, nullptr, 0));
     struct sigaction action{};
     action.sa_handler = report_signal;
     sigemptyset(&action.sa_mask);
@@ -85,8 +89,13 @@ extern "C" void __wrap_ps3_hle_call(uint32_t nid, ppu_context* context) {
         s.seen.store(1);
         s.sequence.fetch_add(1);
     }
+    const bool trace = trace_nid && nid == trace_nid && traced_calls.fetch_add(1) < 32;
+    if (trace) fprintf(stderr, "[port-hle] enter nid=0x%08X lr=0x%08X r3=0x%016llX\n",
+                       nid, static_cast<uint32_t>(context->lr), (unsigned long long)context->gpr[3]);
     if (!tank_battles_dispatch_override(nid, context))
         __real_ps3_hle_call(nid, context);
+    if (trace) fprintf(stderr, "[port-hle] return nid=0x%08X r3=0x%016llX\n",
+                       nid, (unsigned long long)context->gpr[3]);
 }
 #else
 void tank_battles_diagnostics_init() {}

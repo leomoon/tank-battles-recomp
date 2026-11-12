@@ -135,6 +135,21 @@ python scripts/smoke_test.py
 
 This builds the port's actual runner against ps3recomp's synthetic PPU program in `build-smoke/`, using the headless renderer on Linux. It checks memory loading, HLE calls, guest threads, callbacks, frame presentation, and exit-status propagation. It requires no game files and does not establish Tank Battles compatibility. The synthetic guest passes status 39 to the runtime; its verifier checks that status and returns zero with `[smoke] PASS` on success.
 
+## Import audit and startup triage
+
+After building the normal executable, generate an offline-profile import report:
+
+```bash
+python scripts/audit_imports.py
+python scripts/triage_boot.py --timeout 3
+```
+
+The audit loads the local ELF and initializes HLE registrations without dispatching guest code. On Linux it captures generic, context, fast, and port-override registrations, and probes the runtime's actual NID lookup. Results go to `analysis/step4/import-audit.json`. Optional host-network entries are distinguished from missing registrations. Handler presence, unresolved names, and known module limitations are separate fields; registration is not proof of compatibility. Capture is opt-in and stops before guest dispatch.
+
+The triage tool compares repeated runs with the configured asset root against a launch-only corrected root, then tries the documented unresolved-import failure mode. It retains bounded logs, exit metadata, and observations under `analysis/step4/`. These are diagnostic profiles, not permanent configuration fixes. At the pinned SDK revision, the active missing-table dispatcher returns success directly, so `PS3_HLE_UNRESOLVED=fail` does not change the observed missing purchase-verification call. Do not interpret that fake success as validated entitlement behavior.
+
+Set `TB_TRACE_NID=0x2ECD48ED` when launching to log that import's entry and return values, capped at 32 calls. The native audit uses startup-only `TB_HLE_INVENTORY`, `TB_IMPORT_PROBE`, and `TB_HLE_AUDIT_ONLY` hooks; the Python tool manages them. Run `python scripts/smoke_test.py` followed by `python scripts/test_import_audit.py` to verify the inventory against synthetic generic/context/fast/override, inactive optional-network, and unknown-NID cases.
+
 ## Credits and contributions
 
 This port uses [ps3recomp by sp00nznet / Ned Heller](https://github.com/sp00nznet/ps3recomp). The CMake scaffold and runner are adapted from its project template; upstream attribution is preserved in [LICENSE](LICENSE). ps3recomp and its bundled components have their own licensing notices.
