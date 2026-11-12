@@ -1,0 +1,19 @@
+# Read by scripts/port.py. Paths are relative to the repository root.
+[game]
+title = "Tank Battles"
+title_id = "NPUB30154"
+elf = "game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf"
+
+[paths]
+sdk = "external/ps3recomp"
+analysis = "analysis"
+recompiled = "recompiled"
+build = "build"
+vfs_root = "game/dev_hdd0"
+hdd0_root = "game/dev_hdd0"
+hdd1_root = "game/dev_hdd1"
+
+[recompiler]
+# Bound memory use while generating the large translation units.
+jobs = 2
+chunk_lines = 100000

@@ -1,5 +1,6 @@
 # Local game data, firmware, analysis, and generated translations
-/game/
+/game/*
+!/game/.gitkeep
 /games/
 /assets/
 /dumps/
