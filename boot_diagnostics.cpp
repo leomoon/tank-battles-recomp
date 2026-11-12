@@ -1,0 +1,95 @@
+#include "boot_diagnostics.h"
+#include "stubs.h"
+#include <atomic>
+#include <cstdio>
+#if defined(__linux__)
+#include "ppu_recomp.h"
+#include <signal.h>
+#include <unistd.h>
+#include <cerrno>
+#include <initializer_list>
+
+static_assert(std::atomic<uint32_t>::is_always_lock_free);
+static_assert(std::atomic<const char*>::is_always_lock_free);
+struct Snapshot {
+    std::atomic<uint32_t> sequence{0}, seen{0}, cia{0}, lr{0}, nid{0};
+};
+static Snapshot snapshots[64];
+static std::atomic<const char*> milestone{"process start"};
+
+// Only lock-free atomics and async-signal-safe writes are used by the handler.
+// Never wait on an interrupted writer: inconsistent snapshots are omitted.
+static void write_text(const char* s) {
+    size_t n = 0; while (s[n]) ++n;
+    while (n) {
+        ssize_t done = write(STDERR_FILENO, s, n);
+        if (done < 0) { if (errno == EINTR) continue; break; }
+        s += done; n -= static_cast<size_t>(done);
+    }
+}
+static void write_hex(uint32_t value) {
+    char text[11] = "0x00000000";
+    const char* digits = "0123456789ABCDEF";
+    for (unsigned i=0; i<8; ++i) text[9-i] = digits[(value >> (i*4)) & 15];
+    write_text(text);
+}
+void tank_battles_report(const char* reason) {
+    const int saved_errno = errno;
+    write_text("[diagnostic] reason="); write_text(reason);
+    write_text(" milestone="); write_text(milestone.load()); write_text("\n");
+    write_text("[diagnostic] Last observed HLE boundaries, not a live guest-PC sample:\n");
+    for (unsigned i=0; i<64; ++i) {
+        auto& s = snapshots[i]; const auto before = s.sequence.load();
+        if (!s.seen.load()) continue;
+        if (before & 1) { write_text("[diagnostic] snapshot busy\n"); continue; }
+        const auto cia=s.cia.load(), lr=s.lr.load(), nid=s.nid.load();
+        if (before != s.sequence.load()) { write_text("[diagnostic] snapshot changed\n"); continue; }
+        write_text("[diagnostic] guest_thread="); write_hex(i);
+        write_text(" cia="); write_hex(cia);
+        write_text(" lr="); write_hex(lr);
+        write_text(" hle_nid="); write_hex(nid); write_text("\n");
+    }
+    errno = saved_errno;
+}
+static void report_signal(int number) {
+    tank_battles_report(number == SIGUSR1 ? "snapshot requested" : "fatal signal");
+    if (number != SIGUSR1) {
+        struct sigaction action{};
+        action.sa_handler = SIG_DFL;
+        sigemptyset(&action.sa_mask);
+        sigaction(number, &action, nullptr);
+        kill(getpid(), number); // Restore the original signal exit semantics.
+    }
+}
+void tank_battles_diagnostics_init() {
+    struct sigaction action{};
+    action.sa_handler = report_signal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    for (int number : {SIGUSR1, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT})
+        if (sigaction(number, &action, nullptr) != 0)
+            fprintf(stderr, "[diagnostic] could not install signal handler %d\n", number);
+}
+void tank_battles_milestone(const char* name) {
+    milestone.store(name); // Caller supplies static-lifetime strings only.
+    fprintf(stderr, "[milestone] %s\n", name);
+}
+extern "C" void __real_ps3_hle_call(uint32_t, ppu_context*);
+extern "C" void __wrap_ps3_hle_call(uint32_t nid, ppu_context* context) {
+    if (context->thread_id < 64) {
+        auto& s = snapshots[context->thread_id];
+        s.sequence.fetch_add(1);
+        s.cia.store(static_cast<uint32_t>(context->cia));
+        s.lr.store(static_cast<uint32_t>(context->lr));
+        s.nid.store(nid);
+        s.seen.store(1);
+        s.sequence.fetch_add(1);
+    }
+    if (!tank_battles_dispatch_override(nid, context))
+        __real_ps3_hle_call(nid, context);
+}
+#else
+void tank_battles_diagnostics_init() {}
+void tank_battles_milestone(const char* name) { fprintf(stderr, "[milestone] %s\n", name); }
+void tank_battles_report(const char* reason) { fprintf(stderr, "[diagnostic] %s (guest snapshots require Linux)\n", reason); }
+#endif

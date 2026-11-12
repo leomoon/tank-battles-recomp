@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import sys
 
+from boot_session import run_session
+
 if sys.version_info < (3, 11):
     raise SystemExit("Python 3.11 or newer is required.")
 import tomllib
@@ -51,6 +53,14 @@ def tool(value: str) -> str:
     if not executable:
         raise ValueError(f"Required tool not found: {value}")
     return str(Path(executable).resolve())
+
+
+def positive_seconds(value: str) -> float:
+    import math
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be finite and greater than zero")
+    return number
 
 
 def positive_int(value: str) -> int:
@@ -99,7 +109,7 @@ def build(args, config) -> None:
          "--target", "TankBattlesRecomp", "--parallel", str(args.jobs)])
 
 
-def launch(args, config) -> None:
+def launch(args, config) -> int:
     elf = elf_path(args, config)
     build_dir = resolve(args.build_dir or config["paths"]["build"])
     executable = build_dir / ("TankBattlesRecomp.exe" if os.name == "nt" else "TankBattlesRecomp")
@@ -112,7 +122,14 @@ def launch(args, config) -> None:
         env.setdefault(key, str(resolve(config["paths"][setting])))
     # Cache files and saves belong in the local dump tree, never the source SDK.
     Path(env["PS3_HDD1_ROOT"]).mkdir(parents=True, exist_ok=True)
-    run([str(executable), str(elf)], env=env)
+    env.setdefault("PS3_GAMEDATA_ROOT", str(ROOT / "game/gamedata"))
+    env.setdefault("PS3_STDIO_UNBUFFERED", "1")
+    log_path = resolve(args.log) if args.log else None
+    if log_path and not log_path.is_relative_to((ROOT / "analysis").resolve()):
+        raise ValueError("--log must be inside the repository's analysis/ directory")
+    status, _ = run_session([str(executable), str(elf)], cwd=ROOT, env=env,
+                            timeout=args.timeout, log_path=log_path, request_snapshot=True)
+    return status
 
 
 def main() -> int:
@@ -141,11 +158,14 @@ def main() -> int:
     launch_command = commands.add_parser("run", help="Run the experimental port with your local game dump")
     launch_command.add_argument("--elf")
     launch_command.add_argument("--build-dir")
+    launch_command.add_argument("--timeout", type=positive_seconds, help="Maximum run time in seconds; timeout exits with status 124")
+    launch_command.add_argument("--log", help="Combined stdout/stderr file under analysis/; exit metadata is saved beside it")
     args = parser.parse_args()
     try:
         with resolve(args.config).open("rb") as file:
             config = tomllib.load(file)
-        {"prepare": prepare, "configure": configure, "build": build, "run": launch}[args.command](args, config)
+        result = {"prepare": prepare, "configure": configure, "build": build, "run": launch}[args.command](args, config)
+        return result if isinstance(result, int) else 0
     except (OSError, ValueError, KeyError) as error:
         parser.exit(2, f"error: {error}\n")
     except subprocess.CalledProcessError as error:

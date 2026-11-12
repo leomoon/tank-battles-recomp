@@ -113,6 +113,20 @@ For analysis without translation, use `python scripts/port.py prepare --analyze-
 
 The build compiles the local generated code and links ps3recomp from source. It does not download a game, decrypt an executable, obtain keys, or implement the missing game behavior automatically. A successful build is an intermediate porting milestone.
 
+## Bounded boot diagnostics
+
+Run a bounded session and keep combined stdout/stderr plus machine-readable exit metadata in the ignored analysis directory:
+
+```bash
+python scripts/port.py run --timeout 30 --log analysis/boot/session.log
+```
+
+The sidecar is `analysis/boot/session.log.result.json`. A timeout returns launcher status 124 while preserving the actual child return code and termination signal in the sidecar. Ordinary exits retain their exit status; signal exits use the shell convention of 128 plus the signal number. Without `--timeout`, the session is unbounded. Without `--log`, output goes to the terminal. POSIX timeout cleanup terminates the session's process group, including descendants.
+
+On Linux, a timeout first requests a diagnostic snapshot with SIGUSR1. The runner reports startup milestones and each recorded guest thread's last observed HLE NID, CIA, and LR. These are snapshots at HLE boundaries, not continuously sampled guest PCs, and may be stale inside long guest loops. Fatal-signal and ELF-load failures also produce diagnostics. Snapshot handling uses lock-free atomic records and signal-safe writes. Linux-only port dispatch checks Tank Battles overrides before the shared handler and routes overrides through the SDK's ABI guard using private NID registrations. Register overrides in `stubs.cpp` before guest dispatch; the hook runs after shared runtime initialization.
+
+The smoke test also checks an intentionally stalled runner, startup-failure reporting, and an override that must preserve the caller TOC. These fixtures are compiled only with `TANK_BATTLES_DIAGNOSTIC_TESTS=ON` in the synthetic build; the normal game build defaults to OFF. Run `python scripts/test_boot_session.py` for output, exit-status, and timeout process-group cleanup checks.
+
 ## Synthetic boot check
 
 ```bash

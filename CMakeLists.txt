@@ -179,11 +179,20 @@ endif()
 add_executable(${PROJECT_NAME}
     main.cpp
     stubs.cpp
+    boot_diagnostics.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
+
+option(TANK_BATTLES_DIAGNOSTIC_TESTS "Compile synthetic-only override and stall fixtures" OFF)
+if(TANK_BATTLES_DIAGNOSTIC_TESTS)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE TB_DIAGNOSTIC_TESTS)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--wrap=ps3_hle_call")
+endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include
 # directory (and their flags) to those TUs alone: adding it to the whole target

@@ -31,6 +31,8 @@
 /* The lifter's generated header, which declares ppu_context and the function
  * table. It comes first: everything below is written against that struct. */
 #include "ppu_recomp.h"
+#include "boot_diagnostics.h"
+#include "stubs.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -194,7 +196,8 @@ static void present_guest_frame(void)
     rsx_backend_present();
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
-    InterlockedIncrement(&g_frames_presented);
+    if (InterlockedIncrement(&g_frames_presented) == 1)
+        tank_battles_milestone("first guest frame presented");
 }
 
 static DWORD WINAPI frame_clock(LPVOID)
@@ -418,28 +421,47 @@ int main(int argc, char** argv)
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
 #endif
 
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    tank_battles_diagnostics_init();
+    tank_battles_milestone("runner initialized");
     printf("=== Tank Battles Recomp (experimental) ===\n");
 
     if (!alloc_guest_vm()) {
+        tank_battles_report("guest VM allocation failed");
         fprintf(stderr, "ERROR: could not allocate the guest address space\n");
         return 1;
     }
 
     uint32_t entry = ppu_load_elf(argv[1]);
     if (!entry) {
+        tank_battles_report("ELF load failed");
         fprintf(stderr, "ERROR: could not load %s\n", argv[1]);
         return 1;
     }
 
+    tank_battles_milestone("ELF loaded");
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
 
     ppu_recomp_register();   /* lifted function table -> address map */
+    tank_battles_milestone("function table registered");
     ps3_load_prx_modules();  /* this game's lifted system PRX, if it has any */
     ppu_hle_init();          /* firmware import NID -> HLE handlers */
+    tank_battles_milestone("HLE initialized");
     ppu_sysprx_register();   /* boot-critical CRT */
     ppu_fs_register();       /* cellFs over the game directory */
+    tank_battles_milestone("filesystem registered");
     lv2_init_syscalls();     /* the lv2 syscall table */
+
+    tank_battles_register_overrides();
+    tank_battles_milestone("port overrides registered");
+#ifdef TB_DIAGNOSTIC_TESTS
+    if (!tank_battles_verify_test_override()) return 1;
+    if (getenv("TB_DIAGNOSTIC_STALL")) {
+        tank_battles_milestone("diagnostic test stall");
+        for (;;) Sleep(100);
+    }
+#endif
 
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
@@ -454,7 +476,9 @@ int main(int argc, char** argv)
     g_ppu_main_stack_addr = STACK_TOP - STACK_SIZE;
     g_ppu_main_stack_size = STACK_SIZE;
 
+    tank_battles_milestone("first guest dispatch");
     int rc = run_guest(entry, STACK_TOP);
+    if (rc != 0) tank_battles_report("guest entry returned failure");
     printf("\n[boot] ppu_run returned %d (entry function unwound)\n", rc);
 
     /* A title that called sys_process_exit never reaches this line: that path

@@ -1,9 +1,75 @@
-/* Tank Battles-specific runtime hooks. No game code is included here. */
+/* Original port hooks; no game code. */
+#include "stubs.h"
+#include <cstdlib>
+#include <cstdio>
+#ifdef TB_DIAGNOSTIC_TESTS
+#include "ppu_recomp.h"
+#endif
 
-/* The starter runner calls this after registering the translated function
- * table. Add any required lifted PRX registrations here as porting proceeds.
- * Game-specific HLE overrides should be registered after ppu_sysprx_register
- * in main.cpp so they take precedence over the shared runtime handlers. */
-extern "C" void ps3_load_prx_modules(void)
+extern "C" void ps3_load_prx_modules(void) {}
+
+extern "C" int ps3_hle_has(uint32_t);
+extern "C" void ps3_hle_register_ctx(uint32_t, const char*, tank_battles_override_fn);
+#if defined(__linux__)
+extern "C" void __real_ps3_hle_call(uint32_t, ppu_context*);
+#endif
+struct Override { uint32_t nid; uint32_t alias; };
+static Override overrides[32];
+static unsigned count;
+
+void tank_battles_register_override(uint32_t nid, tank_battles_override_fn handler)
 {
+#if !defined(__linux__)
+    fprintf(stderr, "Port overrides currently require the Linux HLE dispatch bridge.\n");
+    std::abort();
+#endif
+    if (!handler) std::abort();
+    static uint32_t next_alias = 0x54420000u;
+    while (ps3_hle_has(next_alias)) ++next_alias;
+    const uint32_t alias = next_alias++;
+    // Dispatch through the SDK under a private NID to preserve its TOC guard,
+    // callback pumping, ABI adaptation and in-flight tracking.
+    ps3_hle_register_ctx(alias, "Tank Battles port override", handler);
+    if (!ps3_hle_has(alias)) std::abort();
+    for (unsigned i = 0; i < count; ++i)
+        if (overrides[i].nid == nid) { overrides[i].alias = alias; return; }
+    if (count == 32) std::abort();
+    overrides[count++] = {nid, alias};
+}
+bool tank_battles_dispatch_override(uint32_t nid, ppu_context* context)
+{
+    for (unsigned i = 0; i < count; ++i)
+        if (overrides[i].nid == nid) {
+#if defined(__linux__)
+            __real_ps3_hle_call(overrides[i].alias, context);
+            return true;
+#endif
+        }
+    return false;
+}
+#ifdef TB_DIAGNOSTIC_TESTS
+static constexpr uint32_t test_nid = 0x1CF98800u; // cellPadInit, already in the generic HLE table.
+static void shared_test_handler(ppu_context* context) { context->gpr[3] = 0xBAD; }
+static void test_override(ppu_context* context) { context->gpr[3] = 0x54424F4Bu; context->gpr[2] = 0; }
+extern "C" void ps3_hle_call(uint32_t, ppu_context*);
+bool tank_battles_verify_test_override()
+{
+    ppu_context context{};
+    context.gpr[1] = 0x0FEFFF00;
+    context.gpr[2] = 0x12345678;
+    context.cia = 0x10200;
+    context.lr = 0x10204;
+    ps3_hle_call(test_nid, &context);
+    const bool ok = context.gpr[3] == 0x54424F4Bu && context.gpr[2] == 0x12345678 &&
+                    vm_read64(context.gpr[1] + 40) == 0x12345678;
+    fprintf(stderr, "[override-test] %s\n", ok ? "PASS" : "FAIL");
+    return ok;
+}
+#endif
+void tank_battles_register_overrides()
+{
+#ifdef TB_DIAGNOSTIC_TESTS
+    ps3_hle_register_ctx(test_nid, "synthetic existing shared handler", shared_test_handler);
+    tank_battles_register_override(test_nid, test_override);
+#endif
 }
