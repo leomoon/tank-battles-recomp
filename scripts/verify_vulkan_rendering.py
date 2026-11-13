@@ -79,7 +79,7 @@ def request_close(window):
         x11.XCloseDisplay(display)  # Flushes the request.
 
 
-def check_window(title, log, stop, results):
+def check_window(title, log, stop, results, frame):
     """Touch only this session's uniquely named X11 window; request a normal close."""
     def xdo(*args):
         return subprocess.run(['xdotool', *map(str, args)], capture_output=True,
@@ -90,6 +90,14 @@ def check_window(title, log, stop, results):
         while not stop.wait(0.25):
             text = log.read_text(errors='replace') if log.exists() else ''
             if '[vulkan-event] guest-draw ' not in text:
+                continue
+            # A recorded draw may precede the first useful readback by seconds.
+            try:
+                header, pixels = frame.read_bytes().split(b'\n255\n', 1)
+                width, height = map(int, header.split()[1:])
+                if len(pixels) != width * height * 3 or len(set(zip(pixels[::3], pixels[1::3], pixels[2::3]))) <= 64:
+                    continue
+            except (OSError, ValueError):
                 continue
             found = xdo('search', '--name', '^' + re.escape(title) + '$').splitlines()
             if len(found) != 1:
@@ -146,7 +154,7 @@ def main():
     # Remove the previous session's log before the watcher can inspect it.
     log.write_bytes(b'')
     if args.check_window:
-        watcher = threading.Thread(target=check_window, args=(title, log, stop, window), daemon=True)
+        watcher = threading.Thread(target=check_window, args=(title, log, stop, window, frame), daemon=True)
         watcher.start()
     try:
         status, session = run_session([str(build / 'TankBattlesRecomp'), str(ROOT / config['game']['elf'])],

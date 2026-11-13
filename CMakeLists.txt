@@ -221,6 +221,7 @@ add_executable(${PROJECT_NAME}
     boot_diagnostics.cpp
     text_conversion.cpp
     vulkan_diagnostics.cpp
+    rendering_profile.cpp
     execution_policy.cpp
     execution_spu_probe.c
     hle_inventory.cpp

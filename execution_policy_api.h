@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "rendering_profile.h"
 #ifdef __cplusplus
 extern "C" {
 #endif

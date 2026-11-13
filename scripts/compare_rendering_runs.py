@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Compare saved local rendering session reports without launching a game."""
+import argparse
+import json
+from pathlib import Path
+from statistics import mean
+from port import resolve
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('runs', nargs='+')
+    parser.add_argument('--output', required=True)
+    args = parser.parse_args()
+    reports = []
+    for value in args.runs:
+        path = resolve(value) / 'session.json'
+        report = json.loads(path.read_text())
+        if not report.get('strict_passed') or report['session']['launcher_exit_status'] != 124 or any('error' in e for e in report.get('actions', [])):
+            parser.error('Exclude failed or interrupted scenarios: ' + str(path))
+        timing = report.get('timing')
+        if not timing or 'error' in timing:
+            parser.error('No steady timing summary in ' + str(path))
+        reports.append(dict(path=str(path), profile=report['profile_enabled'],
+            cadence_only=report.get('cadence_only', False), capture=report['capture_enabled'],
+            batch=report['batch'], driver=report['driver'], strict_passed=report['strict_passed'],
+            timing=timing))
+    groups = {}
+    for report in reports:
+        key = f"{report['driver']}:batch={report['batch']}:scopes={report['profile']}:capture={report['capture']}"
+        groups.setdefault(key, []).append(report['timing']['presents_per_second'])
+    result = dict(runs=reports, cadence_groups={k: dict(runs=len(v), mean_fps=mean(v), min_fps=min(v), max_fps=max(v)) for k, v in groups.items()},
+        limitations='Inclusive CPU scope times overlap. Cadence-only still has frame telemetry and normal diagnostics. Capture/pass-dump runs are not performance baselines. Repeated ranges describe variability, not a controlled causal speedup or pure profiler overhead. RPCS3 compilation time is excluded from steady comparisons.')
+    target = resolve(args.output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(result, indent=2) + '\n')
+    for key, group in result['cadence_groups'].items():
+        print(key, group)
+
+
+if __name__ == '__main__':
+    main()

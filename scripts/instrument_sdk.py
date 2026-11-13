@@ -10,7 +10,7 @@ EDITS={
   '    int result = pvkCreateShaderModule(s_vk.device, &ci, NULL, out) == VK_SUCCESS ? 0 : -1;\n    if (!result) tb_vulkan_event(1,stage,words,0);\n    return result;'),
  ('    return P->variant[topo_idx];', '    if (P->variant[topo_idx]) tb_vulkan_event(4,topo_idx,P->stride,P->rt_count);\n    return P->variant[topo_idx];'),
  ('    if (!batched) { vk_submit_and_wait(); return; }', '    tb_vulkan_event(2,vertex_count,index_count,topology);\n    if (!batched) { vk_submit_and_wait(); return; }'),
- ('    r = vk_queue_present(&pi);', '    r = vk_queue_present(&pi);\n    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) tb_vulkan_event(3,s_vk.presented,s_vk.sc_extent.width,s_vk.sc_extent.height);'),
+ ('    r = vk_queue_present(&pi);', '    r = vk_queue_present(&pi);\n    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) tb_vulkan_event(3,s_vk.presented,s_vk.sc_extent.width,s_vk.sc_extent.height);\n    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) tb_render_frame();'),
  ('    vk_eng_upload_rows(o->im.img, face, mip, w, h, tight, rows, src, row_bytes);', '    vk_eng_upload_rows(o->im.img, face, mip, w, h, tight, rows, src, row_bytes);\n    tb_vulkan_event(5,texture,w,h);'),
  ('        if (o) {\n            vk_barrier_image_on(cb, o->im.img,', '        if (o) {\n            tb_vulkan_event(6,surface,o->w,o->h);\n            vk_barrier_image_on(cb, o->im.img,'),
  ('    VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\\n",',
@@ -29,11 +29,25 @@ EDITS={
  'runtime/spu/spu_dispatch_mt.c':[( 'void spu_indirect_branch_mt(spu_context* ctx)\n{','void spu_indirect_branch_mt(spu_context* ctx)\n{\n    tb_execution_event(5,ctx->pc,ctx->image_id,ctx->resident_ovl);')],
  'runtime/spu/spu_raw.c':[( '    int halted = spu_run_with_halt(s->entry, c);','    tb_execution_event(6,c->pc,c->image_id,c->resident_ovl);\n    int halted = spu_run_with_halt(s->entry, c);')],
 }
+# Profile scopes are opt-in, inclusive CPU wall time, and preserve every early return.
+# Function signatures are matched in the original pinned source, not generated code.
+PROFILE_FUNCTIONS = {
+ 'libs/video/rsx_vulkan_backend.c': {
+  'vk_eng_draw': 0, 'vk_submit_and_wait': 1, 'vk_eng_translate': 2,
+  'vk_eng_pipeline_create': 3, 'vk_eng_variant': 4, 'vk_eng_texture_upload': 5,
+  'vk_eng_present': 6, 'vk_present_window': 7, 'vk_present_complete_locked': 8,
+  'vk_dump_ppm': 9,
+ },
+}
 def main():
  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--sdk',required=True);parser.add_argument('--output',required=True);args=parser.parse_args()
  root=Path(args.sdk).resolve();out=Path(args.output);out.mkdir(parents=True,exist_ok=True);records=[]
  for relative,edits in EDITS.items():
   original=root/relative;text=original.read_text();digest=hashlib.sha256(text.encode()).hexdigest()
+  for function,kind in PROFILE_FUNCTIONS.get(relative,{}).items():
+   pattern = r'(^static [^;{]*?\b'+function+r'\([^;{]*?\)\n\{)'
+   text,n = re.subn(pattern, lambda m: m[0]+'\n    TB_RENDER_SCOPE('+str(kind)+');', text, flags=re.M)
+   if n != 1: raise SystemExit('SDK profile anchor mismatch: '+function)
   for before,after in edits:
    if text.count(before)!=1:raise SystemExit('SDK anchor mismatch: '+relative)
    text=text.replace(before,after,1)

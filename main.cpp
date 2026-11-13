@@ -199,6 +199,7 @@ extern "C" unsigned ppu_boot_frames_presented(void)
 
 static void present_guest_frame(void)
 {
+    TB_RENDER_SCOPE(11);
     rsx_backend_present();
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
@@ -242,7 +243,7 @@ static DWORD WINAPI frame_clock(LPVOID)
             /* Drain the FIFO every tick. This is what writes the RSX sync-fence
              * labels the game's per-frame logic blocks on, so it has to keep
              * advancing at 60 Hz even while present() throttles. */
-            if (rsx_ok) cellGcm_rsx_process_fifo();
+            if (rsx_ok) { TB_RENDER_SCOPE(10); cellGcm_rsx_process_fifo(); }
             next_tick += 16;             /* ~60 Hz */
             fired++;
         }
@@ -257,7 +258,7 @@ static DWORD WINAPI frame_clock(LPVOID)
                 present_guest_frame();
                 last_flip = cellGcm_flip_request_count();
             }
-            cellGcm_rsx_process_fifo();
+            { TB_RENDER_SCOPE(10); cellGcm_rsx_process_fifo(); }
 
             if (rsx_backend_pump() != 0) {
                 rsx_ok = 0;              /* window closed */

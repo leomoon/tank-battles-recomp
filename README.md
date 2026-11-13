@@ -146,6 +146,35 @@ A subsequent user session reports working gamepad input and audible sound, subst
 
 Vulkan diagnostics join the timeout snapshot as bounded counters and metadata. `window-present` counts successful/suboptimal `vkQueuePresentKHR` results, while `guest-draw` counts recorded draw calls; the framebuffer readback supplies separate pixel evidence. Generated backend instrumentation and requested-feature guards use the same reviewable source-copy workflow as the strict execution hooks, without editing the pinned SDK checkout or generated game code. Backend captures and shader dumps contain game-derived data and must remain in ignored local directories.
 
+## Rendering scenarios and frame timing
+
+`scripts/capture_rendering.py` creates a new ignored `analysis/rendering/` directory for each run, with isolated native save/cache mounts, a copy of the local purchased entitlement, and a shared content mount. Existing decrypted asset caches are reused; this is not a cold-asset test. Audio uses the dummy driver. Keep each output directory unique so earlier evidence is preserved.
+
+```bash
+# Diagnostic screenshots and pass dumps add substantial overhead.
+python scripts/capture_rendering.py --output analysis/rendering/title-images --capture --passes --timeout 25
+
+# Measure the same steady title scene without screenshot writes or pass dumps.
+python scripts/capture_rendering.py --output analysis/rendering/title-timing --profile --no-gamepad --timeout 22
+python scripts/capture_rendering.py --output analysis/rendering/title-cadence --cadence-only --no-gamepad --timeout 22
+python scripts/compare_rendering_runs.py analysis/rendering/title-timing analysis/rendering/title-cadence --output analysis/rendering/comparison.json
+
+# A separate bounded SDK PPU/SPU wait trace, with its own instrumentation cost.
+python scripts/capture_rendering.py --output analysis/rendering/title-waits --wait-trace --timeout 22
+python external/ps3recomp/tools/ftrace_report.py analysis/rendering/title-waits/wait-trace.txt --frames 3
+python scripts/test_rendering_profile.py
+```
+
+Use `--no-gamepad` for passive timing scenes so physical controller activity cannot advance the game. On Hyprland, the tool records only the test window's visibility, size, and workspace. Optional `--focus-window` attempts to focus that window and records whether the compositor accepted the request; background/occluded presentation can dominate frame time. The tested compositor rejected automatic focus dispatch, so final timing runs use observation only. No desktop configuration is changed. The default driver for this tool is X11; use `--driver wayland` for a separately labeled presentation check. `--batch 1` is an explicit diagnostic alternative. `--actions path.json` accepts elapsed-time keyboard actions such as `[{"seconds": 12, "key": "z", "hold_seconds": 0.3}]`, targets the uniquely named test window, and excludes real controllers for that keyboard profile. Event delivery does not prove a game action occurred: the local synthetic keyboard attempt stayed at the title, so menu/3D acceptance used a connected gamepad and inspected captures. For manual scenarios, omit `--actions` and continue through the game with your controller during the bounded session. Screenshots are bounded to 24 samples; the backend's `latest.ppm` continues updating afterward when capture is enabled.
+
+`TB_RENDER_PROFILE=/absolute/local/path.jsonl` enables aggregate CPU wall-time counters and logarithmic duration histograms for draws, submit/wait, translation, pipeline requests/variants, texture upload, FIFO drain, guest-flip presentation, window presentation, readback completion, and capture writing. Counters are inclusive and overlap, so do not add them together or interpret them as GPU execution timestamps. Profile snapshots are capped at 120; they contain cumulative data that the summary differences after its warmup cutoff. `TB_RENDER_PROFILE_MODE=cadence` disables scope clocks while retaining minimal frame-cadence telemetry. Normal launches leave profiling off. The synthetic C fixture verifies early-return cleanup, disabled profiling, and cadence-only behavior.
+
+Performance samples must match the scene and presentation state. A passive run with full timers spent roughly 12 seconds of a 13-second interval inside window presentation and presented about once per second; another run spent most of its time in FIFO drain and submit/wait. These identify distinct measured costs, not one universal bottleneck. Background/occlusion throttling is a candidate that requires the recorded visibility state to assess. Full-profile and cadence-only ranges vary and cannot establish a precise instrumentation overhead or optimization gain. Screenshot/pass-dump runs and the separate wait trace are excluded from performance comparisons. The final observed pair measured 9.66 presents/s with full scopes and 3.35 with cadence-only telemetry; 20/23 and 23/23 window observations respectively were marked visible. Those differing conditions and single samples do not establish the cost of profiling. In the full-scope sample, a 13.15-second window contained 9.99 seconds in FIFO drain, including 6.51 seconds in submit/wait, and 2.10 seconds in window presentation.
+
+One early uncontrolled sample left the title, attempted a ForestEnvironment asset load, and stopped under strict execution on a null PPU call. It is retained as failure evidence and excluded from the baseline; `compare_rendering_runs.py` rejects failed/interrupted sessions. The separate wait trace records PPU sleep/mixer waits, but no raw-SPU wait events. An absence of recorded SPU waits does not prove zero SPU waiting, and guest flip-request intervals in that trace are not interchangeable with presented frames or simulation speed.
+
+Captured native title, menu, player setup, and Deathmatch briefing screens reproduce texture streaks. The recorded title render target already contains the defect before window presentation. A separately configured RPCS3 profile supplies a clean main-menu comparison at guest resolution 1280×720 and 100% scale; its retained capture is a scaled window image, not an unscaled guest framebuffer. The first recorded bad native pass has 64 draws into a 2560×1440 target, including the UI texture path. This narrows the next diagnosis to the draw/texture/state path; it does not yet identify a shader, texture-addressing, or other renderer root cause. Diagnostic captures, reference settings, and scenario reports remain local under `analysis/rendering/`.
+
 ## Bounded boot diagnostics
 
 Run a bounded session and keep combined stdout/stderr plus machine-readable exit metadata in the ignored analysis directory:
