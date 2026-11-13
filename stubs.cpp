@@ -71,8 +71,10 @@ bool tank_battles_verify_test_override()
     return ok;
 }
 #endif
+void tank_battles_register_text_conversion();
 void tank_battles_register_overrides()
 {
+    tank_battles_register_text_conversion();
     tank_battles_register_asset_overrides();
     tank_battles_register_entitlement_overrides();
     tank_battles_register_offline_network();

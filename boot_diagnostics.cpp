@@ -1,5 +1,6 @@
 #include "boot_diagnostics.h"
 #include "stubs.h"
+#include "execution_policy_api.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -38,6 +39,7 @@ static void write_hex(uint32_t value) {
 }
 void tank_battles_report(const char* reason) {
     const int saved_errno = errno;
+    tank_battles_execution_report();
     write_text("[diagnostic] reason="); write_text(reason);
     write_text(" milestone="); write_text(milestone.load()); write_text("\n");
     write_text("[diagnostic] Last observed HLE boundaries, not a live guest-PC sample:\n");

@@ -176,10 +176,40 @@ elseif(PORT_ENABLE_SPU)
     endif()
 endif()
 
+# Generate instrumented copies of selected SDK sources; the pinned checkout stays clean.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(EXECUTION_SDK "${CMAKE_BINARY_DIR}/instrumented_sdk")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/instrument_sdk.py"
+    --sdk "${PS3RECOMP_DIR}" --output "${EXECUTION_SDK}" COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/instrument_sdk.py"
+    "${PS3RECOMP_DIR}/runtime/ppu/ppu_hle.cpp" "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp"
+    "${PS3RECOMP_DIR}/runtime/spu/spu_channels.c" "${PS3RECOMP_DIR}/runtime/spu/spu_interp.c"
+    "${PS3RECOMP_DIR}/runtime/spu/spu_raw.c")
+foreach(component ppu_hle.cpp ppu_loader.cpp)
+    list(REMOVE_ITEM PS3RECOMP_SCAFFOLD "${PS3RECOMP_DIR}/runtime/ppu/${component}")
+    list(APPEND PS3RECOMP_SCAFFOLD "${EXECUTION_SDK}/runtime/ppu/${component}")
+endforeach()
+list(REMOVE_ITEM SPU_SOURCES "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
+if(PORT_ENABLE_SPU AND SPU_SOURCES)
+    list(APPEND SPU_SOURCES "${EXECUTION_SDK}/runtime/spu/spu_dispatch_mt.c")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
+get_target_property(EXECUTION_RUNTIME_SOURCES ps3recomp_runtime SOURCES)
+foreach(component spu_channels.c spu_interp.c spu_raw.c)
+    list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
+    list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/runtime/spu/${component}")
+endforeach()
+set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${EXECUTION_RUNTIME_SOURCES}")
+file(GLOB_RECURSE EXECUTION_PATCHED_SOURCES "${EXECUTION_SDK}/*.cpp" "${EXECUTION_SDK}/*.c")
+set_source_files_properties(${EXECUTION_PATCHED_SOURCES} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(${PROJECT_NAME}
     main.cpp
     stubs.cpp
     boot_diagnostics.cpp
+    text_conversion.cpp
+    execution_policy.cpp
+    execution_spu_probe.c
     hle_inventory.cpp
     content_paths.cpp
     entitlement.cpp
