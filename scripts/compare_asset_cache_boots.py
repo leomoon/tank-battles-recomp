@@ -1,30 +1,96 @@
-"""Compare isolated owned cold/warm asset-cache profiles without altering originals."""
-import argparse,json,re,shutil,tomllib,resource
+#!/usr/bin/env python3
+"""Run owned warm/fresh/interrupted Vulkan profiles with independent cache trees."""
+import argparse
+import hashlib
+import json
+import os
 from pathlib import Path
-from port import ROOT,launch_environment
-from boot_session import run_session
+import shutil
+import subprocess
+import sys
+import tomllib
+from port import ROOT, resolve, positive_seconds
+
+ASSETS = ('assets_common.edat', 'assets_images.edat', 'assets_ps3.edat', 'assets_sound.edat')
+
+
+def sha(path):
+    with path.open('rb') as f:
+        return hashlib.file_digest(f,'sha256').hexdigest()
+
+
+def prepare_profile(source, destination, mode):
+    if destination.exists():
+        raise ValueError('Preserve previous profile; choose a new output directory')
+    # Copy, never hardlink or symlink writable title/cache contents.
+    shutil.copytree(source, destination, symlinks=False,
+                    ignore=lambda directory,names: [n for n in names if n.endswith(('.dec','.complete','.lock','.unedat')) or '.tmp-' in n or '.verify-' in n])
+    if mode == 'warm':
+        for path in (source/'USRDIR').glob('*.dec'):
+            shutil.copy2(path, destination/'USRDIR'/path.name)
+            marker=Path(str(path)+'.complete')
+            if marker.exists():shutil.copy2(marker,destination/'USRDIR'/marker.name)
+    elif mode == 'interrupted':
+        for name in ASSETS:
+            cache=destination/'USRDIR'/(name+'.dec')
+            cache.write_bytes(b'Interrupted cache output from original synthetic fixture.\n')
+            stamp=(destination/'USRDIR'/name).stat().st_mtime+60
+            os.utime(cache,(stamp,stamp))
+            Path(str(cache)+'.tmp-abandoned').write_bytes(b'Unpublished temporary output.\n')
+
+
+def check_caches(title, references):
+    result=[]
+    for name in ASSETS:
+        encrypted=title/'USRDIR'/name;cache=Path(str(encrypted)+'.dec')
+        with encrypted.open('rb') as f:f.seek(0x88);expected=int.from_bytes(f.read(8),'big')
+        reference=references/(name+'.unedat')
+        match=cache.exists() and cache.stat().st_size==expected and sha(cache)==sha(reference)
+        result.append(dict(asset=name,expected_bytes=expected,reference_sha256=sha(reference),
+                           passed=match,completion_record=Path(str(cache)+'.complete').is_file()))
+    return result
+
 
 def main():
- parser=argparse.ArgumentParser(description=__doc__)
- parser.add_argument("--prefix",default="asset-cache-boot",help="Fresh fixture/report prefix, such as asset-cache-repeat")
- args=parser.parse_args()
- if not re.fullmatch(r"[a-z][a-z0-9-]*",args.prefix):parser.error("Prefix must start with a lowercase letter and contain only lowercase letters, digits, and hyphens")
- resource.setrlimit(resource.RLIMIT_CORE,(0,0))
- config=tomllib.loads((ROOT/'config.toml').read_text());out=ROOT/'analysis'/args.prefix;out.mkdir(parents=True,exist_ok=True)
- results=[]
- for mode in ('warm','cold'):
-  base=ROOT/f'game/{args.prefix}-{mode}';title=base/'dev_hdd0/game/NPUB30154'
-  if base.exists():raise SystemExit(f'Profile exists; preserve it and choose fresh names: {base}')
-  shutil.copytree(ROOT/'game/dev_hdd0/game/NPUB30154',title,ignore=shutil.ignore_patterns('*.dec','*.unedat','*.verify-*'))
-  exdata=base/'dev_hdd0/home/00000001/exdata';exdata.mkdir(parents=True)
-  for p in (ROOT/'game/dev_hdd0/home/00000001/exdata').iterdir():
-   if p.suffix in ('.edat','.rap','.rifkey'):shutil.copy2(p,exdata/p.name)
-  if mode=='warm':
-   for p in (ROOT/'game/dev_hdd0/game/NPUB30154/USRDIR').glob('*.dec'):shutil.copy2(p,title/'USRDIR'/p.name)
-  env=launch_environment(config, str(title/'PARAM.SFO'))
-  env.update(PS3_VFS_ROOT=str(title),PS3_HDD0_ROOT=str(base/'dev_hdd0'),PS3_HDD1_ROOT=str(base/'dev_hdd1'),PS3_GAMEDATA_ROOT=str(base),PS3_DEV_FLASH=str(base/'dev_flash'),SPU_RAW_DBG='1',PS3_HLE_TRACE='1000',SDL_AUDIODRIVER='dummy',SDL_VIDEODRIVER='dummy')
-  command=[str(ROOT/'build/TankBattlesRecomp'),str(title/'USRDIR/EBOOT.elf')]
-  status,result=run_session(command,cwd=ROOT,env=env,timeout=40 if mode=='cold' else 4,log_path=out/f'{mode}.log',request_snapshot=True)
-  results.append(dict(mode=mode,status=status,result=result))
- (out/'profiles.json').write_text(json.dumps(results,indent=2)+'\n')
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output',required=True,help='Unique directory under analysis/resources/')
+    parser.add_argument('--build-dir',default='build-vulkan')
+    parser.add_argument('--timeout',type=positive_seconds,default=35)
+    parser.add_argument('--modes',nargs='+',choices=['warm','fresh','interrupted'],default=['warm','fresh','interrupted'])
+    parser.add_argument('--references',default='game/reference-rpcs3/assets')
+    parser.add_argument('--scenario',choices=['title','battle','campaign'],default='title',help='Battle/campaign require manual navigation, not an inferred elapsed-key route')
+    parser.add_argument('--prepare-only',action='store_true')
+    args=parser.parse_args()
+    output=resolve(args.output)
+    if not output.is_relative_to(ROOT/'analysis/resources') or output.exists():parser.error('Use a new analysis/resources/ directory')
+    config=tomllib.loads((ROOT/'config.toml').read_text());source=resolve(config['paths']['vfs_root']);references=resolve(args.references)
+    for name in ASSETS:
+        if not (references/(name+'.unedat')).is_file():parser.error('Missing independent reference '+name)
+    output.mkdir(parents=True)
+    originals={str(p):sha(p) for p in (source/'USRDIR').iterdir() if p.is_file() and p.name.endswith(('.edat','.dec','.complete'))}
+    results=[]
+    for mode in args.modes:
+        title=output/mode/'title';prepare_profile(source,title,mode)
+        before={p.name:p.stat().st_mtime_ns for p in (title/'USRDIR').glob('*.dec')}
+        if args.prepare_only:
+            results.append(dict(mode=mode,title=str(title),prepared=True));continue
+        run=ROOT/'analysis/rendering'/output.name/mode
+        print('Starting '+mode+' '+args.scenario+'; '+('leave at title' if args.scenario=='title' else 'navigate manually to requested scene'),flush=True)
+        command=[sys.executable,str(ROOT/'scripts/capture_rendering.py'),'--output',str(run),'--build-dir',args.build_dir,'--content-root',str(title),'--timeout',str(args.timeout),'--capture','--textures','--resources']
+        if args.scenario=='title':command.append('--no-gamepad')
+        child=subprocess.run(command,cwd=ROOT)
+        session=json.loads((run/'session.json').read_text()) if (run/'session.json').exists() else {}
+        assets=check_caches(title,references)
+        results.append(dict(mode=mode,title=str(title),scenario_requested=args.scenario,scenario_confirmed=False,
+            launcher=child.returncode,strict_passed=session.get('strict_passed',False),assets=assets,capture=str(run),
+            previous_cache_mtimes=before,final_cache_mtimes={p.name:p.stat().st_mtime_ns for p in (title/'USRDIR').glob('*.dec')}))
+        if child.returncode:break
+    intact=all(Path(p).is_file() and sha(Path(p))==digest for p,digest in originals.items())
+    report=dict(profiles=results,originals_intact=intact,original_hashes=originals,prepared_only=args.prepare_only,
+                note='Scenario labels are requests; confirm reached screens from captures/user actions. Warm legacy caches without completion records regenerate once.')
+    (output/'profiles.json').write_text(json.dumps(report,indent=2)+'\n')
+    if not intact or (not args.prepare_only and any(r['launcher'] or not r['strict_passed'] or not all(a['passed'] and a['completion_record'] for a in r['assets']) for r in results)):
+        raise SystemExit('Profile verification failed; inspect profiles.json')
+
+
 if __name__=='__main__':main()

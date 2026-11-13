@@ -93,7 +93,7 @@ static void asset_available(uint32_t nid, ppu_context* context) {
     if (plain == host) return; // Resolver did not provide a plaintext cache.
     // The C file layer does not call edat_resolve. Adopt only the verified
     // plaintext cache after the game's own availability call registered its key.
-    // Existing caches follow the SDK mtime policy; fresh decryptions verify blocks.
+    // Linux source-copy override validates completed caches; decryptions verify blocks.
     cellfs_add_path_mapping(path, plain);
     char actual[1200];
     if (cellfs_translate_path(path, actual, sizeof actual) != 0 || strcmp(actual, plain))

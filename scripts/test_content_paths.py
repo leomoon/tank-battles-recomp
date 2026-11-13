@@ -63,6 +63,10 @@ class ContentPathsTests(unittest.TestCase):
         (self.root / "probe.log").write_text(self.log)
         return result.returncode
 
+    def test_directory_open_errors_all_filesystem_layers(self):
+        self.assertEqual(self.probe(),0,self.log[-1800:])
+        self.assertIn("directory opens return EISDIR in all three layers",self.log)
+
     def test_plaintext_all_layers_and_cache_refresh(self):
         cache = Path(str(self.encrypted) + ".dec")
         self.assertFalse(cache.exists())

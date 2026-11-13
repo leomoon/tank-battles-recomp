@@ -4,6 +4,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+void tb_input_sample(uint32_t kind, uint32_t port, uint32_t buttons);
+void tb_resource_read(int host_fd, uint64_t offset, const void* data, uint64_t size, uint32_t ea);
+void tb_resource_hle(uint32_t nid);
 void tb_rsx_texture_capture(uint32_t location, uint32_t offset, uint32_t format, uint32_t width, uint32_t height, uint32_t pitch, const void* raw, uint32_t raw_bytes, const void* decoded, uint32_t row_bytes, uint32_t rows);
 void tb_vulkan_event(unsigned kind, uint32_t a, uint32_t b, uint32_t c);
 void tb_execution_event(unsigned kind, uint32_t address, uint32_t image, uint32_t detail);

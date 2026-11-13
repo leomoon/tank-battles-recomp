@@ -179,14 +179,15 @@ endif()
 # Generate instrumented copies of selected SDK sources; the pinned checkout stays clean.
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(EXECUTION_SDK "${CMAKE_BINARY_DIR}/instrumented_sdk")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_memory_copy.inc")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_memory_copy.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/edat_cache.inc" "${PS3RECOMP_DIR}/libs/filesystem/edat.c")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/instrument_sdk.py"
     --sdk "${PS3RECOMP_DIR}" --output "${EXECUTION_SDK}" COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/instrument_sdk.py"
-    "${PS3RECOMP_DIR}/runtime/ppu/ppu_hle.cpp" "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp"
+    "${PS3RECOMP_DIR}/runtime/ppu/ppu_hle.cpp" "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp" "${PS3RECOMP_DIR}/runtime/ppu/ppu_fs.cpp"
     "${PS3RECOMP_DIR}/runtime/spu/spu_channels.c" "${PS3RECOMP_DIR}/runtime/spu/spu_interp.c"
     "${PS3RECOMP_DIR}/runtime/spu/spu_raw.c")
-foreach(component ppu_hle.cpp ppu_loader.cpp)
+foreach(component ppu_hle.cpp ppu_loader.cpp ppu_fs.cpp)
     list(REMOVE_ITEM PS3RECOMP_SCAFFOLD "${PS3RECOMP_DIR}/runtime/ppu/${component}")
     list(APPEND PS3RECOMP_SCAFFOLD "${EXECUTION_SDK}/runtime/ppu/${component}")
 endforeach()
@@ -217,6 +218,17 @@ foreach(component rsx_draw_engine.c cellGcmSys.c)
     list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
     list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/video/${component}")
 endforeach()
+list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)cellPad.c$")
+list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/input/cellPad.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/input/cellPad.c")
+foreach(relative runtime/syscalls/sys_fs.c libs/filesystem/cellFs.c)
+    get_filename_component(component "${relative}" NAME)
+    list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
+    list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/${relative}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/${relative}")
+endforeach()
+list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)edat.c$")
+list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/filesystem/edat.c")
 set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${EXECUTION_RUNTIME_SOURCES}")
 file(GLOB_RECURSE EXECUTION_PATCHED_SOURCES "${EXECUTION_SDK}/*.cpp" "${EXECUTION_SDK}/*.c")
 set_source_files_properties(${EXECUTION_PATCHED_SOURCES} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -227,6 +239,7 @@ add_executable(${PROJECT_NAME}
     boot_diagnostics.cpp
     text_conversion.cpp
     vulkan_diagnostics.cpp
+    resource_diagnostics.cpp
     rendering_profile.cpp
     rsx_texture_diagnostics.cpp
     execution_policy.cpp

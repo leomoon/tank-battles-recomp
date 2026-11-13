@@ -3,6 +3,25 @@ import argparse,hashlib,json,re
 from pathlib import Path
 
 EDITS={
+ 'runtime/syscalls/sys_fs.c':[(
+  '    FILE* fp = fopen(host_path, mode);\n    const int open_errno = errno;',
+  '    struct stat tb_directory;\n    if (stat(host_path, &tb_directory) == 0 && (tb_directory.st_mode & S_IFMT) == S_IFDIR)\n        return (int64_t)(int32_t)CELL_EISDIR;\n    FILE* fp = fopen(host_path, mode);\n    const int open_errno = errno;')],
+ 'libs/filesystem/cellFs.c':[(
+  '    const char* mode = flags_to_mode(flags);\n    FILE* fp = fopen(host_path, mode);',
+  '    HOST_STAT_T tb_directory;\n    if (HOST_STAT(host_path, &tb_directory) == 0 && (tb_directory.st_mode & S_IFMT) == S_IFDIR)\n        return (s32)CELL_EISDIR;\n    const char* mode = flags_to_mode(flags);\n    FILE* fp = fopen(host_path, mode);')],
+ 'libs/input/cellPad.c':[
+ ('        s_host_state[i].buttons = btns;\n\n        /* Analog sticks */',
+  '        s_host_state[i].buttons = btns;\n        tb_input_sample(0,(uint32_t)i,btns);\n\n        /* Analog sticks */'),
+ ('emit:\n    /* A non-zero len',
+  'emit:\n    if (data->len > 0) tb_input_sample(1,port_no,(uint32_t)data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] | ((uint32_t)data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] << 8));\n    /* A non-zero len')],
+ 'runtime/ppu/ppu_fs.cpp':[(
+  '    size_t n = fread(vm_base + buf, 1, (size_t)nbytes, f);',
+  '    size_t n = fread(vm_base + buf, 1, (size_t)nbytes, f);\n    tb_resource_read(fileno(f),(uint64_t)fpos_before,vm_base+buf,n,buf);')],
+ 'libs/filesystem/edat.c':[
+ ('    fclose(in);\n    fclose(out);\n\n    if (rc == 0)',
+  '    fclose(in);\n    if (fclose(out) != 0 && rc == 0) rc = -12;\n\n    if (rc == 0)'),
+ ('const char* edat_resolve(const char* host_path, char* buf, size_t cap)',
+  '#if defined(__linux__)\n#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/edat_cache.inc')+'"\n#else\nconst char* edat_resolve(const char* host_path, char* buf, size_t cap)')],
  'libs/video/rsx_draw_engine.c':[
  ('            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,',
   '            if (!f && !m) tb_rsx_texture_capture(location,offset,fmt,w,h,pitch,face,tl->face_bytes,g.tex_staging,tl->dst_row_bytes,tl->rows);\n            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,')],
@@ -26,7 +45,7 @@ EDITS={
  ('        if (o) {\n            vk_barrier_image_on(cb, o->im.img,', '        if (o) {\n            tb_vulkan_event(6,surface,o->w,o->h);\n            vk_barrier_image_on(cb, o->im.img,'),
  ('    VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\\n",',
   '    tb_vulkan_event(0,s_g.on,s_vk.eng_active,s_vk.windowed && s_vk.swapchain);\n    if (vk_env_on("PS3RECOMP_VK_WINDOW") && (!s_vk.window || !s_vk.swapchain)) return -1;\n    if (vk_env_on("PS3RECOMP_VK_GUEST_PROGRAMS") && (!s_g.on || !s_vk.eng_active)) return -1;\n    VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\\n",')],
- 'runtime/ppu/ppu_hle.cpp':[( '        ps3_msf("hle:unresolved:0x%08X", nid);','        tb_execution_event(2,nid,0,(uint32_t)ctx->lr);\n        ps3_msf("hle:unresolved:0x%08X", nid);')],
+ 'runtime/ppu/ppu_hle.cpp':[( '    g_last_hle_nid = nid;', '    tb_resource_hle(nid);\n    g_last_hle_nid = nid;'),( '        ps3_msf("hle:unresolved:0x%08X", nid);','        tb_execution_event(2,nid,0,(uint32_t)ctx->lr);\n        ps3_msf("hle:unresolved:0x%08X", nid);')],
  'runtime/ppu/ppu_loader.cpp':[
  ('    g_active_ctx = ctx;\n    /* BCTRL_RING','    tb_execution_event(0,(uint32_t)ctx->ctr,0,(uint32_t)ctx->lr);\n    g_active_ctx = ctx;\n    /* BCTRL_RING'),
  ('    /* Garbage virtual-call guard:', '    tb_execution_event(1,(uint32_t)ctx->ctr,0,(uint32_t)ctx->lr);\n    /* Garbage virtual-call guard:'),
@@ -65,13 +84,15 @@ def main():
   def include(match):
    path=original.parent/match[1]
    return '#include "'+str(path.resolve())+'"' if path.is_file() else match[0]
+  if relative == 'libs/filesystem/edat.c': text += '\n#endif /* Linux cache override */\n'
   text=re.sub(r'#include "([^"\n]+)"',include,text)
   text='#include "'+str(Path(__file__).resolve().parent.parent/'execution_policy_api.h')+'"\n'+text
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  if relative == 'libs/video/cellGcmSys.c':
-   override=Path(__file__).resolve().parent.parent/'sdk_overrides/rsx_memory_copy.inc'
+  overrides={'libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc'}
+  if relative in overrides:
+   override=Path(__file__).resolve().parent.parent/'sdk_overrides'/overrides[relative]
    record['port_inputs']={override.name:hashlib.sha256(override.read_bytes()).hexdigest()}
   records.append(record)
  (out/'manifest.json').write_text(json.dumps(records,indent=2)+'\n')

@@ -80,6 +80,20 @@ static bool verify_writable(ppu_context& c) {
     if (!token) return true;
     for (const char* p=token;*p;++p)
         if (!( (*p>='a'&&*p<='z') || (*p>='0'&&*p<='9') || *p=='-')) return false;
+    // Linux fopen(directory,"rb") succeeds, but PS3 file opens must report EISDIR.
+    fs::create_directories(getenv("PS3_HDD1_ROOT"));
+    const char directory[]="/dev_hdd1/";
+    memcpy(vm_base+path_ea,directory,sizeof directory);
+    for(unsigned layer=0;layer<3;++layer) {
+        constexpr uint32_t sentinel=0xABCD1234;
+        vm_write32(fd_ea,sentinel);
+        c.gpr[3]=path_ea;c.gpr[4]=0;c.gpr[5]=fd_ea;c.gpr[6]=c.gpr[7]=0;
+        auto status=invoke(layer,0,c);
+        bool ok=static_cast<uint32_t>(status)==CELL_EISDIR && vm_read32(fd_ea)==sentinel;
+        if(status==0){c.gpr[3]=vm_read32(fd_ea);invoke(layer,4,c);}
+        if(!ok){fprintf(stderr,"[asset-probe] directory open failed layer=%u status=0x%08X\n",layer,(uint32_t)status);return false;}
+    }
+    fprintf(stderr,"[asset-probe] directory opens return EISDIR in all three layers\n");
     const std::string name=std::string("port-path-check-")+token+".bin";
     const std::array<std::pair<std::string,fs::path>,2> paths={{
         {"/dev_hdd1/"+name,fs::path(getenv("PS3_HDD1_ROOT"))/name},
