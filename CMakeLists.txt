@@ -194,11 +194,23 @@ if(PORT_ENABLE_SPU AND SPU_SOURCES)
     list(APPEND SPU_SOURCES "${EXECUTION_SDK}/runtime/spu/spu_dispatch_mt.c")
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
+if(PS3RECOMP_RSX_VULKAN)
+    get_source_file_property(VULKAN_SHADER_DEFINITIONS "${PS3RECOMP_DIR}/libs/video/rsx_shader_spirv.cpp"
+        DIRECTORY "${PS3RECOMP_DIR}" COMPILE_DEFINITIONS)
+    if(NOT VULKAN_SHADER_DEFINITIONS MATCHES "PS3RECOMP_HAVE_SPIRV_TRANSLATION=1")
+        message(FATAL_ERROR "Tank Battles Vulkan requires glslang guest-shader translation; configure the null backend for CPU-only diagnostics.")
+    endif()
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/video/rsx_vulkan_backend.c")
 get_target_property(EXECUTION_RUNTIME_SOURCES ps3recomp_runtime SOURCES)
 foreach(component spu_channels.c spu_interp.c spu_raw.c)
     list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
     list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/runtime/spu/${component}")
 endforeach()
+if(PS3RECOMP_RSX_VULKAN)
+    list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)rsx_vulkan_backend.c$")
+    list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/video/rsx_vulkan_backend.c")
+endif()
 set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${EXECUTION_RUNTIME_SOURCES}")
 file(GLOB_RECURSE EXECUTION_PATCHED_SOURCES "${EXECUTION_SDK}/*.cpp" "${EXECUTION_SDK}/*.c")
 set_source_files_properties(${EXECUTION_PATCHED_SOURCES} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -208,6 +220,7 @@ add_executable(${PROJECT_NAME}
     stubs.cpp
     boot_diagnostics.cpp
     text_conversion.cpp
+    vulkan_diagnostics.cpp
     execution_policy.cpp
     execution_spu_probe.c
     hle_inventory.cpp

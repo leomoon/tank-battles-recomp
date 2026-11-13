@@ -8,9 +8,9 @@ To recompile or run the game, you must provide your own decrypted dump of a legi
 
 ## Status
 
-The repository has a pinned ps3recomp dependency, a native runner, configuration, and scripts for analysis, translation, build, and launch. It is not a playable port yet. Missing system interfaces and game-specific behavior still need to be implemented and tested. The synthetic smoke test checks the runner independently of Tank Battles.
+The repository has a pinned ps3recomp dependency, a native runner, configuration, and scripts for analysis, translation, build, and launch. It is not a playable port yet. Missing system interfaces and game-specific behavior still need to be implemented and tested. The synthetic smoke test checks the runner independently of Tank Battles. The native Vulkan build now renders the actual title screen and its press-X prompt using translated guest shaders; basic gamepad input and audible sound are user-reported working. Visual glitches and slow rendering are reported; mission correctness, audio quality/timing, and saves remain unverified.
 
-Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Remaining validation includes graphics, audio, media-player startup, saves, and visible full-game and offline menu behavior. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
+Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Remaining validation includes graphics beyond the title screen, audio, repeated startup with fresh asset caches, media requirements, saves, and visible full-game and offline menu behavior. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
 
 ## Structure
 
@@ -56,7 +56,7 @@ The submodule is pinned to the revision recorded in Git, initially `de4f090328ea
 - Git, CMake 3.20 or newer, Ninja, and a C17/C++20 toolchain. Clang is recommended, particularly for the SPU dispatch path.
 - The Python dependencies listed in `external/ps3recomp/requirements.txt`.
 - SDL2 development files on Linux and macOS.
-- Vulkan headers and a working Vulkan driver for Linux graphics. Guest shader translation also needs the shader tools described in the upstream [build guide](https://github.com/sp00nznet/ps3recomp/blob/master/docs/BUILDING.md). The null backend is available for headless diagnostics.
+- Vulkan development headers, the Vulkan loader, a working Vulkan driver, and glslang development libraries/CMake targets for Linux graphics. This port requires glslang guest-shader translation when configuring Vulkan. On Arch, the relevant development packages are `vulkan-headers`, `vulkan-icd-loader`, `glslang`, and `sdl2`, plus your GPU driver. SPIRV-Cross is not required for the Vulkan path. The null backend is available for headless diagnostics.
 
 You can install the Python tools and portable build tools into a local environment:
 
@@ -115,6 +115,37 @@ For analysis without translation, use `python scripts/port.py prepare --analyze-
 
 The build compiles the local generated code and links ps3recomp from source. It does not download a game, decrypt an executable, obtain keys, or implement the missing game behavior automatically. A successful build is an intermediate porting milestone.
 
+## Vulkan rendering verification
+
+Keep the graphics build separate from the null build used for CPU and filesystem diagnosis:
+
+```bash
+python scripts/port.py configure --backend vulkan --build-dir build-vulkan
+python scripts/port.py build --build-dir build-vulkan --jobs 4
+python scripts/port.py run --build-dir build-vulkan
+```
+
+Normal Vulkan launches enable `PS3RECOMP_VK_WINDOW=1` and `PS3RECOMP_VK_GUEST_PROGRAMS=1` unless explicitly overridden. At the pinned SDK revision these otherwise default to an offscreen target and fixed-function rendering. The port rejects unavailable requested window/guest-program support with exit status 87, and CMake rejects a Vulkan configuration without glslang translation. Explicitly setting either variable to `0` remains available for diagnostics but cannot pass the rendering verifier.
+
+```bash
+# Game-free glslang translation and shader-cache regression checks.
+python scripts/test_vulkan_shaders.py
+
+# Actual purchased game, real display and Vulkan device; bounded session.
+python scripts/verify_vulkan_rendering.py --timeout 15
+
+# Optional X11/XWayland window automation, requiring xdotool and libX11.
+python scripts/verify_vulkan_rendering.py --check-window --timeout 20
+```
+
+The verifier requires the register-file draw engine, guest shader modules and pipelines, recorded draws, texture uploads, flipped surfaces, successful window presentation, non-clear pixels, and no observed strict CPU execution fallback. It saves `startup.log`, exit metadata, `verification.json`, `frame.ppm`, and `frame.png` under ignored `analysis/vulkan/verification/`. Pixel variation is an automated rendering check, not recognition of a title screen; inspect the PNG visually. The window variant requests a resize, records actual geometry and swapchain sizes, then sends a standard X11 close request and requires a normal exit. A tiling compositor may keep its chosen geometry; swapchain resize evidence includes compositor sizing at startup.
+
+The local default Wayland bounded run and X11 window-control run pass on the RTX 3060. The captured frame shows a recognizable 1280×720 Tank Battles title screen with the press-X prompt. The renderer translated both shader stages, uploaded the title textures, and recreated the swapchain after compositor resizing. The X11 close test ended normally. No menu button was pressed during acceptance. Existing asset caches were used, audio used SDL's dummy driver, and no cold-cache startup or RPCS3 visual comparison was established by this check. The shader suite passes 28 assertions, including malformed input and damaged cache handling.
+
+A subsequent user session reports working gamepad input and audible sound, substantial visual glitches, and slow rendering. Enabling the SDK's experimental `VK_DRAW_BATCH=1` seemed slower in that session; this is an observation without measured frame timing, and batching remains disabled by default. Rendering correctness and performance beyond the title screen are unresolved.
+
+Vulkan diagnostics join the timeout snapshot as bounded counters and metadata. `window-present` counts successful/suboptimal `vkQueuePresentKHR` results, while `guest-draw` counts recorded draw calls; the framebuffer readback supplies separate pixel evidence. Generated backend instrumentation and requested-feature guards use the same reviewable source-copy workflow as the strict execution hooks, without editing the pinned SDK checkout or generated game code. Backend captures and shader dumps contain game-derived data and must remain in ignored local directories.
+
 ## Bounded boot diagnostics
 
 Run a bounded session and keep combined stdout/stderr plus machine-readable exit metadata in the ignored analysis directory:
@@ -172,7 +203,7 @@ python scripts/test_content_paths.py
 python external/ps3recomp/tools/test_edat_guest_klicensee.py
 ```
 
-The local NPUB30154 check matches all four asset containers against independent RPCS3 plaintext. Normal startup now selects the correct HDD title and opens those containers, and now passes the original raw SPU mailbox wait after the main-stack correction; title-screen startup remains unverified. Asset IO verification does not establish completed resource initialization or playable boot.
+The local NPUB30154 check matches all four asset containers against independent RPCS3 plaintext. Normal startup now selects the correct HDD title and opens those containers, and now passes the original raw SPU mailbox wait after the main-stack correction; the Vulkan build now reaches the title screen with existing asset caches. Asset IO verification does not establish completed resource initialization or playable boot.
 
 ## Purchased full-game unlock
 
@@ -238,19 +269,19 @@ python scripts/audit_imports.py --output analysis/step7/import-audit.json
 python scripts/trace_offline_imports.py
 ```
 
-The bounded launch returns 124 when its diagnostic cutoff is reached; the original raw-SPU wait has been resolved by the main-stack correction. The historical Step 7 trace records 94 related imports and 239 static call sites for the local NPUB30154 dump, translating private port aliases through captured HLE registrations. That pre-fix trace reached NP, NP2, and TUS initialization plus local DRM checks; later NetCtl, matchmaking, and voice calls have been exercised by the native probe but have not yet been reached in normal startup. Static call sites do not establish that a path executed. Visible title-menu behavior and offline mission selection remain unverified until the SPU and graphics work is complete.
+The bounded launch returns 124 when its diagnostic cutoff is reached; the original raw-SPU wait has been resolved by the main-stack correction. The historical Step 7 trace records 94 related imports and 239 static call sites for the local NPUB30154 dump, translating private port aliases through captured HLE registrations. That pre-fix trace reached NP, NP2, and TUS initialization plus local DRM checks; later NetCtl, matchmaking, and voice calls have been exercised by the native probe but have not yet been reached in normal startup. Static call sites do not establish that a path executed. The Vulkan title screen is now verified. Menu navigation and offline mission selection remain unverified.
 
 ## Main-stack placement and SPU startup
 
 The runner places its 1 MiB main-thread stack in the PS3 stack region, with top `0xD0100000`, as defined in `guest_layout.h`. Tank Battles classifies certain transfers using the stack address's high nibble. The previous segment-zero stack selected a CPU-copy path for a null synchronization request, leaving the PPU waiting for an SPU command that had never been sent. The corrected layout sends the real synchronization command and receives its SPU acknowledgement. This changes the host runner's guest-memory layout without changing game instructions or synthesizing mailbox replies.
 
-Run `python scripts/test_guest_layout.py` for the original routing regression. Use `python scripts/compare_asset_cache_boots.py --prefix asset-cache-fresh` to compare isolated cold/warm asset-cache boots with fresh fixture names. The isolated cold/warm startup evidence is under `analysis/step8/`; three corrected boots pass the old mailbox wait, and the full cold-cache run reproduces all four independent asset hashes. Step 9 implements the subsequently reached text-conversion import and verifies bounded startup under strict execution; visible startup remains unverified. This is not yet a playable port. The pinned SDK's modification-time cache policy can reuse partial caches after interrupted decryption; incomplete generated caches must be removed or quarantined before repeating that diagnostic, without changing purchased originals.
+Run `python scripts/test_guest_layout.py` for the original routing regression. Use `python scripts/compare_asset_cache_boots.py --prefix asset-cache-fresh` to compare isolated cold/warm asset-cache boots with fresh fixture names. The isolated cold/warm startup evidence is under `analysis/step8/`; three corrected boots pass the old mailbox wait, and the full cold-cache run reproduces all four independent asset hashes. Step 9 implements the subsequently reached text-conversion import and verifies bounded startup under strict execution; the Vulkan title-screen check below now verifies visible startup with existing asset caches. This is not yet a playable port. The pinned SDK's modification-time cache policy can reuse partial caches after interrupted decryption; incomplete generated caches must be removed or quarantined before repeating that diagnostic, without changing purchased originals.
 
 ## Strict static execution diagnostics
 
 The Linux runner defaults to strict guest execution. A reached missing HLE import, unresolved/null PPU target, unverified PPU recovery, SPU interpreter entry, or untranslated SPU target stops the process with status 86 and a bounded diagnostic report. This also intercepts SDK branches that otherwise return success or silently skip invalid calls. `TB_EXECUTION_MODE=diagnostic` explicitly allows those SDK fallbacks for investigation while recording them; it does not establish static compatibility.
 
-`scripts/instrument_sdk.py` generates instrumented copies of six SDK source files under the selected build directory. CMake builds those copies with the normal SDK include paths; the pinned submodule remains unchanged. The generator requires unique matching source anchors and records original/output hashes in `instrumented_sdk/manifest.json`. Original source changes trigger reconfiguration. No generated game translation is edited. Logs contain bounded target observations, counters, last image/address pairs, and a bounded image/overlay inventory. Counter and last-target writes use lock-free atomics; timeout reports use signal-safe output. A full image-inventory buffer terminates explicitly rather than silently dropping coverage.
+`scripts/instrument_sdk.py` generates instrumented copies of seven SDK source files under the selected build directory. CMake builds those copies with the normal SDK include paths; the pinned submodule remains unchanged. The generator requires unique matching source anchors and records original/output hashes in `instrumented_sdk/manifest.json`. Original source changes trigger reconfiguration. No generated game translation is edited. Logs contain bounded target observations, counters, last image/address pairs, and a bounded image/overlay inventory. Counter and last-target writes use lock-free atomics; timeout reports use signal-safe output. A full image-inventory buffer terminates explicitly rather than silently dropping coverage.
 
 ```bash
 python scripts/smoke_test.py
@@ -258,7 +289,7 @@ python scripts/test_execution_policy.py
 python scripts/verify_static_startup.py --timeout 6
 ```
 
-The eight policy/conversion tests exercise actual native missing-import, missing-target, full-interpreter, and untranslated-SPU paths, plus diagnostic mode, text conversion, and reproducible source generation. The startup verifier records its limited coverage in `analysis/static-execution/verification.json`: the run must reach its diagnostic timeout, report no observed execution failures/fallbacks, and match the observed image IDs against the generated static inventory. Passing this check proves only the recorded startup interval; graphical startup, other languages, later images, and campaign-wide coverage still require their planned checks.
+The eight policy/conversion tests exercise actual native missing-import, missing-target, full-interpreter, and untranslated-SPU paths, plus diagnostic mode, text conversion, and reproducible source generation. The startup verifier records its limited coverage in `analysis/static-execution/verification.json`: the run must reach its diagnostic timeout, report no observed execution failures/fallbacks, and match the observed image IDs against the generated static inventory. Passing this check proves only the recorded startup interval; other languages, later images, and campaign-wide coverage still require their planned checks. The separate Vulkan check below verifies the observed graphical startup interval.
 
 The newly reached NID `0x931FF25A` is `L10nConvertStr`. `text_conversion.cpp` implements the observed ISO-8859-1 to UTF-8 path and common UTF-8/UTF-16BE/UTF-32BE/UCS encodings through the host converter. Lengths are guest big-endian byte counts; length queries, partial output, invalid sequences, and unsupported converters return explicit results. Unsupported code pages remain unsupported rather than returning success with unchanged output. The port logs conversion metadata without string contents.
 

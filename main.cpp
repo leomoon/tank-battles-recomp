@@ -213,7 +213,11 @@ static DWORD WINAPI frame_clock(LPVOID)
 
     int rsx_ok = (rsx_backend_init(WINDOW_WIDTH, WINDOW_HEIGHT, title) == 0);
     fprintf(stderr, "[rsx] %s backend init %s\n", RSX_BACKEND_NAME,
-            rsx_ok ? "OK -- window open" : "FAILED");
+            rsx_ok ? "OK" : "FAILED");
+
+#if defined(PS3RECOMP_RSX_VULKAN)
+    if (!rsx_ok) { tank_battles_report("Vulkan initialization failed"); _exit(87); }
+#endif
 
     unsigned  last_flip = 0;
     ULONGLONG next_tick = GetTickCount64();
@@ -481,6 +485,12 @@ int main(int argc, char** argv)
         tank_battles_milestone("diagnostic test stall");
         for (;;) Sleep(100);
     }
+#endif
+
+#if defined(PS3RECOMP_RSX_VULKAN)
+    // Normal Vulkan launches request a real window and translated guest programs.
+    if (!getenv("PS3RECOMP_VK_WINDOW")) setenv("PS3RECOMP_VK_WINDOW", "1", 0);
+    if (!getenv("PS3RECOMP_VK_GUEST_PROGRAMS")) setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 0);
 #endif
 
     /* Install the guest-callback hook, then start the frame clock. It no-ops
