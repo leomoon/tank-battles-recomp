@@ -37,6 +37,7 @@
 #include "content_paths.h"
 #include "entitlement.h"
 #include "offline_network.h"
+#include "guest_layout.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -167,8 +168,8 @@ extern "C" int  rsx_null_backend_pump_messages(void);
  * game image: sys_ppu_thread_create puts thread stacks at 0xD0000000, so a
  * smaller arena makes every spawned thread's stack access out of bounds. */
 #define VM_SIZE       0x100010000ull   /* the full 32-bit guest space + a 64K guard */
-#define STACK_TOP     0x0FF00000u      /* main-thread stack, below the 0x10000000 segment */
-#define STACK_SIZE    0x00100000u      /* what the main thread is told it has */
+#define STACK_TOP     TB_MAIN_STACK_TOP
+#define STACK_SIZE    TB_MAIN_STACK_SIZE
 #define WINDOW_WIDTH  1280
 #define WINDOW_HEIGHT 720
 

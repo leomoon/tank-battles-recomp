@@ -172,7 +172,7 @@ python scripts/test_content_paths.py
 python external/ps3recomp/tools/test_edat_guest_klicensee.py
 ```
 
-The local NPUB30154 check matches all four asset containers against independent RPCS3 plaintext. Normal startup now selects the correct HDD title and opens those containers, but still waits for a raw SPU mailbox completion before reaching the title screen. Asset IO verification does not establish completed resource initialization or playable boot.
+The local NPUB30154 check matches all four asset containers against independent RPCS3 plaintext. Normal startup now selects the correct HDD title and opens those containers, and now passes the original raw SPU mailbox wait after the main-stack correction; title-screen startup remains unverified. Asset IO verification does not establish completed resource initialization or playable boot.
 
 ## Purchased full-game unlock
 
@@ -204,7 +204,7 @@ python scripts/verify_entitlement.py --timeout 3
 
 The 13 game-free entitlement tests cover valid synthetic input, missing files, wrong keys, corrupt hashes/data, unrelated content IDs, bad payloads, invalid guest arguments, and offline purchase results. The Linux verification script needs an unstripped diagnostic runner, `nm`, and parent access to its child's `/proc` files. It checks the known local executable's instruction layout, reads only a guest pointer chain and three entitlement-state bytes, and compares bounded purchased/missing-unlock sessions using a separate ignored HDD fixture. It does not dump guest memory or remove your purchased files. Results go to `analysis/step6/entitlement-verification.json`.
 
-The actual game's trial flag is clear with the purchased unlock and set without it, matching the traced return-value gate and RPCS3's purchased reference. The purchased verification thread completes; the missing-unlock path remains in its offline-status loop. Startup still waits on the raw SPU mailbox, so visible full-game content and mission access have not yet been revalidated in the native port.
+The actual game's trial flag is clear with the purchased unlock and set without it, matching the traced return-value gate and RPCS3's purchased reference. The purchased verification thread completes; the missing-unlock path remains in its offline-status loop. The main-stack correction resolves the original SPU mailbox wait; visible full-game content and mission access have not yet been revalidated in the native port.
 
 ## Offline PSN profile
 
@@ -238,7 +238,13 @@ python scripts/audit_imports.py --output analysis/step7/import-audit.json
 python scripts/trace_offline_imports.py
 ```
 
-The bounded launch is expected to return 124 while the raw-SPU startup wait remains unresolved. The trace records 94 related imports and 239 static call sites for the local NPUB30154 dump, translating private port aliases through captured HLE registrations. Actual startup has reached NP, NP2, and TUS initialization plus local DRM checks; later NetCtl, matchmaking, and voice calls have been exercised by the native probe but have not yet been reached in normal startup. Static call sites do not establish that a path executed. Visible title-menu behavior and offline mission selection remain unverified until the SPU and graphics work is complete.
+The bounded launch returns 124 when its diagnostic cutoff is reached; the original raw-SPU wait has been resolved by the main-stack correction. The historical Step 7 trace records 94 related imports and 239 static call sites for the local NPUB30154 dump, translating private port aliases through captured HLE registrations. That pre-fix trace reached NP, NP2, and TUS initialization plus local DRM checks; later NetCtl, matchmaking, and voice calls have been exercised by the native probe but have not yet been reached in normal startup. Static call sites do not establish that a path executed. Visible title-menu behavior and offline mission selection remain unverified until the SPU and graphics work is complete.
+
+## Main-stack placement and SPU startup
+
+The runner places its 1 MiB main-thread stack in the PS3 stack region, with top `0xD0100000`, as defined in `guest_layout.h`. Tank Battles classifies certain transfers using the stack address's high nibble. The previous segment-zero stack selected a CPU-copy path for a null synchronization request, leaving the PPU waiting for an SPU command that had never been sent. The corrected layout sends the real synchronization command and receives its SPU acknowledgement. This changes the host runner's guest-memory layout without changing game instructions or synthesizing mailbox replies.
+
+Run `python scripts/test_guest_layout.py` for the original routing regression. Use `python scripts/compare_asset_cache_boots.py --prefix asset-cache-fresh` to compare isolated cold/warm asset-cache boots with fresh fixture names. The isolated cold/warm startup evidence is under `analysis/step8/`; three corrected boots pass the old mailbox wait, and the full cold-cache run reproduces all four independent asset hashes. Later startup reaches an additional unresolved import and remains unverified. This is not yet a playable port. The pinned SDK's modification-time cache policy can reuse partial caches after interrupted decryption; incomplete generated caches must be removed or quarantined before repeating that diagnostic, without changing purchased originals.
 
 ## Credits and contributions
 
