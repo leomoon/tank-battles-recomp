@@ -239,6 +239,7 @@ add_executable(${PROJECT_NAME}
     boot_diagnostics.cpp
     text_conversion.cpp
     vulkan_diagnostics.cpp
+    input_events.cpp
     resource_diagnostics.cpp
     rendering_profile.cpp
     rsx_texture_diagnostics.cpp

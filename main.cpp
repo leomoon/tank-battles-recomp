@@ -229,6 +229,11 @@ static DWORD WINAPI frame_clock(LPVOID)
 
         int fired = 0;
         while ((long long)(now - next_tick) >= 0 && fired < 240) {
+            // Catch-up work must not starve the SDL keyboard event pump.
+            if (rsx_ok && rsx_backend_pump() != 0) {
+                ps3_host_quit("window closed");
+                return 0;
+            }
             cellGcmTickVBlank();
             cellGcmTickFlip();
             /* Present a pending flip BEFORE draining any further. The flip

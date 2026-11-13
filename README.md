@@ -175,7 +175,7 @@ One early uncontrolled sample left the title, attempted a ForestEnvironment asse
 
 The port now executes the game's NV0039 memory-to-memory transfers on subchannel 1. The pinned SDK previously treated that subchannel as 3D commands, leaving stale staging bytes at the logo and animated title-strip addresses. `sdk_overrides/rsx_memory_copy.inc` handles the transfer registers and byte-column strides, signed row pitches, overlap-safe input snapshots, tiled-memory access, SPU write coherence, and draw-engine read/write notifications. The game's known default binding is selected in the generated SDK source copy; no generated PPU/SPU output or submodule files are edited. The override's hash is included in the build manifest.
 
-The fixed 950×252 logo and 791×25 strip match their original base-level DDS payloads byte for byte before GPU upload. Captures show the title strip, main menu, and Battle setup panels restored, and the default Battle route reaches live gameplay with no observed CPU fallbacks. The user confirmed those UI improvements and reported remaining in-game graphics issues. A later controller complaint remains unconfirmed: manual-run logs show the controller connected and polled, while passive timing/title sessions intentionally disable controllers. This change does not establish complete gameplay rendering, input reliability, or performance.
+The fixed 950×252 logo and 791×25 strip match their original base-level DDS payloads byte for byte before GPU upload. Captures show the title strip, main menu, and Battle setup panels restored, and the default Battle route reaches live gameplay with no observed CPU fallbacks. The user confirmed those UI improvements and reported remaining in-game graphics issues. The later controller complaint was traced to SDL label-based mapping on a Nintendo-identifying device; the positional input fix and its acceptance scope are described below. This change does not establish complete gameplay rendering, input reliability, or performance.
 
 For a local regression check, `--textures` captures at most 96 unique base-level texture views and 96 title draw-input records, plus shader diagnostics, inside the ignored output directory. These files contain game data and must remain local. The verifier compares the two UI payloads against DDS files from the user's purchased dump; the original broken capture fails and the fixed capture passes. The game-free fixture exercises the actual transfer override with original synthetic bytes.
 
@@ -188,6 +188,22 @@ python scripts/test_rsx_memory_copy.py
 The first bad title pass was already corrupt in the render target before presentation: background, dark bar, repeated BC3 strip quads, then glyph quads into a 2560×1440 target with pitch 10240. The strip's texture pitch, UVs, and vertex inputs were correct. A VRAM snapshot located its intact payload in a staging allocation, and the corresponding dropped NV0039 command named exactly that source and the stale sampler destination. RPCS3's local `NV47/HW/nv0039.cpp` supplied the format/pitch semantics check. No shader replacement, attachment-size change, or presentation workaround was needed.
 
 An offscreen A/B comparison measured 11.3–11.7 surface flips/s with old routing and 11.6–11.8 with the fix across two 10-second steady intervals per variant. All four runs were strict-clean and showed no observed core-throughput regression in these samples. These are offscreen GPU surface-flip measurements without window presentation or controller input, not windowed FPS or simulation-speed targets. Diagnostic captures, reference settings, and full scenario reports remain local under `analysis/rendering/`.
+
+## Controller and keyboard input
+
+Face buttons use physical positions: bottom → Cross, right → Circle, left → Square, top → Triangle. The SDL input source copy defaults `SDL_GAMECONTROLLER_USE_BUTTON_LABELS` to `0` before opening devices. This matters for PS-style controllers that identify as Nintendo Pro Controllers: SDL's label-based default can interchange Cross/Circle and Square/Triangle. The user confirmed the corrected controller mapping. An explicit `SDL_GAMECONTROLLER_USE_BUTTON_LABELS=1` environment override opts back into label mapping. Device connection logs include SDL's effective mapping and label-policy setting; a custom device mapping can still be supplied through SDL's `SDL_GAMECONTROLLERCONFIG` mechanism.
+
+| Guest control | Controller | Keyboard fallback |
+| --- | --- | --- |
+| Cross / Circle | Bottom / right face button | Z / X |
+| Square / Triangle | Left / top face button | A / S |
+| D-pad / left stick | D-pad / left stick | Arrow keys (also mirror left stick) |
+| Right stick | Right stick | Unassigned |
+| L1 / R1 | Left / right shoulder | Q / W |
+| L2 / R2 | Left / right trigger | 1 / 2 |
+| Start / Select | Start / Back | Enter / Tab |
+
+Keyboard fallback requires no attached controller on port 0 and keyboard focus on the game window. The Vulkan SDL event pump retains mapped key-down edges in `input_events.cpp` until a port-0 guest data report consumes them, so a short press/release between slow pumps is not lost. The frame clock also pumps SDL during catch-up ticks so accumulated rendering work does not defer keyboard processing until the whole catch-up interval ends. The user confirmed Z/X/arrows in the final build. Held keys still use SDL state; focus loss, disabled keyboard input, or an attached controller clears queued edges. Keyboard X is Circle/back; Z is Cross/confirm. Disconnecting a controller releases its buttons and centers its sticks; reconnecting the same SDL GUID should reclaim its port. Controller input can remain active without keyboard focus. `python scripts/test_input_mapping.py` checks the actual generated cellPad source using real SDL virtual devices for face positions, releases, analog input, held-button disconnect, neutral state, and reconnect. It also runs the SDK's keyboard/focus regression against that generated source, extended with original short-press, repeated-poll, and focus-loss edge tests. Virtual-device and mocked-keyboard results do not replace physical gameplay or desktop-focus acceptance. Diagnostic `PAD_FILE`/`PAD_SCRIPT`/`PAD_AUTOPRESS` input must be absent when checking physical controls.
 
 ## Resource and cache recovery diagnostics
 
