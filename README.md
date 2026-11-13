@@ -4,7 +4,7 @@ An experimental PC port scaffold for Tank Battles on PlayStation 3 (NPUB30154), 
 
 **THIS REPOSITORY DOES NOT CONTAIN THE GAME.**
 
-To recompile or run the game, you must provide your own decrypted dump of a legitimately purchased copy of Tank Battles for PlayStation 3. Cloning this repository does not supply the game or a license to it. No game executables, assets, decrypted dumps, firmware, entitlement files, keys, or generated translations of the game code are included. Translated code is generated locally from your own dump.
+To recompile or run the game, you must provide your own decrypted dump of a legitimately purchased copy of Tank Battles for PlayStation 3. Cloning this repository does not supply the game or a license to it. No game executables, assets, decrypted dumps, firmware, entitlement files, private keys, or generated translations of the game code are included. Translated code is generated locally from your own dump.
 
 ## Status
 
@@ -89,7 +89,7 @@ game/
 └── dev_hdd1/                # Writable cache, created on launch
 ```
 
-Copy the entire installed `NPUB30154` directory from your own dump, including its other files. RPCS3 can install your PKG and export `EBOOT.elf` through Tools → Decrypt PS3 Binaries. A decrypted executable alone is not the complete game. Protected EDAT assets must also be readable by the port through runtime support or a separately prepared decrypted asset dump. Full-game entitlement files from your purchased copy remain local; entitlement support is still unfinished.
+Copy the entire installed `NPUB30154` directory from your own dump, including its other files. RPCS3 can install your PKG and export `EBOOT.elf` through Tools → Decrypt PS3 Binaries. A decrypted executable alone is not the complete game. Protected EDAT assets must also be readable by the port through runtime support or a separately prepared decrypted asset dump. Full-game entitlement files from your purchased copy remain local; the Linux entitlement bridge verifies the purchased C00 unlock as described below.
 
 The scripts read `config.toml` and look for `game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf` by default. Paths are relative to the repository root. To analyze a decrypted executable elsewhere, pass `--elf /path/to/EBOOT.elf`; this does not copy the executable or its assets. Set matching filesystem paths in the configuration before trying to run the game. `PS3_VFS_ROOT`, `PS3_HDD0_ROOT`, `PS3_HDD1_ROOT`, `PS3_GAMEDATA_ROOT`, and `PS3_DEV_FLASH` can override the launch mounts. The default VFS root is the installed title directory, HDD0 is `game/dev_hdd0`, and the user-data root is `game`, so saves and writable caches stay in the ignored dump tree. The runner reads `PARAM.SFO`, checks the configured title ID, and supplies the installed HDD boot path. Override metadata with `--paramsfo /path/to/PARAM.SFO` or `PS3_PARAM_SFO`.
 
@@ -148,7 +148,7 @@ python scripts/triage_boot.py --timeout 3
 
 The audit loads the local ELF and initializes HLE registrations without dispatching guest code. On Linux it captures generic, context, fast, and port-override registrations, and probes the runtime's actual NID lookup. Results go to `analysis/step4/import-audit.json`. Optional host-network entries are distinguished from missing registrations. Handler presence, unresolved names, and known module limitations are separate fields; registration is not proof of compatibility. Capture is opt-in and stops before guest dispatch.
 
-The triage tool compares repeated runs with the configured asset root against a launch-only corrected root, then tries the documented unresolved-import failure mode. It retains bounded logs, exit metadata, and observations under `analysis/step4/`. These are diagnostic profiles, not permanent configuration fixes. At the pinned SDK revision, the active missing-table dispatcher returns success directly, so `PS3_HLE_UNRESOLVED=fail` does not change the observed missing purchase-verification call. Do not interpret that fake success as validated entitlement behavior.
+The triage tool retains the original Step 4 profiles: repeated configured-root runs, a launch-only corrected-root profile, and the documented unresolved-import failure mode. It saves bounded logs, exit metadata, and observations under `analysis/step4/`. The current configuration already corrects the asset root, so those root profiles may now be equivalent. At the pinned SDK revision, the shared missing-table dispatcher returns success directly despite `PS3_HLE_UNRESOLVED=fail`. The port now overrides purchase verification with the local entitlement bridge below; its earlier unresolved-success result remains historical diagnostic evidence.
 
 Set `TB_TRACE_NID=0x2ECD48ED` when launching to log that import's entry and return values, capped at 32 calls. The native audit uses startup-only `TB_HLE_INVENTORY`, `TB_IMPORT_PROBE`, and `TB_HLE_AUDIT_ONLY` hooks; the Python tool manages them. Run `python scripts/smoke_test.py` followed by `python scripts/test_import_audit.py` to verify the inventory against synthetic generic/context/fast/override, inactive optional-network, and unknown-NID cases.
 
@@ -173,6 +173,38 @@ python external/ps3recomp/tools/test_edat_guest_klicensee.py
 ```
 
 The local NPUB30154 check matches all four asset containers against independent RPCS3 plaintext. Normal startup now selects the correct HDD title and opens those containers, but still waits for a raw SPU mailbox completion before reaching the title screen. Asset IO verification does not establish completed resource initialization or playable boot.
+
+## Purchased full-game unlock
+
+The base NPUB30154 executable identifies itself as a trial. The Linux port verifies the purchased C00 unlock through `sceNpDrmVerifyUpgradeLicense` instead of accepting the SDK's unresolved-import success fallback. Put your own files in this ignored directory:
+
+```text
+game/dev_hdd0/home/00000001/exdata/
+├── UP2006-NPUB30154_00-TANKBATTLES00KEY.edat
+└── UP2006-NPUB30154_00-TANKBATTLES00KEY.rap
+```
+
+Prepare the SDK's local `.edat.rifkey` sidecar from your purchased RAP:
+
+```bash
+python scripts/prepare_entitlement.py --rpcs3-source ../rpcs3
+```
+
+Preparation uses PyCryptodome from the existing Python environment and public format tables from an optional local [RPCS3 source checkout](https://github.com/RPCS3/rpcs3). The checkout is needed only for preparation; the native runner does not invoke RPCS3 or Python for license checks. The script writes the derived key locally with mode 0600, prints no key bytes, and refuses to replace a different existing sidecar. No title-specific or purchaser key is compiled into the port. Public platform format constants already exist in the SDK and the EDAT verifier; these do not grant ownership.
+
+At runtime, the bridge looks only in the configured HDD0 root's `home/00000001/exdata` profile. It validates this title's observed C00 format, the outer content ID, NPD title and developer hashes, the encrypted data block, and the decrypted `GOMA` payload's content ID. It uses a private instance of the pinned SDK codec with a unique transient plaintext file that is removed after verification. Existing `.dec`/`.unedat` caches and ambient `PS3_RIF_KEY` values cannot satisfy this check. The implementation supports the observed 352-byte version-1/type-1/license-2 unlock, rather than every PS3 entitlement format.
+
+Missing, invalid, or unrelated entitlements return `SCE_NP_DRM_ERROR_LICENSE_NOT_FOUND` (`0x80029521`); a null or unterminated argument returns `SCE_NP_DRM_ERROR_INVALID_PARAM` (`0x80029502`). Offline `sceNpDrmExecuteGamePurchase` returns `GAME_ERR_NOT_XMBBUY_CONTENT` (`0x80028F81`) and performs no purchase or guest restart. The trial path can still wait for offline PSN state, which remains Step 7 work.
+
+```bash
+python scripts/smoke_test.py
+python scripts/test_entitlement.py
+python scripts/verify_entitlement.py --timeout 3
+```
+
+The 13 game-free entitlement tests cover valid synthetic input, missing files, wrong keys, corrupt hashes/data, unrelated content IDs, bad payloads, invalid guest arguments, and offline purchase results. The Linux verification script needs an unstripped diagnostic runner, `nm`, and parent access to its child's `/proc` files. It checks the known local executable's instruction layout, reads only a guest pointer chain and three entitlement-state bytes, and compares bounded purchased/missing-unlock sessions using a separate ignored HDD fixture. It does not dump guest memory or remove your purchased files. Results go to `analysis/step6/entitlement-verification.json`.
+
+The actual game's trial flag is clear with the purchased unlock and set without it, matching the traced return-value gate and RPCS3's purchased reference. The purchased verification thread completes; the missing-unlock path remains in its offline-status loop. Startup still waits on the raw SPU mailbox, so visible full-game content and mission access have not yet been revalidated in the native port.
 
 ## Credits and contributions
 

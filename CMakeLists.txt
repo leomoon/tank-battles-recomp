@@ -182,6 +182,8 @@ add_executable(${PROJECT_NAME}
     boot_diagnostics.cpp
     hle_inventory.cpp
     content_paths.cpp
+    entitlement.cpp
+    entitlement_edat.c
     asset_probe.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -189,7 +191,7 @@ add_executable(${PROJECT_NAME}
     ${SPU_SOURCES}
 )
 
-set_source_files_properties(asset_probe.cpp PROPERTIES
+set_source_files_properties(asset_probe.cpp entitlement_edat.c PROPERTIES
     INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/filesystem")
 
 option(TANK_BATTLES_DIAGNOSTIC_TESTS "Compile synthetic-only override and stall fixtures" OFF)

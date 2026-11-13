@@ -35,6 +35,7 @@
 #include "stubs.h"
 #include "hle_inventory.h"
 #include "content_paths.h"
+#include "entitlement.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -462,6 +463,7 @@ int main(int argc, char** argv)
     tank_battles_register_overrides();
     tank_battles_milestone("port overrides registered");
     if (!tank_battles_write_hle_inventory()) return 1;
+    if (getenv("TB_ENTITLEMENT_PROBE")) return tank_battles_probe_entitlement();
     if (getenv("TB_ASSET_PROBE")) return tank_battles_probe_assets();
     if (getenv("TB_HLE_AUDIT_ONLY")) {
         fprintf(stderr, "[audit] registration-only startup; guest not dispatched\n");

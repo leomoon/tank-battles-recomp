@@ -2,6 +2,7 @@
 #include "stubs.h"
 #include "hle_inventory.h"
 #include "content_paths.h"
+#include "entitlement.h"
 #include <cstdlib>
 #include <cstdio>
 #ifdef TB_DIAGNOSTIC_TESTS
@@ -72,6 +73,7 @@ bool tank_battles_verify_test_override()
 void tank_battles_register_overrides()
 {
     tank_battles_register_asset_overrides();
+    tank_battles_register_entitlement_overrides();
 #ifdef TB_DIAGNOSTIC_TESTS
     ps3_hle_register_ctx(test_nid, "synthetic existing shared handler", shared_test_handler);
     tank_battles_register_override(test_nid, test_override);
