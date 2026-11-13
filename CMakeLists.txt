@@ -179,6 +179,7 @@ endif()
 # Generate instrumented copies of selected SDK sources; the pinned checkout stays clean.
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(EXECUTION_SDK "${CMAKE_BINARY_DIR}/instrumented_sdk")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_memory_copy.inc")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/instrument_sdk.py"
     --sdk "${PS3RECOMP_DIR}" --output "${EXECUTION_SDK}" COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/instrument_sdk.py"
@@ -202,6 +203,7 @@ if(PS3RECOMP_RSX_VULKAN)
     endif()
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/video/rsx_vulkan_backend.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/video/rsx_draw_engine.c" "${PS3RECOMP_DIR}/libs/video/cellGcmSys.c")
 get_target_property(EXECUTION_RUNTIME_SOURCES ps3recomp_runtime SOURCES)
 foreach(component spu_channels.c spu_interp.c spu_raw.c)
     list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
@@ -211,6 +213,10 @@ if(PS3RECOMP_RSX_VULKAN)
     list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)rsx_vulkan_backend.c$")
     list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/video/rsx_vulkan_backend.c")
 endif()
+foreach(component rsx_draw_engine.c cellGcmSys.c)
+    list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
+    list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/video/${component}")
+endforeach()
 set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${EXECUTION_RUNTIME_SOURCES}")
 file(GLOB_RECURSE EXECUTION_PATCHED_SOURCES "${EXECUTION_SDK}/*.cpp" "${EXECUTION_SDK}/*.c")
 set_source_files_properties(${EXECUTION_PATCHED_SOURCES} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -222,6 +228,7 @@ add_executable(${PROJECT_NAME}
     text_conversion.cpp
     vulkan_diagnostics.cpp
     rendering_profile.cpp
+    rsx_texture_diagnostics.cpp
     execution_policy.cpp
     execution_spu_probe.c
     hle_inventory.cpp

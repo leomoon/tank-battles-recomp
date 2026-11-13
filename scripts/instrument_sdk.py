@@ -3,7 +3,18 @@ import argparse,hashlib,json,re
 from pathlib import Path
 
 EDITS={
+ 'libs/video/rsx_draw_engine.c':[
+ ('            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,',
+  '            if (!f && !m) tb_rsx_texture_capture(location,offset,fmt,w,h,pitch,face,tl->face_bytes,g.tex_staging,tl->dst_row_bytes,tl->rows);\n            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,')],
+ 'libs/video/cellGcmSys.c':[
+ ('static void gcm_2d_method(u32 subch, u32 method, u32 data)\n{',
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/rsx_memory_copy.inc')+'"\n\nstatic void gcm_2d_method(u32 subch, u32 method, u32 data)\n{\n    if (subch == 1) { tb_m2mf_method(method, data); return; }'),
+ ('s1_2d = e ? atoi(e) : 0;', 's1_2d = e ? atoi(e) : 1; /* Tank Battles: default NV0039 binding. */'),
+ ('                u32 m = (type == 0) ? method + i * 4 : method;\n                /* GCM_SET_USER_COMMAND',
+  '                u32 m = (type == 0) ? method + i * 4 : method;\n                if (subch == 1 && s1_2d) { gcm_2d_method(subch, m, vm_read32(dea)); continue; }\n                /* GCM_SET_USER_COMMAND')],
  'libs/video/rsx_vulkan_backend.c':[
+ ('    vk_eng_pipe* P = &s_epipe[s_e2.pipeline - 1];\n    if (!P->used || stride != P->stride) return;',
+  '    vk_eng_pipe* P = &s_epipe[s_e2.pipeline - 1];\n    if (!P->used || stride != P->stride) return;\n    { static unsigned n; static const char* dir=(const char*)-1; if (dir == (const char*)-1) dir=getenv("TB_RSX_TEXTURE_CAPTURE"); static int ready; if (dir && s_e2.tex[0] && s_eobj[s_e2.tex[0]].w == 1920 && s_eobj[s_e2.tex[0]].h == 1080) ready=1; if (dir && ready && n < 96) { char path[4096]; snprintf(path,sizeof(path),"%s/draw-%03u.bin",dir,n); FILE* f=fopen(path,"wb"); if(f){fwrite(vertices,stride,vertex_count,f);fclose(f);} snprintf(path,sizeof(path),"%s/draws.txt",dir); f=fopen(path,"a"); if(f){ fprintf(f,"%u pipe=%u vertices=%u stride=%u index=%u texture=%u mask=%x viewport=%f,%f,%f,%f scissor=%u,%u,%u,%u\\n",n,s_e2.pipeline,vertex_count,stride,index_count,s_e2.tex[0],s_e2.tex_mask,s_e2.vp[0],s_e2.vp[1],s_e2.vp[2],s_e2.vp[3],s_e2.sc[0],s_e2.sc[1],s_e2.sc[2],s_e2.sc[3]);fclose(f);} ++n; } }'),
  ('int rsx_vulkan_backend_pump_messages(void)\n{', 'int rsx_vulkan_backend_pump_messages(void)\n{\n    tb_vulkan_event(7,0,0,0);'),
  ('    while (SDL_PollEvent(&e)) {', '    while (SDL_PollEvent(&e)) {\n        if (e.type == SDL_WINDOWEVENT) tb_vulkan_event(8,e.window.event,e.window.windowID,0);'),
  ('    return pvkCreateShaderModule(s_vk.device, &ci, NULL, out) == VK_SUCCESS ? 0 : -1;',
@@ -58,6 +69,10 @@ def main():
   text='#include "'+str(Path(__file__).resolve().parent.parent/'execution_policy_api.h')+'"\n'+text
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
-  records.append(dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest()))
+  record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
+  if relative == 'libs/video/cellGcmSys.c':
+   override=Path(__file__).resolve().parent.parent/'sdk_overrides/rsx_memory_copy.inc'
+   record['port_inputs']={override.name:hashlib.sha256(override.read_bytes()).hexdigest()}
+  records.append(record)
  (out/'manifest.json').write_text(json.dumps(records,indent=2)+'\n')
 if __name__=='__main__':main()

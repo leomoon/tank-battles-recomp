@@ -62,6 +62,7 @@ def main():
     parser.add_argument('--focus-window', action='store_true', help='Focus only the test window through Hyprland and record its visibility')
     parser.add_argument('--no-gamepad', action='store_true', help='Exclude physical gamepads to keep passive timing scenes stable')
     parser.add_argument('--actions', help='JSON array of {seconds, key, hold_seconds}; keyboard scenario on this window only')
+    parser.add_argument('--textures', action='store_true', help='Capture bounded pre-GPU decoded textures and transfer metadata')
     parser.add_argument('--passes', action='store_true', help='Save up to 16 diagnostic render passes; substantial overhead')
     parser.add_argument('--batch', choices=['0', '1'], default='0')
     args = parser.parse_args()
@@ -107,6 +108,11 @@ def main():
         env['TB_RENDER_PROFILE'] = str(output / 'timings.jsonl')
         if args.cadence_only:
             env['TB_RENDER_PROFILE_MODE'] = 'cadence'
+    if args.textures:
+        textures = output / 'textures'
+        textures.mkdir()
+        (textures / 'shaders').mkdir()
+        env.update(TB_RSX_TEXTURE_CAPTURE=str(textures), RSX_ENGINE_SHADER_DUMP=str(textures / 'shaders'))
     if args.wait_trace:
         env.update(PS3_FTRACE='10:5:' + str(output / 'wait-trace.txt'), PS3_FTRACE_CAP='200000', PS3_FTRACE_MIN_US='50')
     if args.passes:
