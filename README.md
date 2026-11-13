@@ -10,7 +10,7 @@ To recompile or run the game, you must provide your own decrypted dump of a legi
 
 The repository has a pinned ps3recomp dependency, a native runner, configuration, and scripts for analysis, translation, build, and launch. It is not a playable port yet. Missing system interfaces and game-specific behavior still need to be implemented and tested. The synthetic smoke test checks the runner independently of Tank Battles.
 
-Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Outstanding areas include graphics, audio, media-player interfaces, full-game entitlement handling, save data, and offline handling of PSN features. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
+Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Remaining validation includes graphics, audio, media-player startup, saves, and visible full-game and offline menu behavior. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
 
 ## Structure
 
@@ -194,7 +194,7 @@ Preparation uses PyCryptodome from the existing Python environment and public fo
 
 At runtime, the bridge looks only in the configured HDD0 root's `home/00000001/exdata` profile. It validates this title's observed C00 format, the outer content ID, NPD title and developer hashes, the encrypted data block, and the decrypted `GOMA` payload's content ID. It uses a private instance of the pinned SDK codec with a unique transient plaintext file that is removed after verification. Existing `.dec`/`.unedat` caches and ambient `PS3_RIF_KEY` values cannot satisfy this check. The implementation supports the observed 352-byte version-1/type-1/license-2 unlock, rather than every PS3 entitlement format.
 
-Missing, invalid, or unrelated entitlements return `SCE_NP_DRM_ERROR_LICENSE_NOT_FOUND` (`0x80029521`); a null or unterminated argument returns `SCE_NP_DRM_ERROR_INVALID_PARAM` (`0x80029502`). Offline `sceNpDrmExecuteGamePurchase` returns `GAME_ERR_NOT_XMBBUY_CONTENT` (`0x80028F81`) and performs no purchase or guest restart. The trial path can still wait for offline PSN state, which remains Step 7 work.
+Missing, invalid, or unrelated entitlements return `SCE_NP_DRM_ERROR_LICENSE_NOT_FOUND` (`0x80029521`); a null or unterminated argument returns `SCE_NP_DRM_ERROR_INVALID_PARAM` (`0x80029502`). Offline `sceNpDrmExecuteGamePurchase` returns `GAME_ERR_NOT_XMBBUY_CONTENT` (`0x80028F81`) and performs no purchase or guest restart. The missing-unlock worker retains the game's own sign-in poll with a 10 ms sleep; the offline profile does not fabricate signed-in state to terminate that worker.
 
 ```bash
 python scripts/smoke_test.py
@@ -205,6 +205,40 @@ python scripts/verify_entitlement.py --timeout 3
 The 13 game-free entitlement tests cover valid synthetic input, missing files, wrong keys, corrupt hashes/data, unrelated content IDs, bad payloads, invalid guest arguments, and offline purchase results. The Linux verification script needs an unstripped diagnostic runner, `nm`, and parent access to its child's `/proc` files. It checks the known local executable's instruction layout, reads only a guest pointer chain and three entitlement-state bytes, and compares bounded purchased/missing-unlock sessions using a separate ignored HDD fixture. It does not dump guest memory or remove your purchased files. Results go to `analysis/step6/entitlement-verification.json`.
 
 The actual game's trial flag is clear with the purchased unlock and set without it, matching the traced return-value gate and RPCS3's purchased reference. The purchased verification thread completes; the missing-unlock path remains in its offline-status loop. Startup still waits on the raw SPU mailbox, so visible full-game content and mission access have not yet been revalidated in the native port.
+
+## Offline PSN profile
+
+On Linux, `offline_network.cpp` implements the local/offline behavior for this title's imported PSN interfaces. Startup clears `PS3_NET_ONLINE` and `PSNR_SERVER` before initializing HLE, so those environment settings cannot enable host matchmaking in this port. Online multiplayer is outside the initial playable milestone. The pinned shared SDK is unchanged.
+
+| Interface | Offline behavior |
+| --- | --- |
+| NP manager | Reports OFFLINE; callback registration does not invent a sign-in event. |
+| NetCtl | An initialized state query succeeds with Disconnected. Network dialogs deliver LOADED, FINISHED, and UNLOADED through sysutil; the result is cancelled. |
+| Score and TUS | Local title contexts have valid releasable handles. Transaction creation fails without login; no request IDs or successful empty leaderboard results are fabricated. |
+| Matching2 | Local contexts and registrations succeed. An accepted context start delivers StartOver with NOT_NP_SIGN_IN; room requests fail immediately. |
+| Avc2 | Initializes the 132-byte parameter structure. Accepted voice loading delivers LOAD_FAILED with NOT_SUPPORTED; streaming does not report success. |
+| Invitations and signaling | Requests return explicit offline/unreachable errors without creating pending online operations. |
+
+The bridge holds deferred completions until `cellSysutilCheckCallback`, then uses the SDK's existing guest callback queue. Abort, context destruction, module termination, and NP termination clear the corresponding pending work. Failed requests leave output buffers and request-ID fields untouched. The imported callbacks remain guest callbacks with their original argument layout. Core initialization and local DRM checks remain usable without signing in.
+
+Run the native interface tests after building the synthetic runner:
+
+```bash
+python scripts/smoke_test.py
+python scripts/test_offline_network.py
+```
+
+The tests run the actual HLE dispatcher and callback queue with a child-only Linux seccomp filter that denies new sockets. Both normal and online-configured environment profiles pass the same checks, covering deferred delivery, callback arguments, cancellation, context cleanup, output boundaries, and rejection of unavailable services. The runner's opt-in `TB_OFFLINE_PROBE=1` performs these checks before guest dispatch and requires no private keys or game assets when used with the synthetic ELF. The synthetic build has no SPU program; actual game startup still requires separate validation.
+
+To reproduce the import and startup trace with your local game:
+
+```bash
+PS3_HLE_TRACE=1000 python scripts/port.py run --timeout 3 --log analysis/step7/game-boot.log
+python scripts/audit_imports.py --output analysis/step7/import-audit.json
+python scripts/trace_offline_imports.py
+```
+
+The bounded launch is expected to return 124 while the raw-SPU startup wait remains unresolved. The trace records 94 related imports and 239 static call sites for the local NPUB30154 dump, translating private port aliases through captured HLE registrations. Actual startup has reached NP, NP2, and TUS initialization plus local DRM checks; later NetCtl, matchmaking, and voice calls have been exercised by the native probe but have not yet been reached in normal startup. Static call sites do not establish that a path executed. Visible title-menu behavior and offline mission selection remain unverified until the SPU and graphics work is complete.
 
 ## Credits and contributions
 

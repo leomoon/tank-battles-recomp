@@ -3,6 +3,7 @@
 #include "hle_inventory.h"
 #include "content_paths.h"
 #include "entitlement.h"
+#include "offline_network.h"
 #include <cstdlib>
 #include <cstdio>
 #ifdef TB_DIAGNOSTIC_TESTS
@@ -17,7 +18,7 @@ extern "C" void ps3_hle_register_ctx(uint32_t, const char*, tank_battles_overrid
 extern "C" void __real_ps3_hle_call(uint32_t, ppu_context*);
 #endif
 struct Override { uint32_t nid; uint32_t alias; };
-static Override overrides[32];
+static Override overrides[128];
 static unsigned count;
 
 void tank_battles_register_override(uint32_t nid, tank_battles_override_fn handler)
@@ -37,7 +38,7 @@ void tank_battles_register_override(uint32_t nid, tank_battles_override_fn handl
     if (!ps3_hle_has(alias)) std::abort();
     for (unsigned i = 0; i < count; ++i)
         if (overrides[i].nid == nid) { overrides[i].alias = alias; return; }
-    if (count == 32) std::abort();
+    if (count == 128) std::abort();
     overrides[count++] = {nid, alias};
 }
 bool tank_battles_dispatch_override(uint32_t nid, ppu_context* context)
@@ -74,6 +75,7 @@ void tank_battles_register_overrides()
 {
     tank_battles_register_asset_overrides();
     tank_battles_register_entitlement_overrides();
+    tank_battles_register_offline_network();
 #ifdef TB_DIAGNOSTIC_TESTS
     ps3_hle_register_ctx(test_nid, "synthetic existing shared handler", shared_test_handler);
     tank_battles_register_override(test_nid, test_override);

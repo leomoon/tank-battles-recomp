@@ -36,6 +36,7 @@
 #include "hle_inventory.h"
 #include "content_paths.h"
 #include "entitlement.h"
+#include "offline_network.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -450,6 +451,7 @@ int main(int argc, char** argv)
     }
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
 
+    tank_battles_init_offline_network();
     ppu_recomp_register();   /* lifted function table -> address map */
     tank_battles_milestone("function table registered");
     ps3_load_prx_modules();  /* this game's lifted system PRX, if it has any */
@@ -463,6 +465,7 @@ int main(int argc, char** argv)
     tank_battles_register_overrides();
     tank_battles_milestone("port overrides registered");
     if (!tank_battles_write_hle_inventory()) return 1;
+    if (getenv("TB_OFFLINE_PROBE")) return tank_battles_probe_offline_network();
     if (getenv("TB_ENTITLEMENT_PROBE")) return tank_battles_probe_entitlement();
     if (getenv("TB_ASSET_PROBE")) return tank_battles_probe_assets();
     if (getenv("TB_HLE_AUDIT_ONLY")) {

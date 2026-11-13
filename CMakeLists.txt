@@ -183,6 +183,8 @@ add_executable(${PROJECT_NAME}
     hle_inventory.cpp
     content_paths.cpp
     entitlement.cpp
+    offline_network.cpp
+    offline_network_probe.cpp
     entitlement_edat.c
     asset_probe.cpp
     ${PS3RECOMP_SCAFFOLD}
