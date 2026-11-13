@@ -3,15 +3,18 @@
 title = "Tank Battles"
 title_id = "NPUB30154"
 elf = "game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf"
+paramsfo = "game/dev_hdd0/game/NPUB30154/PARAM.SFO"
 
 [paths]
 sdk = "external/ps3recomp"
 analysis = "analysis"
 recompiled = "recompiled"
 build = "build"
-vfs_root = "game/dev_hdd0"
+vfs_root = "game/dev_hdd0/game/NPUB30154"
 hdd0_root = "game/dev_hdd0"
 hdd1_root = "game/dev_hdd1"
+gamedata_root = "game"
+flash_root = "game/dev_flash"
 
 [recompiler]
 # Bound memory use while generating the large translation units.

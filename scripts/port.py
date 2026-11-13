@@ -109,21 +109,31 @@ def build(args, config) -> None:
          "--target", "TankBattlesRecomp", "--parallel", str(args.jobs)])
 
 
+def launch_environment(config, paramsfo=None):
+    env = os.environ.copy()
+    env.setdefault("PS3_TITLE", config["game"]["title"] + " Recomp")
+    for key, setting in (("PS3_VFS_ROOT", "vfs_root"), ("PS3_HDD0_ROOT", "hdd0_root"),
+                         ("PS3_HDD1_ROOT", "hdd1_root"), ("PS3_GAMEDATA_ROOT", "gamedata_root"),
+                         ("PS3_DEV_FLASH", "flash_root")):
+        env.setdefault(key, str(resolve(config["paths"][setting])))
+    # Cache files and saves belong in the local dump tree, never the source SDK.
+    Path(env["PS3_HDD1_ROOT"]).mkdir(parents=True, exist_ok=True)
+    sfo = resolve(paramsfo or env.get("PS3_PARAM_SFO") or config["game"]["paramsfo"])
+    if not sfo.is_file():
+        raise ValueError(f"Missing game metadata: {sfo}")
+    env["PS3_PARAM_SFO"] = str(sfo)
+    env.setdefault("TB_EXPECTED_TITLE_ID", config["game"]["title_id"])
+    env.setdefault("PS3_STDIO_UNBUFFERED", "1")
+    return env
+
+
 def launch(args, config) -> int:
     elf = elf_path(args, config)
     build_dir = resolve(args.build_dir or config["paths"]["build"])
     executable = build_dir / ("TankBattlesRecomp.exe" if os.name == "nt" else "TankBattlesRecomp")
     if not executable.is_file():
         raise ValueError(f"Port executable not found: {executable}. Run configure and build first.")
-    env = os.environ.copy()
-    env.setdefault("PS3_TITLE", config["game"]["title"] + " Recomp")
-    for key, setting in (("PS3_VFS_ROOT", "vfs_root"), ("PS3_HDD0_ROOT", "hdd0_root"),
-                         ("PS3_HDD1_ROOT", "hdd1_root")):
-        env.setdefault(key, str(resolve(config["paths"][setting])))
-    # Cache files and saves belong in the local dump tree, never the source SDK.
-    Path(env["PS3_HDD1_ROOT"]).mkdir(parents=True, exist_ok=True)
-    env.setdefault("PS3_GAMEDATA_ROOT", str(ROOT / "game/gamedata"))
-    env.setdefault("PS3_STDIO_UNBUFFERED", "1")
+    env = launch_environment(config, args.paramsfo)
     log_path = resolve(args.log) if args.log else None
     if log_path and not log_path.is_relative_to((ROOT / "analysis").resolve()):
         raise ValueError("--log must be inside the repository's analysis/ directory")
@@ -157,6 +167,7 @@ def main() -> int:
     compile_command.add_argument("--jobs", type=positive_int, default=2)
     launch_command = commands.add_parser("run", help="Run the experimental port with your local game dump")
     launch_command.add_argument("--elf")
+    launch_command.add_argument("--paramsfo", help="Local PARAM.SFO (defaults to config.toml)")
     launch_command.add_argument("--build-dir")
     launch_command.add_argument("--timeout", type=positive_seconds, help="Maximum run time in seconds; timeout exits with status 124")
     launch_command.add_argument("--log", help="Combined stdout/stderr file under analysis/; exit metadata is saved beside it")

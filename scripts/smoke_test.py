@@ -12,6 +12,7 @@ import sys
 
 from port import ROOT, positive_int, resolve, run, tool
 from boot_session import run_session
+from synthetic_content import write_sfo
 
 
 def main() -> int:
@@ -31,6 +32,7 @@ def main() -> int:
         generated = build_dir / "synthetic"
         generated.mkdir(parents=True, exist_ok=True)
         image = generated / "smoke.elf"
+        write_sfo(generated / "PARAM.SFO")
         run([sys.executable, str(sdk / "tools/make_smoke_elf.py"),
              "--out", str(image), "--header", str(generated / "ppu_recomp.h")])
         shutil.copyfile(source, generated / "smoke_recomp.c")
@@ -44,6 +46,9 @@ def main() -> int:
         executable = build_dir / ("TankBattlesRecomp.exe" if os.name == "nt" else "TankBattlesRecomp")
         env = os.environ.copy()
         env.pop("TB_DIAGNOSTIC_STALL", None)
+        env.pop("TB_EXPECTED_TITLE_ID", None)
+        env["PS3_PARAM_SFO"] = str(generated / "PARAM.SFO")
+        env["PS3_GAMEDATA_ROOT"] = str(generated)
         env.update(SDL_AUDIODRIVER="dummy", SDL_VIDEODRIVER="dummy", PS3_TITLE="Tank Battles scaffold smoke test")
         # Keep every writable mount in this test's ignored build directory.
         for name in ("PS3_VFS_ROOT", "PS3_HDD0_ROOT", "PS3_HDD1_ROOT"):

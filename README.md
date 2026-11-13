@@ -20,6 +20,8 @@ tank-battles-recomp/
 ├── config.toml             # Paths and translation settings used by scripts/port.py
 ├── main.cpp                # PPU runner, graphics backend, and frame clock
 ├── stubs.cpp               # Tank Battles-specific runtime hooks
+├── content_paths.cpp       # Title metadata, mount roots, and EDAT mapping
+├── asset_probe.cpp         # Opt-in native filesystem verification
 ├── external/
 │   └── ps3recomp/           # Pinned Git submodule
 ├── scripts/
@@ -89,7 +91,7 @@ game/
 
 Copy the entire installed `NPUB30154` directory from your own dump, including its other files. RPCS3 can install your PKG and export `EBOOT.elf` through Tools → Decrypt PS3 Binaries. A decrypted executable alone is not the complete game. Protected EDAT assets must also be readable by the port through runtime support or a separately prepared decrypted asset dump. Full-game entitlement files from your purchased copy remain local; entitlement support is still unfinished.
 
-The scripts read `config.toml` and look for `game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf` by default. Paths are relative to the repository root. To analyze a decrypted executable elsewhere, pass `--elf /path/to/EBOOT.elf`; this does not copy the executable or its assets. Set matching filesystem paths in the configuration before trying to run the game. `PS3_VFS_ROOT`, `PS3_HDD0_ROOT`, and `PS3_HDD1_ROOT` can override the launch mounts.
+The scripts read `config.toml` and look for `game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf` by default. Paths are relative to the repository root. To analyze a decrypted executable elsewhere, pass `--elf /path/to/EBOOT.elf`; this does not copy the executable or its assets. Set matching filesystem paths in the configuration before trying to run the game. `PS3_VFS_ROOT`, `PS3_HDD0_ROOT`, `PS3_HDD1_ROOT`, `PS3_GAMEDATA_ROOT`, and `PS3_DEV_FLASH` can override the launch mounts. The default VFS root is the installed title directory, HDD0 is `game/dev_hdd0`, and the user-data root is `game`, so saves and writable caches stay in the ignored dump tree. The runner reads `PARAM.SFO`, checks the configured title ID, and supplies the installed HDD boot path. Override metadata with `--paramsfo /path/to/PARAM.SFO` or `PS3_PARAM_SFO`.
 
 ## Prepare, build, and run
 
@@ -149,6 +151,28 @@ The audit loads the local ELF and initializes HLE registrations without dispatch
 The triage tool compares repeated runs with the configured asset root against a launch-only corrected root, then tries the documented unresolved-import failure mode. It retains bounded logs, exit metadata, and observations under `analysis/step4/`. These are diagnostic profiles, not permanent configuration fixes. At the pinned SDK revision, the active missing-table dispatcher returns success directly, so `PS3_HLE_UNRESOLVED=fail` does not change the observed missing purchase-verification call. Do not interpret that fake success as validated entitlement behavior.
 
 Set `TB_TRACE_NID=0x2ECD48ED` when launching to log that import's entry and return values, capped at 32 calls. The native audit uses startup-only `TB_HLE_INVENTORY`, `TB_IMPORT_PROBE`, and `TB_HLE_AUDIT_ONLY` hooks; the Python tool manages them. Run `python scripts/smoke_test.py` followed by `python scripts/test_import_audit.py` to verify the inventory against synthetic generic/context/fast/override, inactive optional-network, and unknown-NID cases.
+
+## Asset IO verification
+
+On Linux, the port retains the SDK's `sceNpDrmIsAvailable` and `sceNpDrmIsAvailable2` handlers so the running game can register its own asset klicensee. After availability succeeds, the port maps the resulting plaintext `.edat.dec` cache into the generic C filesystem layer, whose default mappings and reads otherwise bypass the configured mounts and EDAT resolver. The PPU HLE and raw syscall layers already use that resolver. No private key is embedded in the port. RPCS3's `.unedat` suffix is not automatically discovered or used as a runtime filename.
+
+For local verification, first independently decrypt your four asset containers with your own RPCS3 installation and place its `assets_*.edat.unedat` outputs under `game/reference-rpcs3/assets/`. RPCS3's [command-line parser](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/rpcs3.cpp) supports `--headless --decrypt FILE`, and its [decrypt implementation](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Crypto/decrypt_binaries.cpp) handles EDAT output. Use your own asset klicensee when RPCS3 requests it. Keep reference files and raw RPCS3 logs local.
+
+```bash
+python scripts/verify_assets.py --key-log /path/to/your/local/RPCS3.log
+```
+
+This opt-in probe reads the asset key transiently from that local log and sends it to the native runner through stdin. It does not dispatch game code. It checks the game's availability handlers and open, size, seek, read, EOF, and close behavior in all three filesystem layers; compares full runtime plaintext hashes with the independent references; verifies cache reuse; and creates then removes unique test files under the configured HDD/cache roots. Reports are saved under ignored `analysis/step5/`. The SDK currently decides cache freshness by modification time, so a newer manually damaged cache must be removed before retrying; cache reuse alone is not an integrity check.
+
+Game-free regression checks cover missing or mismatched metadata, wrong-key rejection, initial decryption, stale-cache regeneration, cache reuse, and writable mount consistency:
+
+```bash
+python scripts/smoke_test.py
+python scripts/test_content_paths.py
+python external/ps3recomp/tools/test_edat_guest_klicensee.py
+```
+
+The local NPUB30154 check matches all four asset containers against independent RPCS3 plaintext. Normal startup now selects the correct HDD title and opens those containers, but still waits for a raw SPU mailbox completion before reaching the title screen. Asset IO verification does not establish completed resource initialization or playable boot.
 
 ## Credits and contributions
 
