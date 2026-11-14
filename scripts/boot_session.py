@@ -8,12 +8,13 @@ import signal
 import subprocess
 import sys
 import time
+from diagnostic_logs import open_log, normalize_log_permissions
 
 def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snapshot=False, on_start=None):
     if log_path:
         log_path = Path(log_path)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-    stream = log_path.open("wb") if log_path else None
+    stream = open_log(log_path) if log_path else None
     started = datetime.now(timezone.utc).isoformat()
     start = time.monotonic()
     timed_out = interrupted = False
@@ -66,6 +67,7 @@ def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snaps
     finally:
         if stream:
             stream.close()
+            normalize_log_permissions(log_path.parent)
 
     result = {
         "started_utc": started, "command": list(map(str, command)),

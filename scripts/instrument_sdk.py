@@ -26,7 +26,10 @@ EDITS={
   '        s_host_state[i].buttons = btns;\n        tb_input_sample(0,(uint32_t)i,btns);\n\n        /* Analog sticks */'),
  ('emit:\n    /* A non-zero len',
   'emit:\n    if (data->len > 0 && port_no == 0) tb_keyboard_ack((uint32_t)data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] | ((uint32_t)data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] << 8));\n    if (data->len > 0) tb_input_sample(1,port_no,(uint32_t)data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] | ((uint32_t)data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] << 8));\n    /* A non-zero len')],
- 'libs/audio/cellAudio.c':[],
+ 'libs/audio/cellAudio.c':[(
+ ('    SDL_PauseAudioDevice(s_sdl_audio_dev, 0); /* Start playback */'),
+ ('    SDL_PauseAudioDevice(s_sdl_audio_dev, 0); /* Start playback */\n    if(getenv("TB_GAMEPLAY_TIMING")) fprintf(stderr,"[gameplay-audio] driver=%s rate=%d channels=%u samples=%u format=0x%X\\n",SDL_GetCurrentAudioDriver(),have.freq,have.channels,have.samples,have.format);')
+ )],
  'runtime/ppu/ppu_fs.cpp':[(
   '    size_t n = fread(vm_base + buf, 1, (size_t)nbytes, f);',
   '    size_t n = fread(vm_base + buf, 1, (size_t)nbytes, f);\n    tb_resource_read(fileno(f),(uint64_t)fpos_before,vm_base+buf,n,buf);')],
@@ -36,6 +39,8 @@ EDITS={
  ('const char* edat_resolve(const char* host_path, char* buf, size_t cap)',
   '#if defined(__linux__)\n#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/edat_cache.inc')+'"\n#else\nconst char* edat_resolve(const char* host_path, char* buf, size_t cap)')],
  'libs/video/rsx_draw_engine.c':[
+ ('    s->w = want_w; s->h = want_h; s->fmt = want_fmt; s->aa_grid = aa_grid;',
+  '    s->w = want_w; s->h = want_h; s->fmt = want_fmt; s->aa_grid = aa_grid;\n    if(getenv("TB_GAMEPLAY_TIMING")) fprintf(stderr,"[gameplay-surface] %ux%u fmt=%u aa_grid=0x%X\\n",want_w,want_h,(unsigned)want_fmt,aa_grid);'),
  ('static void eng_textures_touch(u32 location, u32 offset, u32 bytes)\n{\n    for (u32 i = 0; i < g.n_textures; i++) {\n        eng_texture* e = &g.textures[i];\n        if (e->location == location && e->offset >= offset && e->offset - offset < bytes) {\n            e->last_hash_frame = g.frames - 1u;\n            e->last_full_frame = g.frames - ENG_TEXHASH_FULL_EVERY;   /* hash it all */\n            e->rewritten = 1;\n        }\n    }\n}',
   '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/rsx_texture_coherence.inc')+'"'),
  ('    if (!g.ready || !g.be->color_target_write || !pitch || !w || !h) return;',
@@ -83,6 +88,22 @@ EDITS={
  ('                u32 m = (type == 0) ? method + i * 4 : method;\n                /* GCM_SET_USER_COMMAND',
   '                u32 m = (type == 0) ? method + i * 4 : method;\n                if (subch == 1 && s1_2d) { gcm_2d_method(subch, m, vm_read32(dea)); continue; }\n                /* GCM_SET_USER_COMMAND')],
  'libs/video/rsx_vulkan_backend.c':[
+ ('    X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkDeviceWaitIdle)',
+  '    X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp) X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkDeviceWaitIdle)'),
+ ('static int vk_begin(void)',
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/gpu_timing.inc')+'"\n\nstatic int vk_begin(void)'),
+ ('    /* A present\'s copy may still be reading the surface this frame is about',
+  '    tb_gpu_begin();\n    /* A present\'s copy may still be reading the surface this frame is about'),
+ ('    VK_CHECK(pvkEndCommandBuffer(s_vk.cmd), "vkEndCommandBuffer");',
+  '    tb_gpu_end();\n    VK_CHECK(pvkEndCommandBuffer(s_vk.cmd), "vkEndCommandBuffer");'),
+ ('    VK_CHECK(pvkWaitForFences(s_vk.device, 1, &s_vk.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");',
+  '    VK_CHECK(pvkWaitForFences(s_vk.device, 1, &s_vk.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");\n    tb_gpu_result();'),
+ ('        pvkDestroyDevice(s_vk.device, NULL);',
+  '        tb_gpu_shutdown();\n        pvkDestroyDevice(s_vk.device, NULL);'),
+ ('    (void)user;\n    if (!s_vk.device) return;\n    if (s_eb_pending) vk_eng_flush();',
+  '    const uint64_t tb_guest_serial=tb_fps_guest_serial();\n    (void)user;\n    if (!s_vk.device) return;\n    if (s_eb_pending) vk_eng_flush();'),
+ ('        vk_present_record_end(cb);',
+  '        if(o) tb_completed_guest_serial=tb_guest_serial;\n        vk_present_record_end(cb);'),
  ('static void vk_window_drop(const char* why)',
   '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/fps_vulkan.inc')+'"\n\nstatic void vk_window_drop(const char* why)'),
  ('    pvkGetPhysicalDeviceFormatProperties(s_vk.phys, fmt.format, &fp);',
@@ -100,7 +121,7 @@ EDITS={
   '    int result = pvkCreateShaderModule(s_vk.device, &ci, NULL, out) == VK_SUCCESS ? 0 : -1;\n    if (!result) tb_vulkan_event(1,stage,words,0);\n    return result;'),
  ('    return P->variant[topo_idx];', '    if (P->variant[topo_idx]) tb_vulkan_event(4,topo_idx,P->stride,P->rt_count);\n    return P->variant[topo_idx];'),
  ('    if (!batched) { vk_submit_and_wait(); return; }', '    tb_vulkan_event(2,vertex_count,index_count,topology);\n    if (!batched) { vk_submit_and_wait(); return; }'),
- ('    r = vk_queue_present(&pi);', '    r = vk_queue_present(&pi);\n    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) { tb_fps_present(); tb_vulkan_event(3,s_vk.presented,s_vk.sc_extent.width,s_vk.sc_extent.height); }\n    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) tb_render_frame();'),
+ ('    r = vk_queue_present(&pi);', '    r = vk_queue_present(&pi);\n    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) { tb_fps_present(); tb_gameplay_event(1,tb_completed_guest_serial); tb_vulkan_event(3,s_vk.presented,s_vk.sc_extent.width,s_vk.sc_extent.height); }\n    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) tb_render_frame();'),
  ('    vk_eng_upload_rows(o->im.img, face, mip, w, h, tight, rows, src, row_bytes);', '    vk_eng_upload_rows(o->im.img, face, mip, w, h, tight, rows, src, row_bytes);\n    tb_vulkan_event(5,texture,w,h);'),
  ('        if (o) {\n            vk_barrier_image_on(cb, o->im.img,', '        if (o) {\n            tb_vulkan_event(6,surface,o->w,o->h);\n            vk_barrier_image_on(cb, o->im.img,'),
  ('    VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\\n",',
@@ -154,7 +175,7 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':'fps_vulkan.inc','libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}

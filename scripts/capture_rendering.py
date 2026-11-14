@@ -72,6 +72,7 @@ def main():
     parser.add_argument('--history-after', type=float, default=0, help='Delay history from first scanout observation, in seconds')
     parser.add_argument('--wait-trace', action='store_true', help='Record a bounded SDK PPU/SPU wait trace; separate diagnostic run')
     parser.add_argument('--profile', action='store_true', help='Enable bounded inclusive CPU scope timings')
+    parser.add_argument('--gameplay-timing', action='store_true', help='Buffer exact guest/completed/window event times separately from inclusive CPU scopes')
     parser.add_argument('--cadence-only', action='store_true', help='Measure only presentation cadence, leaving scope timers disabled')
     parser.add_argument('--driver', choices=['x11', 'wayland'], default='x11')
     parser.add_argument('--focus-window', action='store_true', help='Focus only the test window through Hyprland and record its visibility')
@@ -166,6 +167,8 @@ def main():
     if args.actions or args.no_gamepad:
         # An explicit keyboard test profile: avoid a connected controller suppressing fallback.
         env['SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT'] = '0x0000/0x0000'
+    if args.gameplay_timing:
+        env['TB_GAMEPLAY_TIMING']=str(output/'gameplay.jsonl')
     if args.profile or args.cadence_only:
         env['TB_RENDER_PROFILE'] = str(output / 'timings.jsonl')
         if args.cadence_only:

@@ -11,6 +11,7 @@ void tb_rsx_transfer_trace(uint32_t subchannel, uint32_t method, uint32_t arg);
 void tb_frame_order(uint32_t buffer, uint32_t offset, uint64_t write_serial, uint32_t present);
 void tb_frame_event(uint32_t kind,uint32_t a,uint32_t b,uint32_t c,uint32_t d);
 void tb_fps_guest_flip(void);
+uint64_t tb_fps_guest_serial(void);
 void tb_fps_present(void);
 void tb_fps_toggle(void);
 int tb_fps_overlay(void* pixels,uint32_t width,uint32_t height,uint32_t pitch,uint32_t scale);

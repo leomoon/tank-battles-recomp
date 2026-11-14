@@ -20,9 +20,10 @@ struct Profile {
     FILE* file = nullptr;
     bool scopes = true;
     uint64_t base = 0, last_report = 0, last_frame = 0;
-    unsigned reports = 0;
+    unsigned reports = 0, report_limit = 120;
     std::mutex mutex;
     Profile() {
+        if(const char* n=getenv("TB_RENDER_PROFILE_MAX_REPORTS")) {const long value=strtol(n,nullptr,10);if(value>0 && value<=600)report_limit=(unsigned)value;}
         const char* mode = getenv("TB_RENDER_PROFILE_MODE");
         scopes = !mode || mode[0] != 'c';
         const char* path = getenv("TB_RENDER_PROFILE");
@@ -59,7 +60,7 @@ extern "C" void tb_render_frame() {
     const auto t = now();
     if (p.last_frame) add(12, t - p.last_frame);
     p.last_frame = t;
-    if (t - p.last_report < 1000000000ull || p.reports >= 120) return;
+    if (t - p.last_report < 1000000000ull || p.reports >= p.report_limit) return;
     p.last_report = t;
     ++p.reports;
     fprintf(p.file, "{\"elapsed_ns\":%llu,\"cumulative\":true,\"scopes_inclusive\":true,\"timings\":{", (unsigned long long)(t - p.base));
@@ -73,4 +74,46 @@ extern "C" void tb_render_frame() {
     }
     fprintf(p.file, "}}\n");
     fflush(p.file);
+}
+
+// Opt-in exact monotonic event times, buffered and flushed at most once/second.
+// This is independent of the inclusive rendering scopes and the FPS raster.
+#include "gameplay_timing.h"
+namespace {
+struct GameplayTiming {
+    FILE* file=nullptr;
+    uint64_t base=0,last_write=0;
+    GameplayCadence cadence;
+    std::mutex mutex;
+    GameplayTiming() {
+        if(const char* path=getenv("TB_GAMEPLAY_TIMING")) {
+            file=fopen(path,"w");
+            if(file)base=now();
+        }
+    }
+    void write(uint64_t t) {
+        if(!file)return;
+        fprintf(file,"{\"monotonic_ns\":%llu,\"elapsed_ns\":%llu,\"guest\":%llu,\"completed\":%llu,\"presents\":%llu,\"events\":[",
+                (unsigned long long)(base+t),(unsigned long long)t,(unsigned long long)cadence.guest,
+                (unsigned long long)cadence.completed,(unsigned long long)cadence.presents);
+        for(unsigned k=0;k<3;k++) {
+            fprintf(file,"%s[",k?",":"");
+            for(size_t i=0;i<cadence.events[k].size();i++)
+                fprintf(file,"%s%llu",i?",":"",(unsigned long long)cadence.events[k][i]);
+            fputc(']',file);cadence.events[k].clear();
+        }
+        fputs("]}\n",file);fflush(file);last_write=t;
+    }
+    ~GameplayTiming(){if(file){write(now()-base);fclose(file);}}
+};
+// Process-lifetime storage avoids teardown racing a still-exiting guest worker.
+GameplayTiming& gameplay_timing(){static GameplayTiming* value=new GameplayTiming;return *value;}
+}
+extern "C" void tb_gameplay_event(unsigned kind,uint64_t serial) {
+    auto& p=gameplay_timing();if(!p.file)return;
+    std::lock_guard<std::mutex> guard(p.mutex);
+    const auto t=now()-p.base;
+    if(t>600000000000ull)return; // Bounded ten-minute diagnostic session.
+    if(kind==0)p.cadence.flip(t);else p.cadence.present(t,serial);
+    if(t-p.last_write>=1000000000ull)p.write(t);
 }

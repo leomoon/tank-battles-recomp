@@ -11,7 +11,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runs', nargs='+')
     parser.add_argument('--output', required=True)
+    parser.add_argument('--gameplay', action='store_true', help='Compare strict validated live-gameplay manifests and exact cadence')
+    parser.add_argument('--overlay-ab',action='store_true',help='Explicit gameplay-only overlay on/off comparison; all other manifest fields must match')
     args = parser.parse_args()
+    if args.gameplay:
+        from gameplay_report import summarize, compare
+        try:
+            result=compare([summarize(resolve(p)) for p in args.runs],allowed_variants=('overlay',) if args.overlay_ab else ())
+        except (ValueError,KeyError) as error:
+            parser.error(str(error))
+        target=resolve(args.output);target.parent.mkdir(parents=True,exist_ok=True)
+        target.write_text(json.dumps(result,indent=2)+'\n');return
     reports = []
     for value in args.runs:
         path = resolve(value) / 'session.json'

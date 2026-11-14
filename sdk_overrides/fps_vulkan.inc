@@ -1,3 +1,4 @@
+static uint64_t tb_completed_guest_serial;
 /* Window-only overlay: no guest render target, readback or shader is changed. */
 static vk_buffer tb_fps_buffer;
 static VkFormat tb_fps_swap_format;
