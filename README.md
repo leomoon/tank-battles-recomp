@@ -125,6 +125,8 @@ python scripts/port.py build --build-dir build-vulkan --jobs 4
 python scripts/port.py run --build-dir build-vulkan
 ```
 
+The window shows an FPS overlay by default. Press **F3** to hide or show it, or launch with `TB_FPS_OVERLAY=0 python scripts/port.py run --build-dir build-vulkan` to start with it hidden. **GAME FPS** counts guest frames reaching their flip boundary; **PRESENT FPS** counts successful window presentations, including repeated refreshes of a completed frame. **FRAME MS** is the average guest-frame interval. The counters update every half second and measure rendering cadence, not simulation-speed correctness. The overlay is drawn only onto the window swapchain, so guest render targets and pre-window screenshots remain unchanged. Diagnostic `capture_rendering.py` runs hide it for reference comparisons unless `--fps` is supplied.
+
 Normal Vulkan launches enable `PS3RECOMP_VK_WINDOW=1` and `PS3RECOMP_VK_GUEST_PROGRAMS=1` unless explicitly overridden. At the pinned SDK revision these otherwise default to an offscreen target and fixed-function rendering. The port rejects unavailable requested window/guest-program support with exit status 87, and CMake rejects a Vulkan configuration without glslang translation. Explicitly setting either variable to `0` remains available for diagnostics but cannot pass the rendering verifier.
 
 ```bash
@@ -148,7 +150,45 @@ Vulkan diagnostics join the timeout snapshot as bounded counters and metadata. `
 
 ## Rendering scenarios and frame timing
 
-`scripts/capture_rendering.py` creates a new ignored `analysis/rendering/` directory for each run, with isolated native save/cache mounts, a copy of the local purchased entitlement, and a shared content mount. Existing decrypted asset caches are reused; this is not a cold-asset test. Audio uses the dummy driver. Keep each output directory unique so earlier evidence is preserved.
+`scripts/capture_rendering.py` creates a new ignored `analysis/rendering/` directory for each run, with isolated native save/cache mounts, a copy of the local purchased entitlement, and a shared content mount. Existing decrypted asset caches are reused; this is not a cold-asset test. Audio defaults to the dummy driver; use `--audio host` for audible playback. This setting applies only to that diagnostic child process. Normal `port.py run` launches use host audio. Keep each output directory unique so earlier evidence is preserved.
+
+Temporal comparisons require video, not just isolated screenshots. `--video-fps 60` records only the X11 game window without forcing the output frame rate or duplicating frames. `video.json` reports actual timestamps and capture gaps; this is capture cadence, not game simulation speed. Optional frame history saves up to 240 consecutive pre-window images and their display-buffer identities. Both recording and image writes add diagnostic overhead.
+
+```bash
+python scripts/capture_rendering.py --output analysis/rendering/temporal-check --audio host --video-fps 60 --video-after 5 --video-duration 35 --timeout 45
+python scripts/video_frame_report.py analysis/rendering/temporal-check/window.mkv
+
+# Scalar generation tracing avoids framebuffer-file writes and RSX dumps.
+python scripts/capture_rendering.py --output analysis/rendering/frame-order --audio host --frame-order --timeout 60
+python scripts/frame_order_report.py analysis/rendering/frame-order/scanout-order.jsonl --scanout --output analysis/rendering/frame-order/order-report.json
+```
+
+The native source copies now keep NV3062/NV308A/NV3089 transfer commands out of the NV4097 register file. Previously their dimensions and pitches overwrote alpha/blend state; the user confirms the black shadow rectangles are repaired. Flip callbacks fire once at completion, and registered scanout buffers retain their own backend surfaces. A near-end flip uses its actual command-space requirement instead of the recycle helper's extra 4 KiB reserve, keeping the flip behind its preceding rendering commands. In the retained reference run, all nine older-buffer presentations followed an immediate fallback; the corrected 140-second route recorded zero older-buffer presentations across 5,881 refreshes. The user reports improved flicker and movement. These checks do not establish complete graphical fidelity or intended game speed.
+
+Linux audio consumption now waits for device queue space before advancing the guest audio ring. The previous rounded 5 ms sleep could produce 5.33 ms blocks faster than playback and grow latency. The real host run measures about 187.5 blocks/s with the SDL queue bounded to four blocks, about 21.3 ms; device/server latency is additional. The user confirms the delayed/cutting audio improved. Full audio acceptance across missions remains open.
+
+## Local RPCS3 command comparisons
+
+RPCS3's game-window Alt+C shortcut captures an RSX frame and pauses emulation. Its capture includes commands, initial registers, shaders and referenced guest memory; keep it local because it contains game data. Our reader supports little-endian RRC version 6. Ordinary RRC captures omit inherited transform constants, and a capture/reconstruction discrepancy in the retained UI vertex uploads remains unresolved. A dump is diagnostic evidence, not a complete replacement for full-rate reference video or a verified replay through our renderer.
+
+```bash
+# While this bounded session runs, navigate to the desired scene.
+python scripts/capture_rendering.py --output analysis/rendering/command-check --audio host --rsx-trace --timeout 120
+
+# From another terminal, request three guest flip scopes with a unique label.
+printf '%s\n' level-select > analysis/rendering/command-check/rsx/request
+
+# Compare the completed native frame prefix with your local RPCS3 capture.
+python scripts/rsx_capture_compare.py --reference /path/to/capture.rrc.gz --native analysis/rendering/command-check/rsx/level-select-000 --output analysis/rendering/command-check/comparison.json
+
+python scripts/test_rsx_capture_compare.py
+python scripts/test_rsx_engine_routing.py
+python scripts/test_scanout_registration.py
+python scripts/test_flip_callbacks.py
+python scripts/test_audio_clock.py
+```
+
+Only scopes with a `.done` marker are accepted. Host refreshes do not split the command scopes. Reports compare shader instructions, texture bytes and state while retaining ambiguous repeated draws and animation differences; an unwritten register can be inherited from an earlier frame. Guest texture-memory hashes cannot establish equality of GPU-rendered shadow/depth surfaces. These tools do not currently replay an RRC file through the port's renderer. The routing regression uses the actual GCM walker and NV4097 dispatcher; the scanout/cache fixture uses the actual generated draw engine with a test backend. The upstream synthetic boot explicitly uses guest-thread callback pumping to retain its vblank-thread contract, while the dedicated flip-delivery default is tested separately.
 
 ```bash
 # Diagnostic screenshots and pass dumps add substantial overhead.
@@ -358,7 +398,7 @@ Run `python scripts/test_guest_layout.py` for the original routing regression. U
 
 The Linux runner defaults to strict guest execution. A reached missing HLE import, unresolved/null PPU target, unverified PPU recovery, SPU interpreter entry, or untranslated SPU target stops the process with status 86 and a bounded diagnostic report. This also intercepts SDK branches that otherwise return success or silently skip invalid calls. `TB_EXECUTION_MODE=diagnostic` explicitly allows those SDK fallbacks for investigation while recording them; it does not establish static compatibility.
 
-`scripts/instrument_sdk.py` generates instrumented copies of fourteen SDK source files under the selected build directory. CMake builds those copies with the normal SDK include paths; the pinned submodule remains unchanged. The generator requires unique matching source anchors and records original/output hashes in `instrumented_sdk/manifest.json`. Original source changes trigger reconfiguration. No generated game translation is edited. Logs contain bounded target observations, counters, last image/address pairs, and a bounded image/overlay inventory. Counter and last-target writes use lock-free atomics; timeout reports use signal-safe output. A full image-inventory buffer terminates explicitly rather than silently dropping coverage.
+`scripts/instrument_sdk.py` generates instrumented copies of fifteen SDK source files under the selected build directory. CMake builds those copies with the normal SDK include paths; the pinned submodule remains unchanged. The generator requires unique matching source anchors and records original/output hashes in `instrumented_sdk/manifest.json`. Original source changes trigger reconfiguration. No generated game translation is edited. Logs contain bounded target observations, counters, last image/address pairs, and a bounded image/overlay inventory. Counter and last-target writes use lock-free atomics; timeout reports use signal-safe output. A full image-inventory buffer terminates explicitly rather than silently dropping coverage.
 
 ```bash
 python scripts/smoke_test.py

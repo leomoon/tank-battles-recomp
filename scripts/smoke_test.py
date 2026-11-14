@@ -50,6 +50,10 @@ def main() -> int:
         env["PS3_PARAM_SFO"] = str(generated / "PARAM.SFO")
         env["PS3_GAMEDATA_ROOT"] = str(generated)
         env.update(SDL_AUDIODRIVER="dummy", SDL_VIDEODRIVER="dummy", PS3_TITLE="Tank Battles scaffold smoke test")
+        # Upstream's synthetic fixture asserts that vblank executes on its
+        # guest caller. Keep that explicit compatibility profile; the title's
+        # default dedicated flip-delivery mode has its own FIFO regression.
+        env['GCM_HANDLER_THREAD']='0'
         # Keep every writable mount in this test's ignored build directory.
         for name in ("PS3_VFS_ROOT", "PS3_HDD0_ROOT", "PS3_HDD1_ROOT"):
             env[name] = str(generated)

@@ -4,6 +4,16 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+void tb_rsx_memory_written(uint32_t location, uint32_t offset, uint32_t bytes);
+void tb_scanout_sample(uint32_t buffer, uint32_t surface, uint32_t offset);
+void tb_frame_history(const void* rgba, uint32_t width, uint32_t height, uint32_t present);
+void tb_rsx_transfer_trace(uint32_t subchannel, uint32_t method, uint32_t arg);
+void tb_frame_order(uint32_t buffer, uint32_t offset, uint64_t write_serial, uint32_t present);
+void tb_frame_event(uint32_t kind,uint32_t a,uint32_t b,uint32_t c,uint32_t d);
+void tb_fps_guest_flip(void);
+void tb_fps_present(void);
+void tb_fps_toggle(void);
+int tb_fps_overlay(void* pixels,uint32_t width,uint32_t height,uint32_t pitch,uint32_t scale);
 void tb_keyboard_down(uint32_t scancode);
 uint32_t tb_keyboard_take(void);
 uint32_t tb_keyboard_peek(void);

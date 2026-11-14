@@ -180,6 +180,11 @@ endif()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(EXECUTION_SDK "${CMAKE_BINARY_DIR}/instrumented_sdk")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_memory_copy.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_texture_coherence.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_trace.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/audio_clock.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/fps_vulkan.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_scanout.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/edat_cache.inc" "${PS3RECOMP_DIR}/libs/filesystem/edat.c")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/instrument_sdk.py"
     --sdk "${PS3RECOMP_DIR}" --output "${EXECUTION_SDK}" COMMAND_ERROR_IS_FATAL ANY)
@@ -220,6 +225,9 @@ foreach(component rsx_draw_engine.c cellGcmSys.c)
 endforeach()
 list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)cellPad.c$")
 list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/input/cellPad.c")
+list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)cellAudio.c$")
+list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/audio/cellAudio.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/audio/cellAudio.c")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/input/cellPad.c")
 foreach(relative runtime/syscalls/sys_fs.c libs/filesystem/cellFs.c)
     get_filename_component(component "${relative}" NAME)
@@ -238,6 +246,8 @@ add_executable(${PROJECT_NAME}
     stubs.cpp
     boot_diagnostics.cpp
     text_conversion.cpp
+    frame_history.cpp
+    fps_overlay.cpp
     vulkan_diagnostics.cpp
     input_events.cpp
     resource_diagnostics.cpp
