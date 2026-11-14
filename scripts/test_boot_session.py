@@ -29,6 +29,15 @@ class SessionTests(unittest.TestCase):
         self.assertIn("stdout-marker", log)
         self.assertIn("stderr-marker", log)
         self.assertEqual(json.loads((self.path / "session.log.result.json").read_text()), result)
+    def test_start_observer_and_failure_cleanup(self):
+        observed=[]
+        def fail(process):
+            observed.append(process)
+            raise ValueError('observer failed')
+        with self.assertRaisesRegex(ValueError,'observer failed'):
+            self.session('import time; time.sleep(60)',on_start=fail)
+        self.assertEqual(len(observed),1)
+        self.assertIsNotNone(observed[0].poll())
     @unittest.skipUnless(os.name == "posix", "POSIX signals")
     def test_signal_exit_preserved(self):
         status, result = self.session("import os, signal; os.kill(os.getpid(), signal.SIGTERM)")

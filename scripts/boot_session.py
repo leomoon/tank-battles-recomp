@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snapshot=False):
+def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snapshot=False, on_start=None):
     if log_path:
         log_path = Path(log_path)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,6 +51,8 @@ def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snaps
             stdout=stream, stderr=subprocess.STDOUT if stream else None,
             start_new_session=(os.name == "posix"))
         try:
+            if on_start:
+                on_start(process)
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
@@ -58,6 +60,9 @@ def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snaps
         except KeyboardInterrupt:
             interrupted = True
             stop()
+        except BaseException:
+            stop()
+            raise
     finally:
         if stream:
             stream.close()

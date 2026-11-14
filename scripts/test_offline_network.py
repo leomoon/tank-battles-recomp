@@ -50,7 +50,7 @@ class OfflineNetworkTests(unittest.TestCase):
         env.update(PS3_PARAM_SFO=str(generated/'PARAM.SFO'),PS3_VFS_ROOT=str(generated),
                    PS3_HDD0_ROOT=str(self.directory/'dev_hdd0'),PS3_HDD1_ROOT=str(self.directory/'dev_hdd1'),
                    PS3_GAMEDATA_ROOT=str(self.directory),PS3_DEV_FLASH=str(self.directory/'dev_flash'),
-                   TB_OFFLINE_PROBE='1',SDL_AUDIODRIVER='dummy',SDL_VIDEODRIVER='dummy')
+                   TB_OFFLINE_PROBE='1',TB_OFFLINE_TRACE='1',SDL_AUDIODRIVER='dummy',SDL_VIDEODRIVER='dummy')
         if hostile:
             env.update(PS3_NET_ONLINE='1',PSNR_SERVER='unreachable.invalid:31313')
         command=[str(self.guard),str(ROOT/'build-smoke/TankBattlesRecomp'),str(generated/'smoke.elf')]
@@ -60,6 +60,8 @@ class OfflineNetworkTests(unittest.TestCase):
         (self.directory/(label+'.log')).write_text(log)
         self.assertEqual(result.returncode,0,log[-2500:])
         self.assertIn('[offline-sandbox] new sockets blocked',log)
+        self.assertIn('[offline-trace]',log)
+        self.assertIn('name=net-dialog-event',log)
         count=re.search(r'\[offline-probe\] ALL PASS checks=(\d+)',log)
         self.assertIsNotNone(count,log[-2500:])
         self.assertGreaterEqual(int(count[1]),500)

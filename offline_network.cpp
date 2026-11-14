@@ -240,7 +240,23 @@ uint32_t perform(Op op,ppu_context* c) {
     }
     return np_argument;
 }
-template<Op op>void handler(ppu_context* c){std::lock_guard guard(lock);c->gpr[3]=perform(op,c);}
+void trace_offline(const char* name, uint32_t result, uint32_t detail=0) {
+    static const bool enabled=[] { const char* value=getenv("TB_OFFLINE_TRACE");return value && value[0]=='1'; }();
+    static unsigned count=0;
+    if(enabled && count<1024)fprintf(stderr,"[offline-trace] seq=%u name=%s result=0x%08X detail=0x%08X pending=%zu\n",
+                                   ++count,name,result,detail,completions.size());
+}
+template<Op op>void handler(ppu_context* c,const char* name){
+    std::lock_guard guard(lock);
+    const auto address=c->gpr[3];
+    c->gpr[3]=perform(op,c);
+    if constexpr(op==Op::manager_status || op==Op::net_state) {
+        const uint32_t state=!c->gpr[3] && ea(address)?vm_read32(address):0;
+        static uint64_t previous=~uint64_t{0};
+        const uint64_t current=(c->gpr[3]<<32)|state;
+        if(current!=previous){trace_offline(name,c->gpr[3],state);previous=current;}
+    }else trace_offline(name,c->gpr[3]);
+}
 void check_callbacks(ppu_context* c) {
     uint32_t queue_error=0;
     {
@@ -248,8 +264,10 @@ void check_callbacks(ppu_context* c) {
         std::vector<Completion> retry;
         for(const auto& event:completions){
             if(event.owner==Owner::net){
-                if(net && event.generation==net_generation)
+                if(net && event.generation==net_generation) {
                     for(int slot=0;slot<4;++slot)cellSysutilQueueEvent(slot,event.status,0);
+                    trace_offline("net-dialog-event",0,event.status);
+                }
                 continue;
             }
             if(!event.callback)continue;
@@ -259,6 +277,7 @@ void check_callbacks(ppu_context* c) {
                 if(!matching || !ctx || !ctx->pending)continue;
             }else if(!voice_pending || event.generation!=voice_generation)continue;
             const auto result=cellSysutilQueueGuestCallbackArgs(event.callback,event.args.data());
+            trace_offline("guest-callback-queue",result,event.callback);
             if(result){queue_error=result;retry.push_back(event);continue;}
             if(ctx)ctx->pending=false;else voice_pending=false;
         }
@@ -269,7 +288,7 @@ void check_callbacks(ppu_context* c) {
 }
 
 struct Binding {const char* name;tank_battles_override_fn fn;};
-#define B(name,op) {name,handler<Op::op>}
+#define B(name,op) {name,[](ppu_context* c){handler<Op::op>(c,name);}}
 const Binding bindings[]={
     B("sceNpTerm",np_term),B("sceNp2Init",np2_init),B("sceNp2Term",np2_term),B("sceNpManagerGetStatus",manager_status),
     B("sceNpManagerRegisterCallback",manager_register),B("sceNpManagerUnregisterCallback",manager_unregister),

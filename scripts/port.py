@@ -109,8 +109,10 @@ def build(args, config) -> None:
          "--target", "TankBattlesRecomp", "--parallel", str(args.jobs)])
 
 
-def launch_environment(config, paramsfo=None):
+def launch_environment(config, paramsfo=None, mounts=None):
     env = os.environ.copy()
+    if mounts:
+        env.update(mounts)
     env.setdefault("PS3_TITLE", config["game"]["title"] + " Recomp")
     for key, setting in (("PS3_VFS_ROOT", "vfs_root"), ("PS3_HDD0_ROOT", "hdd0_root"),
                          ("PS3_HDD1_ROOT", "hdd1_root"), ("PS3_GAMEDATA_ROOT", "gamedata_root"),
