@@ -225,6 +225,31 @@ Use `--no-gamepad` for passive timing scenes so physical controller activity can
 
 `TB_RENDER_PROFILE=/absolute/local/path.jsonl` enables aggregate CPU wall-time counters and logarithmic duration histograms for draws, submit/wait, translation, pipeline requests/variants, texture upload, FIFO drain, guest-flip presentation, window presentation, readback completion, and capture writing. Counters are inclusive and overlap, so do not add them together or interpret them as GPU execution timestamps. Profile snapshots default to a limit of 120; `TB_RENDER_PROFILE_MAX_REPORTS=1..600` selects a larger bounded diagnostic session. They contain cumulative data that the summary differences after its warmup cutoff. `TB_RENDER_PROFILE_MODE=cadence` disables scope clocks while retaining minimal frame-cadence telemetry. Normal launches leave profiling off. The synthetic C fixture verifies early-return cleanup, disabled profiling, and cadence-only behavior.
 
+## Shared texture decoder
+
+The shared CPU decoder adapts format-specialized loops and packed-color lookup tables from [GoW-Ascension-Recomp's published decoder](https://github.com/bc160201983/GoW-Ascension-Recomp/blob/55e277c094678e695cf5e193c254708013d14cda/ps3kit/libs/video/rsx_tex_decode.h). The port retains native R16, float/depth formats, destination pitch and shader-side channel remapping. The measured hot path is linear 2048×2048 DEPTH16: its endian swap uses baseline x86-64 SSE2 with a scalar fallback. Existing compressed/row-copy paths and unsupported formats use the pinned decoder. The SDK checkout remains unchanged; source-copy generation preserves the original decoder body as the reference. MIT notices for the reused techniques are retained in `licenses/`.
+
+Three matched clean Linux Battle minutes per mode average 22.00 reference versus 23.06 specialized completed GAME FPS (4.8% higher), with overlapping ranges of 21.38–22.82 and 21.87–23.82. These variable AI runs establish a modest measured improvement, not sustained 60 FPS. Separate live diagnostic profiles reduce the hot depth conversion from 5.62 ms to 0.38 ms per call; an isolated warmed microbenchmark measures 6.25 ms to 0.22 ms. Those decoder-only ratios are much larger than the whole-game benefit. Local exact identities, excluded runs and checks are retained under `analysis/texture-decode-validation/`.
+
+```bash
+# Game-free exact-output checks and an optional decoder-only microbenchmark.
+python scripts/test_texture_decode.py --benchmark
+
+# Identical-build gameplay comparison; all other settings must still match.
+python scripts/script_gameplay.py --output analysis/performance/decode-reference --scene battle --overlay --texture-decode-mode reference
+python scripts/script_gameplay.py --output analysis/performance/decode-specialized --scene battle --overlay --texture-decode-mode specialized
+python scripts/compare_rendering_runs.py --gameplay --texture-decode-ab analysis/performance/decode-reference analysis/performance/decode-specialized --output analysis/performance/decode-comparison.json
+
+# Separate bounded diagnostic census, excluded from clean FPS comparisons.
+python scripts/script_gameplay.py --output analysis/performance/decode-census --scene battle --overlay --scopes --profile-seconds 20 --decode-profile
+```
+
+Normal launches select the specialized decoder. Set `TB_TEXTURE_DECODE_MODE=reference` to use the original body for diagnosis. `TB_TEXTURE_DECODE_PROFILE=/absolute/path.jsonl` optionally records bounded cumulative format/dimension/pitch counts, decoded bytes and CPU wall time, with no texture payloads. Profiling is off by default; periodic snapshots can omit the final partial second and retain at most 128 format keys and 600 reports. Decoder microbenchmarks measure only the conversion loop and cannot predict whole-game FPS.
+
+Video and scope/census sessions label their windows as diagnostics. Full-rate recording adds CPU/GPU overhead, so a lower overlay FPS in that window is excluded from clean throughput comparisons. The normal launch and clean benchmark leave recording and profiling off.
+
+The standalone fixtures compare complete outputs and padding against the pinned C decoder, sweep packed values, exercise native formats, unaligned/padded storage, mip/cube dimensions, overlap fallback and concurrent lookup-table initialization, and retain the upstream expected-value contract. `.github/workflows/texture-decode.yml` prepares Linux and native Windows game-free checks without a purchased dump. Windows execution and full Windows host/renderer support remain separate verification gates; Linux is the current priority.
+
 ## Live Battle performance measurements
 
 Default Battle is the primary benchmark: use the default Field of War I map and Deathmatch settings, four lives and three CPU opponents. Scripted navigation passes the briefing, then leaves player one neutral while the opponents fight. It sends no movement or firing during timing. Campaign is a secondary scene check. These runs measure rendering cadence; they do not replace physical-input or mission-completion acceptance.

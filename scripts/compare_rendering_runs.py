@@ -14,12 +14,14 @@ def main():
     parser.add_argument('--gameplay', action='store_true', help='Compare strict validated live-gameplay manifests and exact cadence')
     parser.add_argument('--overlay-ab',action='store_true',help='Explicit gameplay-only overlay on/off comparison; all other manifest fields must match')
     parser.add_argument('--candidate-plan',help='Explicit JSON baseline/candidate build identities and reason; gameplay only')
+    parser.add_argument('--texture-decode-ab',action='store_true',help='Explicit reference/specialized decoder comparison on an otherwise identical build')
     args = parser.parse_args()
+    if args.texture_decode_ab and not args.gameplay:parser.error('--texture-decode-ab requires --gameplay')
     if args.candidate_plan and not args.gameplay:parser.error('--candidate-plan requires --gameplay')
     if args.gameplay:
         from gameplay_report import summarize, compare
         try:
-            result=compare([summarize(resolve(p)) for p in args.runs],allowed_variants=('overlay',) if args.overlay_ab else (),candidate_plan=json.loads(resolve(args.candidate_plan).read_text()) if args.candidate_plan else None)
+            result=compare([summarize(resolve(p)) for p in args.runs],allowed_variants=tuple(k for k,on in [('overlay',args.overlay_ab),('texture_decode_mode',args.texture_decode_ab)] if on),candidate_plan=json.loads(resolve(args.candidate_plan).read_text()) if args.candidate_plan else None)
         except (ValueError,KeyError) as error:
             parser.error(str(error))
         target=resolve(args.output);target.parent.mkdir(parents=True,exist_ok=True)

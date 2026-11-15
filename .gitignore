@@ -5,7 +5,9 @@
 /assets/
 /dumps/
 /firmware/
-/licenses/
+/licenses/*
+!/licenses/GoW-Ascension-Recomp-MIT.txt
+!/licenses/ps3kit-MIT.txt
 /keys/
 /analysis/
 /out/

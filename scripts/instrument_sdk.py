@@ -3,6 +3,7 @@ import argparse,hashlib,json,re
 from pathlib import Path
 
 EDITS={
+ 'libs/video/rsx_texture_layout.c': [('void rsx_texture_decode(void* dst, u32 dst_pitch,', 'void tb_texture_decode_reference(void* dst, u32 dst_pitch,')],
  'runtime/syscalls/sys_fs.c':[(
   '    FILE* fp = fopen(host_path, mode);\n    const int open_errno = errno;',
   '    struct stat tb_directory;\n    if (stat(host_path, &tb_directory) == 0 && (tb_directory.st_mode & S_IFMT) == S_IFDIR)\n        return (int64_t)(int32_t)CELL_EISDIR;\n    FILE* fp = fopen(host_path, mode);\n    const int open_errno = errno;')],

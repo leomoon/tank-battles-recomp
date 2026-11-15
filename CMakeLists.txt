@@ -212,7 +212,7 @@ if(PS3RECOMP_RSX_VULKAN)
     endif()
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/video/rsx_vulkan_backend.c")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/video/rsx_draw_engine.c" "${PS3RECOMP_DIR}/libs/video/cellGcmSys.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/video/rsx_draw_engine.c" "${PS3RECOMP_DIR}/libs/video/rsx_texture_layout.c" "${PS3RECOMP_DIR}/libs/video/cellGcmSys.c")
 get_target_property(EXECUTION_RUNTIME_SOURCES ps3recomp_runtime SOURCES)
 foreach(component spu_channels.c spu_interp.c spu_raw.c)
     list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
@@ -222,7 +222,7 @@ if(PS3RECOMP_RSX_VULKAN)
     list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)rsx_vulkan_backend.c$")
     list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/video/rsx_vulkan_backend.c")
 endif()
-foreach(component rsx_draw_engine.c cellGcmSys.c)
+foreach(component rsx_draw_engine.c cellGcmSys.c rsx_texture_layout.c)
     list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
     list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/video/${component}")
 endforeach()
@@ -256,6 +256,8 @@ add_executable(${PROJECT_NAME}
     resource_diagnostics.cpp
     rendering_profile.cpp
     rsx_texture_diagnostics.cpp
+    texture_decode.cpp
+    texture_decode_fast.cpp
     execution_policy.cpp
     execution_spu_probe.c
     hle_inventory.cpp
@@ -270,6 +272,8 @@ add_executable(${PROJECT_NAME}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
+
+set_source_files_properties(texture_decode.cpp texture_decode_fast.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/video")
 
 set_source_files_properties(asset_probe.cpp entitlement_edat.c PROPERTIES
     INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/filesystem")

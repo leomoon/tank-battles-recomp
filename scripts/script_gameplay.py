@@ -10,8 +10,12 @@ def invalid_ending_scene(text):
  return any(word in text.upper() for word in ('MISSION FAILED','DEBRIEF','RESULTS','KILLS:','RANK','SELECT AN OPTION','CONTROLS:','RULES:','VICTORY','DEFEAT','GAME OVER','WINS'))
 
 
+def live_battle_timer(text):
+ return any(0<=int(value)<=120 for value in re.findall(r'^\s*(\d{1,3})\s*$',text,re.M))
+
+
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');a=parser.parse_args()
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');a=parser.parse_args()
  if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and (not a.scopes or a.reference_template):parser.error('Shorter intervals require a native --scopes diagnostic and 10..60 seconds')
  out=resolve(a.output)
  if not out.is_relative_to(ROOT/'analysis/performance') or out.exists():parser.error('Use a new output inside analysis/performance/')
@@ -21,8 +25,9 @@ def main():
   out.mkdir(parents=True,exist_ok=False)
   outcomes=[]
   for index in range(a.repeat):
-   command=[sys.executable,__file__,'--output',str(out/f'run-{index+1}'),'--scene',a.scene,'--build-dir',a.build_dir,'--submit-mode',a.submit_mode]
+   command=[sys.executable,__file__,'--output',str(out/f'run-{index+1}'),'--scene',a.scene,'--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
+   if a.decode_profile:command+=['--decode-profile']
    if a.correctness_video:command+=['--correctness-video']
    if a.scopes:command+=['--scopes','--profile-seconds',str(a.profile_seconds)]
    if a.overlay:command+=['--overlay']
@@ -34,7 +39,8 @@ def main():
   cmd=[sys.executable,str(ROOT/'scripts/measure_reference.py'),'--output',str(out),'--scene',a.scene,'--template',a.reference_template,'--appimage',a.appimage,'--timeout','260']
  else:
   cmd=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--scene',a.scene,'--profile',str(ROOT/'analysis/performance/profiles'/str(out.relative_to(ROOT/'analysis/performance')).replace('/','-')),'--pin-window','--scripted-input',str(pad),'--timeout','260']
-  cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode]
+  cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
+  if a.decode_profile:cmd+=['--decode-profile']
   if a.correctness_video:cmd+=['--correctness-video']
   if a.scopes:cmd+=['--scopes','--profile-seconds',str(a.profile_seconds)]
   if a.overlay:cmd+=['--overlay']
@@ -59,8 +65,8 @@ def main():
    crop=out/'button.png';subprocess.run(['magick',str(path),'-resize','1280x720!','-crop',box,'-resize','300%','-colorspace','gray','-negate','-threshold','40%','-morphology','Erode','Disk:2',str(crop)],check=True,capture_output=True)
    text+='\n'+subprocess.run(['tesseract',str(crop),'stdout','--psm','7'],capture_output=True,text=True).stdout.upper()
   timer=out/(label+'-timer.png')
-  subprocess.run(['magick',str(path),'-resize','1280x720!','-crop','240x120+520+0','-resize','400%','-colorspace','gray','-negate','-threshold','40%','-morphology','Erode','Disk:2',str(timer)],check=True,capture_output=True)
-  timer_text=subprocess.run(['tesseract',str(timer),'stdout','--psm','11'],capture_output=True,text=True).stdout
+  subprocess.run(['magick',str(path),'-resize','1280x720!','-crop','100x34+590+72','-fx','(r>0.65 && g>0.35 && b<0.4)?0:1','-resize','400%',str(timer)],check=True,capture_output=True)
+  timer_text=subprocess.run(['tesseract',str(timer),'stdout','--psm','7','-c','tessedit_char_whitelist=0123456789'],capture_output=True,text=True).stdout
   (out/(label+'-timer.txt')).write_text(timer_text)
   return text
  def wait(label,words,timeout=65):
@@ -79,7 +85,7 @@ def main():
   if a.reference_template:
    pid=json.loads((out/'window-prepared.json').read_text())['verified']['pid']
    found=subprocess.check_output(['xdotool','search','--pid',str(pid),'--name','Tank Battles'],text=True).split()
-  else:found=subprocess.check_output(['xdotool','search','--name','^'+re.escape('Tank Battles performance '+out.name)+'$'],text=True).split()
+  else:found=subprocess.check_output(['xdotool','search','--name','^'+re.escape('Tank Battles performance '+out.name+(' [VIDEO DIAGNOSTIC]' if a.correctness_video else ' [PROFILE DIAGNOSTIC]' if a.scopes or a.decode_profile else ''))+'$'],text=True).split()
   assert len(found)==1;window=found[0]
   if a.correctness_video:
    video_log=(out/'video.log').open('w')
@@ -103,7 +109,7 @@ def main():
   origin=time.monotonic()
   while time.monotonic()-origin<a.profile_seconds+9 and process.poll() is None:time.sleep(.5)
   pad.write_text('');after=capture('gameplay-after');event('end-gameplay-boundary',ocr=after)
-  if invalid_ending_scene(after):
+  if invalid_ending_scene(after) or a.scene=='battle' and not live_battle_timer((out/'gameplay-after-timer.txt').read_text()):
    event('invalid-ending-scene',reason='gameplay did not span full requested interval');(out/'invalid-scene.json').write_text(json.dumps(dict(reason='ending scene was not live gameplay')))
   (out/'scene-evidence.json').write_text(json.dumps(dict(before=before,after=after,scripted=True,frames_outside_interval=True),indent=2)+'\n')
   import os,signal

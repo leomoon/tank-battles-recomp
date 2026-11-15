@@ -79,6 +79,17 @@ int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666
    changed=dict(b,manifest=dict(b['manifest'],executable_sha256='undeclared'))
    with self.assertRaises(ValueError):compare([a,changed],candidate_plan=plan)
    with self.assertRaises(ValueError):compare([b],candidate_plan=plan)
+ def test_decoder_variant_is_explicit_and_does_not_relax_other_settings(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);self.fixture(p);r=summarize(p)
+   a=dict(r,manifest=dict(r['manifest'],texture_decode_mode='reference'))
+   b=dict(r,manifest=dict(r['manifest'],texture_decode_mode='specialized'))
+   with self.assertRaises(ValueError):compare([a,b])
+   self.assertEqual(len(compare([a,b],allowed_variants=('texture_decode_mode',))),2)
+   with self.assertRaises(ValueError):compare([b],allowed_variants=('texture_decode_mode',))
+   for field in ('scene','guest_resolution','internal_surfaces','audio','diagnostics','input_source','overlay','executable_sha256'):
+    changed=dict(b,manifest=dict(b['manifest']));changed['manifest'][field]='changed'
+    with self.assertRaises(ValueError):compare([a,changed],allowed_variants=('texture_decode_mode',))
  def test_rejects_incompatible_scene_or_build(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p);r=summarize(p)

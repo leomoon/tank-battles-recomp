@@ -2,7 +2,7 @@ import copy
 import unittest
 
 from measure_reference import summarize_reference
-from script_gameplay import invalid_ending_scene
+from script_gameplay import invalid_ending_scene,live_battle_timer
 
 
 class ReferenceTimingTests(unittest.TestCase):
@@ -10,6 +10,12 @@ class ReferenceTimingTests(unittest.TestCase):
         self.assertTrue(invalid_ending_scene('KILLS:\nRANK\nPLAYER 2 [CPU]\nX CONTINUE'))
         self.assertTrue(invalid_ending_scene('PLAYER 4\nWINS!'))
         self.assertFalse(invalid_ending_scene('FINAL BATTLE!\nPLAYER 1\n43'))
+
+    def test_live_battle_timer_rejects_unrecognized_win_screens(self):
+        self.assertTrue(live_battle_timer('48\n9 S\nAR'))
+        self.assertFalse(live_battle_timer('_-\nN FVLIWIR'))
+        self.assertFalse(live_battle_timer('PLAYER 4\nWINS!'))
+        self.assertFalse(live_battle_timer('999'))
 
     def fixture(self):
         return dict(
