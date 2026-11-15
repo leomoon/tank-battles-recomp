@@ -24,6 +24,16 @@ int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666
    for field,value in [('session',dict(launcher_exit_status=86)),('session',dict(launcher_exit_status=0,interrupted=True)),('strict_passed',False),('live_gameplay_verified',False),('phase','briefing'),('interval_seconds',[1,30]),('visible_entire_interval',False),('diagnostics',dict(video=True)),('interval_seconds',[1,70])]:
     m=dict(base);m[field]=value;(p/'measurement.json').write_text(json.dumps(m))
     with self.assertRaises(ValueError):summarize(p)
+ def test_short_profiles_cannot_become_clean_baselines(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);m=self.fixture(p);m['interval_seconds']=[1,21]
+   (p/'measurement.json').write_text(json.dumps(m))
+   with self.assertRaises(ValueError):summarize(p,minimum_seconds=20)
+   m['diagnostics']={'scopes':True};(p/'measurement.json').write_text(json.dumps(m))
+   r=summarize(p,minimum_seconds=20);self.assertFalse(r['baseline_eligible'])
+   with self.assertRaises(ValueError):compare([r])
+   with self.assertRaises(ValueError):summarize(p)
+   with self.assertRaises(ValueError):summarize(p,minimum_seconds=0)
  def test_stall_is_retained_in_exact_intervals(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p)
@@ -55,6 +65,20 @@ int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666
    with self.assertRaises(ValueError):compare([r,variant])
    self.assertEqual(len(compare([r,variant],allowed_variants=('overlay',))),2)
    with self.assertRaises(ValueError):compare([r,variant],allowed_variants=('scene',))
+ def test_declared_candidate_identity_cannot_relax_scene_or_quality(self):
+  from build_identity import BUILD_FIELDS
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);self.fixture(p);a=summarize(p);b=dict(a,manifest=dict(a['manifest']))
+   b['manifest'].update(executable_sha256='candidate',submission_mode='grouped')
+   plan=dict(reason='bounded draw groups',variants={role:{k:r['manifest'].get(k) for k in BUILD_FIELDS} for role,r in [('baseline',a),('candidate',b)]})
+   self.assertEqual(len(compare([a,b],candidate_plan=plan)),2)
+   with self.assertRaises(ValueError):compare([a,b])
+   for field in ('scene','guest_resolution','internal_surfaces','audio','diagnostics','input_source','overlay'):
+    changed=dict(b,manifest=dict(b['manifest']));changed['manifest'][field]='changed'
+    with self.assertRaises(ValueError):compare([a,changed],candidate_plan=plan)
+   changed=dict(b,manifest=dict(b['manifest'],executable_sha256='undeclared'))
+   with self.assertRaises(ValueError):compare([a,changed],candidate_plan=plan)
+   with self.assertRaises(ValueError):compare([b],candidate_plan=plan)
  def test_rejects_incompatible_scene_or_build(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p);r=summarize(p)

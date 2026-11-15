@@ -8,6 +8,7 @@ from script_gameplay import invalid_ending_scene
 class ReferenceTimingTests(unittest.TestCase):
     def test_results_rejected_when_ocr_misses_debrief_heading(self):
         self.assertTrue(invalid_ending_scene('KILLS:\nRANK\nPLAYER 2 [CPU]\nX CONTINUE'))
+        self.assertTrue(invalid_ending_scene('PLAYER 4\nWINS!'))
         self.assertFalse(invalid_ending_scene('FINAL BATTLE!\nPLAYER 1\n43'))
 
     def fixture(self):

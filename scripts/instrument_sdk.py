@@ -58,6 +58,10 @@ EDITS={
  ('            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,',
   '            if (!f && !m) tb_rsx_texture_capture(location,offset,fmt,w,h,pitch,face,tl->face_bytes,g.tex_staging,tl->dst_row_bytes,tl->rows);\n            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,')],
  'libs/video/cellGcmSys.c':[
+ ('    extern u32 g_rsx_last_reference;\n    /* #466:',
+  '    extern u32 g_rsx_last_reference;\n    if ((m==0x0050u || m==0x0104u || m==0x1D70u || m==0x1D74u || m==0x1800u) && rsx_draw_engine_enabled()) rsx_draw_engine_flush();\n    /* #466:'),
+ ('                        atomic_thread_fence(memory_order_release);\n                        vm_write32(la, v);',
+  '                        if(rsx_draw_engine_enabled())rsx_draw_engine_flush();\n                        atomic_thread_fence(memory_order_release);\n                        vm_write32(la, v);'),
  ('    if (!gcm_ctx_room(ctx, 8)) return 0;',
   '    if (s_seg_size && ctx==s_gcm_context_ea) {\n        if (!gcm_ctx_room(ctx,8)) return 0;\n    } else if ((u64)vm_read32(ctx+8)+8u>vm_read32(ctx+4)) return 0;\n    /* A flip needs eight actual bytes, not the recycle heuristic\'s 4 KiB reserve. */'),
  ('static void gcm_set_current_display_buffer(u32 bufferId)\n{',
@@ -162,6 +166,9 @@ def main():
   for before,after in edits:
    if text.count(before)!=1:raise SystemExit('SDK anchor mismatch: '+relative)
    text=text.replace(before,after,1)
+  if relative=='libs/video/rsx_vulkan_backend.c':
+   from submission_overlay import instrument
+   text=instrument(text)
   if relative=='libs/audio/cellAudio.c':
    begin=text.index('static void* audio_mix_thread_func(void* arg)\n{')
    end=text.index('\n#endif\n\nstatic int audio_start_mix_thread',begin)
@@ -175,7 +182,7 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}

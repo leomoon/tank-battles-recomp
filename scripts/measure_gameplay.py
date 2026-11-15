@@ -7,10 +7,13 @@ from port import ROOT,resolve,launch_environment
 from user_profiles import open_profile
 from diagnostic_logs import open_log
 from gameplay_report import summarize
+from build_identity import source_identity
 
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',required=True);p.add_argument('--scene',required=True,choices=['battle','campaign']);p.add_argument('--profile',required=True);p.add_argument('--resume',action='store_true');p.add_argument('--scripted-input',help='Explicit PAD_FILE path for labeled scripted navigation/gameplay');p.add_argument('--scopes',action='store_true');p.add_argument('--overlay',action='store_true');p.add_argument('--pin-window',action='store_true',help='Float/pin only this test window across workspace switches');p.add_argument('--timeout',type=float,default=300);a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',required=True);p.add_argument('--scene',required=True,choices=['battle','campaign']);p.add_argument('--profile',required=True);p.add_argument('--resume',action='store_true');p.add_argument('--scripted-input',help='Explicit PAD_FILE path for labeled scripted navigation/gameplay');p.add_argument('--scopes',action='store_true');p.add_argument('--overlay',action='store_true');p.add_argument('--pin-window',action='store_true',help='Float/pin only this test window across workspace switches');p.add_argument('--timeout',type=float,default=300);p.add_argument('--correctness-video',action='store_true');p.add_argument('--build-dir',default='build-vulkan');p.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');p.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds, shorter intervals require --scopes and cannot be clean baselines');a=p.parse_args()
+ if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and not a.scopes:p.error('Shorter profile intervals require --scopes and 10..60 seconds')
+ build=resolve(a.build_dir)
  out=resolve(a.output)
  if not out.is_relative_to(ROOT/'analysis/performance') or out.exists():p.error('Use a new output inside analysis/performance/')
  if not resolve(a.profile).is_relative_to(ROOT/'analysis'):p.error('Measurement profiles must be inside ignored analysis/')
@@ -21,17 +24,19 @@ def main():
  for k in list(env):
   if k.startswith(('TB_','PAD_','PS3RECOMP_VK_','RSX_ENGINE_','VK_DRAW_','PS3_FTRACE')):env.pop(k)
  title='Tank Battles performance '+out.name
- env.update(TB_EXECUTION_MODE='strict',TB_GAMEPLAY_TIMING=str(out/'gameplay.jsonl'),TB_FPS_OVERLAY='1' if a.overlay else '0',PS3_TITLE=title,SDL_VIDEODRIVER='x11',PS3RECOMP_VK_WINDOW='1',PS3RECOMP_VK_GUEST_PROGRAMS='1',VK_DRAW_BATCH='0',PS3_VERBOSE='0')
+ env.update(TB_EXECUTION_MODE='strict',TB_GAMEPLAY_TIMING=str(out/'gameplay.jsonl'),TB_FPS_OVERLAY='1' if a.overlay else '0',PS3_TITLE=title,SDL_VIDEODRIVER='x11',PS3RECOMP_VK_WINDOW='1',PS3RECOMP_VK_GUEST_PROGRAMS='1',VK_DRAW_BATCH='0',PS3_VERBOSE='0',TB_VK_SUBMIT_MODE=a.submit_mode)
  if env.get('SDL_AUDIODRIVER')=='dummy':env.pop('SDL_AUDIODRIVER')
+ if a.correctness_video:env['TB_FRAME_ORDER_TRACE']=str(out/'scanout-order.jsonl')
  if a.scopes:env.update(TB_RENDER_PROFILE=str(out/'scopes.jsonl'),TB_RENDER_PROFILE_MAX_REPORTS='600',TB_GPU_TIMING=str(out/'gpu-timing.jsonl'))
  if a.scripted_input:
   env.update(PAD_FILE=str(resolve(a.scripted_input)),PAD_NO_KEYBOARD='1',SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT='0x0000/0x0000')
- commands=subprocess.check_output(['ninja','-C','build-vulkan','-t','commands'],text=True)
+ commands=(build/'commands.txt').read_text() if (build/'commands.txt').exists() else subprocess.check_output(['ninja','-C',str(build),'-t','commands'],text=True)
+ frozen=json.loads((build/'sources.json').read_text()) if (build/'sources.json').exists() else None
  flags={}
  for kind,needle in [('ppu','ppu_recomp_'),('spu','spu_recomp.c.o'),('runtime','rendering_profile.cpp.o')]:
   matches=[l for l in commands.splitlines() if needle in l and ' -c ' in l];flags[kind]=matches[0] if matches else None
  gpu=subprocess.check_output(['nvidia-smi','--query-gpu=name,driver_version','--format=csv,noheader'],text=True).strip()
- exe=ROOT/'build-vulkan/TankBattlesRecomp';manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver='x11/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,build_type=re.search(r'^CMAKE_BUILD_TYPE:STRING=(.*)$',(ROOT/'build-vulkan/CMakeCache.txt').read_text(),re.M)[1],compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],effective_flags=flags,diagnostics=dict(video=False,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes),overlay=a.overlay,source_commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=hashlib.sha256((ROOT/'build-vulkan/instrumented_sdk/manifest.json').read_bytes()).hexdigest(),profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
+ exe=build/'TankBattlesRecomp';manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver='x11/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,submission_mode=a.submit_mode,build_directory=str(build),source_inputs_sha256=hashlib.sha256(json.dumps(frozen['files'],sort_keys=True).encode()).hexdigest() if frozen else source_identity(),build_type=re.search(r'^CMAKE_BUILD_TYPE:STRING=(.*)$',(build/'CMakeCache.txt').read_text(),re.M)[1],compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],effective_flags=flags,diagnostics=dict(video=a.correctness_video,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes),overlay=a.overlay,source_commit=frozen['commit'] if frozen else subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=hashlib.sha256((build/'instrumented_sdk/manifest.json').read_bytes()).hexdigest(),profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
  import threading
  stop=threading.Event();observations=[];child=None;marker=None;sampler=None;sample_streams=[]
@@ -65,7 +70,7 @@ def main():
     elif c.get('size')!=[1280,720]:
      operations=['hl.dsp.window.resize({ window = "'+prefix+'", x = 1280, y = 720 })']
     else:
-     operations=['hl.dsp.window.alter_zorder({ window = "'+prefix+'", mode = "top" })','hl.dsp.window.tag({ window = "'+prefix+'", tag = "+pop" })','hl.dsp.focus({ window = "'+prefix+'" })']
+     operations=['hl.dsp.window.alter_zorder({ window = "'+prefix+'", mode = "top" })','hl.dsp.focus({ window = "'+prefix+'" })']
      (out/'window-prepared.json').write_text(json.dumps(dict(verified=c,operations=operations),indent=2))
     for operation in operations:subprocess.run(['hyprctl','dispatch',operation],check=True,capture_output=True)
    threads=[]
@@ -78,12 +83,12 @@ def main():
    with (out/'observations.jsonl').open('a') as f:f.write(json.dumps(observations[-1])+'\n')
    control=out/'start.json'
    if marker is None and control.exists():
-    marker=json.loads(control.read_text());manifest.update(phase='gameplay',live_gameplay_verified=bool(marker.get('live_gameplay_verified')),interval_seconds=[t+5,t+65],scene_evidence=marker,window_size=c.get('size'));(out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    marker=json.loads(control.read_text());manifest.update(phase='gameplay',live_gameplay_verified=bool(marker.get('live_gameplay_verified')),interval_seconds=[t+5,t+5+a.profile_seconds],scene_evidence=marker,window_size=c.get('size'));(out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
     if a.scopes and child:
      try:(out/'cpu-sample-maps.txt').write_text(Path('/proc',str(child.pid),'maps').read_text())
      except FileNotFoundError:pass
      sample_streams.extend([open_log(out/'cpu-samples.csv','w'),open_log(out/'cpu-samples.log','w')])
-     sampler=subprocess.Popen([str(out/'cpu-sampler'),str(child.pid),'65'],stdout=sample_streams[0],stderr=sample_streams[1])
+     sampler=subprocess.Popen([str(out/'cpu-sampler'),str(child.pid),str(5+a.profile_seconds)],stdout=sample_streams[0],stderr=sample_streams[1])
 
  worker=threading.Thread(target=watch,daemon=True);worker.start()
  try:status,session=run_session([str(exe),str(content/'USRDIR/EBOOT.elf')],cwd=ROOT,env=env,timeout=a.timeout,log_path=out/'startup.log',request_snapshot=True,on_start=on_start)
@@ -99,8 +104,10 @@ def main():
  if marker:
   begin,end=manifest['interval_seconds'];rows=[r for r in observations if begin<=r['seconds']<=end];manifest['visible_entire_interval']=bool(rows) and rows[-1]['seconds']>=end-1.5 and all(r['visible'] and r['window_size']==manifest['window_size'] for r in rows)
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
- if marker:
-  report=summarize(out);(out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(report['cadence'])
+ if marker and a.correctness_video:
+  if not manifest["strict_passed"]:raise SystemExit("Strict failure in correctness video")
+ elif marker:
+  report=summarize(out,minimum_seconds=a.profile_seconds);(out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(report['cadence'])
  else:raise SystemExit('No verified live-gameplay start marker; diagnostic only')
 
 if __name__=='__main__':main()

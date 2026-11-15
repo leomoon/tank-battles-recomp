@@ -15,6 +15,8 @@ source+=r'''
 void tb_rsx_memory_written(uint32_t l,uint32_t o,uint32_t n){(void)l;(void)o;(void)n;}
 void tb_rsx_transfer_trace(uint32_t s,uint32_t m,uint32_t a){(void)s;(void)m;(void)a;}
 void tb_frame_event(uint32_t k,uint32_t a,uint32_t b,uint32_t c,uint32_t d){(void)k;(void)a;(void)b;(void)c;(void)d;}
+static unsigned flushes;
+void rsx_draw_engine_flush(void){flushes++;}
 BOOL SetEvent(HANDLE h) { (void)h; assert(0 && "Unexpected segmented-ring event"); return 0; }
 static atomic_int calls;
 static unsigned long callback_tid;
