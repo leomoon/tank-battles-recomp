@@ -49,6 +49,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 
 #include <stdint.h>
@@ -218,11 +220,67 @@ static void drain_fifo(void)
     tb_frame_budget_span(TB_FT_DRAIN_CALL, put, t0, tb_frame_budget_now());
 }
 
+/* Presentation is split in two (rsx_vulkan_backend.h). The walker records
+ * and submits the copy of the flipped surface -- it reads the frame, so it
+ * must happen in order before anything later is drained -- and a present
+ * thread waits for that copy, blits it into the swapchain and presents it.
+ * The walker therefore never waits for the GPU or the display to show a
+ * frame. A present arriving before the last one finished completes the last
+ * one first, so at most one copy and one window present are in flight.
+ * TB_PRESENT_THREAD=0 keeps the whole present on the walker for A/B runs. */
+#if defined(PS3RECOMP_RSX_VULKAN)
+extern "C" void rsx_vulkan_backend_present_begin(void);
+extern "C" void rsx_vulkan_backend_present_finish(void);
+/* Process lifetime on purpose: exit() must not destroy a condition variable
+ * the present thread is still waiting on (glibc blocks in that destructor). */
+struct PresentQueue { std::mutex mu; std::condition_variable cv; unsigned requested = 0, finished = 0; };
+static PresentQueue& present_queue(void) { static PresentQueue* q = new PresentQueue; return *q; }
+
+static bool present_thread_on(void)
+{
+    static const bool on = [] { const char* e = getenv("TB_PRESENT_THREAD"); return !e || strcmp(e, "0") != 0; }();
+    return on;
+}
+
+static DWORD WINAPI present_worker(LPVOID)
+{
+#if defined(__linux__)
+    prctl(PR_SET_NAME, "tb-present", 0, 0, 0);
+#endif
+    for (;;) {
+        PresentQueue& q = present_queue();
+        {
+            std::unique_lock<std::mutex> lock(q.mu);
+            q.cv.wait(lock, [&q] { return q.requested != q.finished; });
+            q.finished = q.requested;   /* later requests complete earlier ones */
+        }
+        const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
+        rsx_vulkan_backend_present_finish();
+        if (t0) tb_frame_budget_span(TB_FT_PRESENT_FINISH, 0, t0, tb_frame_budget_now());
+    }
+    return 0;
+}
+#endif
+
+static void present_frame_now(void)
+{
+#if defined(PS3RECOMP_RSX_VULKAN)
+    if (present_thread_on()) {
+        rsx_vulkan_backend_present_begin();
+        PresentQueue& q = present_queue();
+        { std::lock_guard<std::mutex> lock(q.mu); q.requested++; }
+        q.cv.notify_one();
+        return;
+    }
+#endif
+    rsx_backend_present();
+}
+
 static void present_guest_frame(void)
 {
     TB_RENDER_SCOPE(11);
     const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
-    rsx_backend_present();
+    present_frame_now();
     if (t0) tb_frame_budget_span(10 /* PS3_FT_PRESENT */, 0, t0, tb_frame_budget_now());
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
@@ -309,6 +367,9 @@ static DWORD WINAPI rsx_walker(LPVOID)
 #endif
     g_rsx_state.store(rsx_ok ? 1 : -1, std::memory_order_release);
     if (!rsx_ok) return 0;
+#if defined(PS3RECOMP_RSX_VULKAN)
+    if (present_thread_on()) CreateThread(NULL, 1u * 1024 * 1024, present_worker, NULL, 0, NULL);
+#endif
 
     using clock = std::chrono::steady_clock;
     HANDLE kick = (HANDLE)cellGcm_fifo_kick_event();
@@ -339,7 +400,7 @@ static DWORD WINAPI rsx_walker(LPVOID)
         if (cellGcm_flip_request_count() == 0 &&
             now - last_boot_present >= std::chrono::milliseconds(16)) {
             last_boot_present = now;
-            rsx_backend_present();
+            present_frame_now();
         }
 
         const uint32_t put = gcm_control_word(0), get = gcm_control_word(4);

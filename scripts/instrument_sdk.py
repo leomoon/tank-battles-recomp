@@ -207,6 +207,12 @@ def main():
    text=text.replace('X(vkCreateFence) X(vkDestroyFence)', 'X(vkGetFenceStatus) X(vkCreateFence) X(vkDestroyFence)')
    text=text.replace('static int vk_submit_and_wait(void)\n{','#include \"'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_fence_poll.inc')+'\"\nstatic int vk_submit_and_wait(void)\n{')
    text=text.replace('pvkWaitForFences(s_vk.device, 1, &s_vk.fence, VK_TRUE, UINT64_MAX)', 'tb_fence_wait(s_vk.fence)')
+   # Window present mode: MAILBOX when available (vulkan_present_mode.inc).
+   for anchor in ('X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR)','        .presentMode = VK_PRESENT_MODE_FIFO_KHR,   /* the one mode every driver has */','static int vk_create_swapchain(void)\n{'):
+    if text.count(anchor)!=1:raise SystemExit('Present mode anchor mismatch: '+anchor)
+   text=text.replace('X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR)','X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR)')
+   text=text.replace('        .presentMode = VK_PRESENT_MODE_FIFO_KHR,   /* the one mode every driver has */','        .presentMode = tb_present_mode(),')
+   text=text.replace('static int vk_create_swapchain(void)\n{','#include \"'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_present_mode.inc')+'\"\nstatic int vk_create_swapchain(void)\n{')
    header=Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h'
    # Unique generated call-site labels preserve separate monotonic counters.
    definitions=list(re.finditer(r'^static [^;{]*?\b(\w+)\([^;{]*?\)\n\{',text,re.M))
@@ -238,7 +244,7 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}
