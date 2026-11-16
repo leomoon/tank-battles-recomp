@@ -22,6 +22,15 @@ extern "C" {
 void tb_frame_budget_init(void);
 int tb_frame_budget_on(void);
 uint64_t tb_frame_budget_now(void);
+/* The wait site a fence-wait span is attributed to: a label the instrumented
+ * call site sets just before it may wait, reported by number with the
+ * number-to-label table printed once per label as "[frame-budget] site". */
+#ifdef __cplusplus
+extern thread_local const char* tb_wait_label;
+#else
+extern __thread const char* tb_wait_label;
+#endif
+uint32_t tb_frame_budget_site(const char* label);
 void tb_frame_budget_span(unsigned kind, uint32_t a, uint64_t t0, uint64_t t1);
 #ifdef __cplusplus
 }

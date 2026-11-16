@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 #if defined(__linux__)
@@ -96,6 +97,23 @@ extern "C" int tb_frame_budget_on(void) {
 }
 
 extern "C" uint64_t tb_frame_budget_now(void) { return ps3_ft_now(); }
+
+extern "C" thread_local const char* tb_wait_label = nullptr;
+
+extern "C" uint32_t tb_frame_budget_site(const char* label) {
+    // Walker-only in practice; a mutex keeps the table sound regardless.
+    static std::mutex mutex;
+    static const char* sites[256];
+    static uint32_t count = 0;
+    if (!label) return 0;
+    std::lock_guard<std::mutex> lock(mutex);
+    for (uint32_t i = 0; i < count; i++)
+        if (sites[i] == label || !strcmp(sites[i], label)) return i + 1;
+    if (count == 256) return 0;
+    sites[count++] = label;
+    fprintf(stderr, "[frame-budget] site %u %s\n", count, label);
+    return count;
+}
 
 extern "C" void tb_frame_budget_span(unsigned kind, uint32_t a, uint64_t t0, uint64_t t1) {
     ps3_ft_span((int)kind, 0, a, 0, t0, t1);

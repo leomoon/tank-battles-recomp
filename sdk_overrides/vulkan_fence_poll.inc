@@ -7,7 +7,7 @@ static VkResult tb_fence_wait(VkFence fence)
     if (!tb_frame_budget_on()) return tb_fence_wait_inner(fence);
     const uint64_t t0 = tb_frame_budget_now();
     const VkResult result = tb_fence_wait_inner(fence);
-    tb_frame_budget_span(TB_FT_FENCE_WAIT, 0, t0, tb_frame_budget_now());
+    tb_frame_budget_span(TB_FT_FENCE_WAIT, tb_frame_budget_site(tb_wait_label), t0, tb_frame_budget_now());
     return result;
 }
 static VkResult tb_fence_wait_inner(VkFence fence)

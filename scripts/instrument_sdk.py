@@ -79,7 +79,7 @@ EDITS={
  ('    extern u32 g_rsx_last_reference;\n    /* #466:',
   '    extern u32 g_rsx_last_reference;\n    if ((m==0x0050u || m==0x0104u || m==0x1D70u || m==0x1D74u || m==0x1800u) && rsx_draw_engine_enabled()) rsx_draw_engine_flush();\n    /* #466:'),
  ('                        atomic_thread_fence(memory_order_release);\n                        vm_write32(la, v);',
-  '                        if(rsx_draw_engine_enabled())rsx_draw_engine_flush();\n                        atomic_thread_fence(memory_order_release);\n                        vm_write32(la, v);'),
+  '                        tb_publication_flush();\n                        atomic_thread_fence(memory_order_release);\n                        vm_write32(la, v);'),
  ('    if (!gcm_ctx_room(ctx, 8)) return 0;',
   '    if (s_seg_size && ctx==s_gcm_context_ea) {\n        if (!gcm_ctx_room(ctx,8)) return 0;\n    } else if ((u64)vm_read32(ctx+8)+8u>vm_read32(ctx+4)) return 0;\n    /* A flip needs eight actual bytes, not the recycle heuristic\'s 4 KiB reserve. */'),
  ('static void gcm_set_current_display_buffer(u32 bufferId)\n{',
@@ -213,6 +213,35 @@ def main():
    text=text.replace('X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR)','X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR)')
    text=text.replace('        .presentMode = VK_PRESENT_MODE_FIFO_KHR,   /* the one mode every driver has */','        .presentMode = tb_present_mode(),')
    text=text.replace('static int vk_create_swapchain(void)\n{','#include \"'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_present_mode.inc')+'\"\nstatic int vk_create_swapchain(void)\n{')
+   # Asynchronous draw-batch slots (vulkan_async_batches.inc).
+   async_inc=str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_async_batches.inc')
+   for before,after in [
+    ('static void vk_destroy_image(vk_image* im)\n{\n    if (s_eb_pending) vk_eng_flush();',
+     'static int tb_async_inflight(void);\nstatic int tb_async_active(void);\nstatic int tb_async_record(void);\nstatic int tb_async_flush(void);\nstatic void tb_async_init(void);\nstatic void tb_eng_complete(void);\nstatic void tb_ring_window(VkDeviceSize cap, VkDeviceSize* lo, VkDeviceSize* hi);\nstatic void vk_destroy_image(vk_image* im)\n{\n    if (im->img || im->view) { if (s_eb_pending || tb_async_inflight()) { tb_wait_label="complete:destroy-image"; tb_eng_complete(); } }'),
+    ('static void vk_destroy_buffer(vk_buffer* b)\n{\n    if (s_eb_pending) vk_eng_flush();',
+     'static void vk_destroy_buffer(vk_buffer* b)\n{\n    if (b->buf || b->mem) { if (s_eb_pending || tb_async_inflight()) { tb_wait_label="complete:destroy-buffer"; tb_eng_complete(); } }'),
+    ('static void vk_eng_drop_framebuffers(void)\n{\n    if (s_eb_pending) vk_eng_flush();',
+     'static void vk_eng_drop_framebuffers(void)\n{\n    if (s_eb_pending || tb_async_inflight()) { tb_wait_label="complete:drop-framebuffers"; tb_eng_complete(); }'),
+    ('    (void)user;\n    if (s_eb_pending) vk_eng_flush();\n    if (!pipeline || pipeline > VK_ENG_MAX_PIPE',
+     '    (void)user;\n    if (s_eb_pending || tb_async_inflight()) { tb_wait_label="complete:pipeline-release"; tb_eng_complete(); }\n    if (!pipeline || pipeline > VK_ENG_MAX_PIPE'),
+    ('static void vk_eb_release(void)\n{\n    if (s_eb_pending) vk_eng_flush();',
+     'static void vk_eb_release(void)\n{\n    tb_wait_label="complete:release"; tb_eng_complete();'),
+    ('    (void)user; (void)reason;      /* every other submission has already completed */\n    if (s_eb_pending) vk_eng_flush();',
+     '    (void)user; (void)reason;      /* synchronous: every submission has completed on return */\n    tb_wait_label="complete:engine-submit"; tb_eng_complete();'),
+    ('    s_eb_pending = 0;               /* first: the submit below must not re-enter */\n    vk_submit_and_wait();',
+     '    s_eb_pending = 0;               /* first: the submit below must not re-enter */\n    if (tb_async_flush()) return;\n    vk_submit_and_wait();'),
+    ('static VkDeviceSize vk_eb_take(VkDeviceSize* head, VkDeviceSize cap, VkDeviceSize bytes, VkDeviceSize align)\n{\n    const VkDeviceSize at = (*head + align - 1u) / align * align;\n    if (at + bytes > cap) return (VkDeviceSize)-1;',
+     '#include "'+async_inc+'"\nstatic VkDeviceSize vk_eb_take(VkDeviceSize* head, VkDeviceSize cap, VkDeviceSize bytes, VkDeviceSize align)\n{\n    VkDeviceSize lo, hi;\n    tb_ring_window(cap, &lo, &hi);\n    const VkDeviceSize from = *head < lo ? lo : *head;\n    const VkDeviceSize at = (from + align - 1u) / align * align;\n    if (at + bytes > hi) return (VkDeviceSize)-1;'),
+    ('    s_eb.on = 1;\n    return 1;','    s_eb.on = 1;\n    tb_async_init();\n    return 1;'),
+    ('    if (!vk_eb_active()) return -2;','    if (!vk_eb_active() && !tb_async_record()) return -2;'),
+    ('    VK_CHECK(pvkBeginCommandBuffer(s_vk.cmd, &bi), "vkBeginCommandBuffer");\n',
+     '    VK_CHECK(pvkBeginCommandBuffer(s_vk.cmd, &bi), "vkBeginCommandBuffer");\n    /* Asynchronous batches: begin after everything submitted, so this\n     * command buffer\'s fence also means every earlier batch finished. */\n    if (tb_async_active()) vk_cmd_after_everything(s_vk.cmd);\n'),
+   ]:
+    if text.count(before)!=1:raise SystemExit('Async batch anchor mismatch: '+before[:80])
+    text=text.replace(before,after)
+   # Clears join the open batch too when submission is asynchronous.
+   if text.count('    const int batched = vk_eb_active();\n')!=2:raise SystemExit('Async clear anchor mismatch')
+   text=text.replace('    const int batched = vk_eb_active();\n','    const int batched = vk_eb_active() || tb_async_record();\n')
    header=Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h'
    # Unique generated call-site labels preserve separate monotonic counters.
    definitions=list(re.finditer(r'^static [^;{]*?\b(\w+)\([^;{]*?\)\n\{',text,re.M))
@@ -226,13 +255,14 @@ def main():
    consumer='\n#if defined(__linux__)\n    static tb_depth_cost_totals totals[4];\n    static const char* names[]={"consumer:vertex-ring","consumer:guest-reference","consumer:shutdown","consumer:unknown"};\n    unsigned slot=reason<3?reason:3;\n    tb_depth_cost_scope consumer_scope __attribute__((cleanup(tb_depth_cost_end))) =\n        {&totals[slot],names[slot],tb_depth_cost_enabled()?tb_depth_cost_now():0,0,0};\n#endif\n'
    if text.count(anchor)!=1:raise SystemExit('Consumer scope anchor mismatch')
    text=text.replace(anchor,anchor+consumer)
-   macro='#if defined(__linux__)\n#define TB_WAIT_SITE(label,fn) ({ TB_DEPTH_COST(label,0,0); fn(); })\n#else\n#define TB_WAIT_SITE(label,fn) fn()\n#endif\n'
-   text='#include "'+str(header)+'"\n'+macro+text
+   macro='#if defined(__linux__)\n#define TB_WAIT_SITE(label,fn) ({ TB_DEPTH_COST(label,0,0); tb_wait_label=label; fn(); })\n#else\n#define TB_WAIT_SITE(label,fn) fn()\n#endif\n'
+   text='#include "'+str(header)+'"\n#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n'+macro+text
   if relative=='libs/video/cellGcmSys.c':
    anchor='if ((m==0x0050u || m==0x0104u || m==0x1D70u || m==0x1D74u || m==0x1800u) && rsx_draw_engine_enabled()) rsx_draw_engine_flush();'
-   cases=''.join('case '+method+'u: { TB_DEPTH_COST("fifo:'+method+'",0,0); rsx_draw_engine_flush(); break; }' for method in ['0x0050','0x0104','0x1D70','0x1D74','0x1800'])
+   cases=''.join('case '+method+'u: { TB_DEPTH_COST("fifo:'+method+'",0,0); tb_publication_flush(); break; }' for method in ['0x0050','0x0104','0x1D70','0x1D74','0x1800'])
    if text.count(anchor)!=1:raise SystemExit('FIFO wait anchor mismatch')
    text=text.replace(anchor,'if(rsx_draw_engine_enabled())switch(m){'+cases+'default:break;}')
+   text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/gcm_label_publication.inc')+'"\n'+text
   if relative=='libs/video/rsx_draw_engine.c':
    text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h')+'"\n'+text
    for function,label in [('eng_vertex_layout','vertex-layout'),('dc_fetch','vertex-fetch'),('eng_pipeline_get','engine-pipeline'),('sink_bind_textures','texture-binding')]:
@@ -244,7 +274,7 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}

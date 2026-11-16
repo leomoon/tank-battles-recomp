@@ -58,11 +58,12 @@ int main(void)
     pixel(a,2,8,255,0,0);pixel(a,10,8,0,255,0);
     draw_color(0,0,1,0);vk_eng_bind_targets(NULL,&b,1,0);draw_color(1,1,0,8);
     assert(s_eb_pending==1);pixel(a,2,8,0,0,255);pixel(b,10,8,255,255,0);
-    /* A partial upload has to end a pending draw pass before reusing staging. */
+    /* A partial upload has to end a pending draw pass before reusing staging;
+     * with asynchronous batches it joins the batch through the staging ring. */
     u32 texture=vk_eng_texture_create(NULL,RSX_BE_FMT_R8G8B8A8,2,2,1,1,0xAAE4,0x85);assert(texture);
     vk_eng_bind_targets(NULL,&a,1,0);draw_color(1,0,1,0);
     u8 texels[16]={255};vk_eng_texture_upload(NULL,texture,0,0,2,1,texels,8,1);
-    assert(!tb_group_open && !s_eb_pending);pixel(a,2,8,255,0,255);
+    assert(!tb_group_open && (tb_async_active() ? s_eb_pending==2 : !s_eb_pending));pixel(a,2,8,255,0,255);
     /* The same descriptors must retain different texture bindings per draw. */
     const char* textured_ps="Texture2D rsx_tex[16] : register(t0); SamplerState rsx_samp[16] : register(s0); float4 main() : SV_Target0 { return rsx_tex[0].Sample(rsx_samp[0],float2(.25,.25)); }";
     u32 texpipe=vk_eng_pipeline_create(NULL,tb_test_vs,textured_ps,&state,&layout,16,RSX_BE_FMT_R8G8B8A8,1);assert(texpipe);

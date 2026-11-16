@@ -185,6 +185,10 @@ def render(result):
     if p:
         lines.append(f"put->drain ms: mean {p['mean']:.3f} p50 {p['p50']:.3f} p95 {p['p95']:.3f} max {p['max']:.3f} "
                      f"({result['put_advances']} advances)")
+    if result.get('fence_waits_by_site'):
+        lines.append('fence waits per frame by site (count, ms):')
+        for label, n, ms in result['fence_waits_by_site'][:8]:
+            lines.append(f"  {label:44s} {n:6.2f} {ms:7.3f}")
     lines.append('guest threads (ms/frame):')
     for g in result['guest_threads'][:8]:
         top = ', '.join(f"{label} {ms:.2f}" for label, ms in g['top_blocking_ms_per_frame'])
@@ -192,9 +196,29 @@ def render(result):
     return '\n'.join(lines)
 
 
+def wait_sites(log_path):
+    path = Path(log_path)
+    if not path.exists():
+        return {}
+    return {int(n): label for n, label in re.findall(r'^\[frame-budget\] site (\d+) (\S+)', path.read_text(errors='replace'), re.M)}
+
+
+def fence_sites(spans, sites, first, last, frames):
+    totals = {}
+    for k, _, site, _, t0, t1 in spans:
+        if k == FENCE_WAIT and first <= t0 < last:
+            label = sites.get(site, 'site-%d' % site)
+            n, ms = totals.get(label, (0, 0.0))
+            totals[label] = (n + 1, ms + t1 - t0)
+    return sorted(((label, n / frames, ms / frames) for label, (n, ms) in totals.items()), key=lambda r: -r[2])
+
+
 def report(trace, build_dir='build-vulkan', json_path=None):
     header, names, spans = load(trace)
     result = analyze(spans, names, nid_names(build_dir))
+    flips = sorted(s[4] for s in spans if s[0] == FLIP_FIFO)
+    result['fence_waits_by_site'] = fence_sites(spans, wait_sites(Path(trace).parent / 'startup.log'),
+                                                flips[0], flips[-1], result['frames'])
     result['trace_header'] = header
     if json_path:
         Path(json_path).write_text(json.dumps(result, indent=2) + '\n')

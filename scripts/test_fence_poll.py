@@ -16,6 +16,7 @@ static uint64_t tb_depth_cost_now(void){uint64_t n=clock_value;clock_value+=cloc
 static int pvkGetFenceStatus(int device,int fence){assert(fence==7);probes++;return error?error:probes>ready_after?0:1;}
 static int pvkWaitForFences(int d,int n,int* f,int all,uint64_t timeout){assert(n==1&&*f==7&&all&&timeout==UINT64_MAX);waits++;return error;}
 static int budget_on;static unsigned budget_spans,budget_kind;
+__thread const char* tb_wait_label; uint32_t tb_frame_budget_site(const char* l){return 0;}
 int tb_frame_budget_on(void){return budget_on;}
 uint64_t tb_frame_budget_now(void){return 0;}
 void tb_frame_budget_span(unsigned kind,uint32_t a,uint64_t t0,uint64_t t1){budget_spans++;budget_kind=kind;}
