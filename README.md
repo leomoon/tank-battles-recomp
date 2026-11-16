@@ -8,9 +8,9 @@ To recompile or run the game, you must provide your own decrypted dump of a legi
 
 ## Status
 
-The repository has a pinned ps3recomp dependency, a native runner, configuration, and scripts for analysis, translation, build, and launch. The experimental Vulkan port reaches live Battle and campaign gameplay with translated guest shaders, controller/keyboard input and host audio. The user reports completing and reloading the first two campaign levels. Performance remains below the 60 FPS target, and broader gameplay, save, audio and input lifecycle coverage remains incomplete. The synthetic smoke test checks the runner independently of Tank Battles.
+The repository has a pinned ps3recomp dependency, a native runner, configuration, and scripts for analysis, translation, build, and launch. The Linux Vulkan port is playable: default Battle and the first campaign mission run at 60 FPS (59.98 to 60.00 completed game frames per second, 95th-percentile frame time under 17 ms) at normal game speed with real audio, on a Ryzen 9 7950X and RTX 3060. The user reports completing and reloading the first two campaign levels. Windows is not supported yet, and broader mission, dialog, save, audio and physical-input coverage is still being verified. The synthetic smoke test checks the runner independently of Tank Battles.
 
-Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Remaining validation includes sustained gameplay performance and simulation speed, broader graphics and mission coverage, and save/audio/input lifecycle behavior. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
+Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Remaining validation includes broader graphics and mission coverage, interactive system dialogs, and save/audio/input lifecycle behavior. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
 
 Linux play-lifecycle validation now includes two physical controllers, unplug/reconnect, keyboard takeover and Campaign handoff. The observed sdl2-compat unplug abort is fixed by serializing guest controller-event polling with the window event pump. A 30-minute mixed Battle/Campaign/menu soak completed with stable warmed resources and normal rendering-worker shutdown. Fullscreen, resize and focus/hide recovery retained roughly 60 FPS after transitions; short transition gaps up to 182 ms remain. Native minimize behavior was not established on Hyprland. Local evidence is under `analysis/linux-play-gates/`.
 
@@ -91,7 +91,51 @@ game/
 └── dev_hdd1/                # Writable cache, created on launch
 ```
 
-Copy the entire installed `NPUB30154` directory from your own dump, including its other files. RPCS3 can install your PKG and export `EBOOT.elf` through Tools → Decrypt PS3 Binaries. A decrypted executable alone is not the complete game. Protected EDAT assets must also be readable by the port through runtime support or a separately prepared decrypted asset dump. Full-game entitlement files from your purchased copy remain local; the Linux entitlement bridge verifies the purchased C00 unlock as described below.
+Copy the entire installed `NPUB30154` directory from your own dump, including its other files (`C00`, `TROPDIR`, the extra `.edat` files). The full-game unlock goes in a separate folder:
+
+```text
+game/dev_hdd0/home/00000001/exdata/
+├── UP2006-NPUB30154_00-TANKBATTLES00KEY.edat
+└── UP2006-NPUB30154_00-TANKBATTLES00KEY.rap
+```
+
+### What you need and what needs decrypting
+
+You need three things from your own purchase:
+
+1. The installed game folder `NPUB30154`. Either copy it from your PS3's `/dev_hdd0/game/` or install the game PKG in RPCS3 with File → Install Packages/Raps/Edats, then copy it from RPCS3's `dev_hdd0/game/`.
+2. The full-game unlock, `UP2006-NPUB30154_00-TANKBATTLES00KEY.edat`, and the `.rap` licence for your purchase. Installing the unlock PKG in RPCS3 places the `.edat` in RPCS3's `dev_hdd0/home/00000001/exdata/`. The `.rap` comes from your own account or console, the same file RPCS3 needs.
+3. A decrypted copy of the executable, `USRDIR/EBOOT.elf`, made once as described below.
+
+| File | As installed | Who decrypts it |
+| --- | --- | --- |
+| Game PKG | encrypted package | RPCS3 when you install it (or copy the already installed folder from your PS3) |
+| `USRDIR/EBOOT.BIN` | encrypted NPDRM SELF | you, once, with RPCS3, producing `USRDIR/EBOOT.elf` |
+| `USRDIR/assets_*.edat` | encrypted NPDRM EDAT | the port, automatically at first launch; nothing to do |
+| `exdata/...KEY.edat` + `.rap` | purchase licence | stays encrypted; `scripts/prepare_entitlement.py` prepares a local key sidecar and the port verifies it at runtime |
+
+**Decrypt the executable with RPCS3.** Place the `.rap` in RPCS3's `dev_hdd0/home/00000001/exdata/` first (RPCS3 looks there for the licence when it decrypts NPDRM binaries). Then either:
+
+- in RPCS3, choose Utilities → Decrypt PS3 Binaries (Tools in older builds), select `USRDIR/EBOOT.BIN` of the installed game, and RPCS3 writes `EBOOT.elf` next to it; or
+- from a terminal: `rpcs3 --decrypt /path/to/NPUB30154/USRDIR/EBOOT.BIN` (with the AppImage: `./rpcs3-*.AppImage --decrypt ...`).
+
+Put the resulting `EBOOT.elf` in `game/dev_hdd0/game/NPUB30154/USRDIR/` beside `EBOOT.BIN`. `python scripts/port.py prepare` refuses an encrypted `EBOOT.BIN`. The tested version has these SHA-256 hashes, so compare yours with `sha256sum`:
+
+| File | SHA-256 |
+| --- | --- |
+| `PARAM.SFO` | `2857058f5131a73c916acc9301dfc3892abaa31755c92732006c31d6fa9849fc` |
+| `USRDIR/EBOOT.BIN` | `ca48282696515e0c706b93acca0b1ae33a07a0d3ee60b5a737156524ff1c39e1` |
+| `USRDIR/EBOOT.elf` (decrypted) | `b81cc67ed5cf306af601a22f8de003c06857dd71035f0dbf190e918e355e0538` |
+| `USRDIR/assets_common.edat` | `e1b58219e7c5e2b7296bb4e3e47475b00f6d4dfe9fa5cbc0d4dc8dad34105cf9` |
+| `USRDIR/assets_images.edat` | `ce9f2835ef97c9d5c7de2efad4e7d3f09e5d9011bfe546bd06a506917be38537` |
+| `USRDIR/assets_ps3.edat` | `80c5f4df23b521366da739d0c8f9361db7d4eef3c5779b531ab2881f621722ef` |
+| `USRDIR/assets_sound.edat` | `ca8aaab8f378f9e865b8221bfb252da3f901284a71a1b8c8206db7cdcedf4eba` |
+
+**Do not decrypt the asset EDATs yourself.** The game registers its own asset key while it boots, and the port decrypts each `assets_*.edat` into a `*.edat.dec` cache with a completion record beside it (first launch takes longer). RPCS3's `.unedat` outputs are not used at runtime; they are only needed for the optional verification in [Asset IO verification](#asset-io-verification).
+
+**Prepare the full-game unlock.** Copy the unlock `.edat` and `.rap` into `game/dev_hdd0/home/00000001/exdata/` and run `python scripts/prepare_entitlement.py --rpcs3-source /path/to/rpcs3-source`, where the RPCS3 source is a local clone used only for public format tables (`git clone --depth 1 https://github.com/RPCS3/rpcs3`). Details are in [Purchased full-game unlock](#purchased-full-game-unlock). Without the unlock the game runs as the trial, as it does on the console.
+
+No keys, firmware or game files are included in this repository, and the scripts never download or decrypt them for you.
 
 The scripts read `config.toml` and look for `game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf` by default. Paths are relative to the repository root. To analyze a decrypted executable elsewhere, pass `--elf /path/to/EBOOT.elf`; this does not copy the executable or its assets. Set matching filesystem paths in the configuration before trying to run the game. `PS3_VFS_ROOT`, `PS3_HDD0_ROOT`, `PS3_HDD1_ROOT`, `PS3_GAMEDATA_ROOT`, and `PS3_DEV_FLASH` can override the launch mounts. The default VFS root is the installed title directory, HDD0 is `game/dev_hdd0`, and the user-data root is `game`, so saves and writable caches stay in the ignored dump tree. The runner reads `PARAM.SFO`, checks the configured title ID, and supplies the installed HDD boot path. Override metadata with `--paramsfo /path/to/PARAM.SFO` or `PS3_PARAM_SFO`.
 
@@ -112,6 +156,30 @@ python scripts/port.py build --jobs 2
 # Launch using the local game dump and writable mounts.
 python scripts/port.py run
 ```
+
+While playing: a controller or the keyboard (Z/X and the arrow keys) works as input, F3 toggles the FPS overlay (off by default), F11 or Alt+Enter toggles fullscreen, and Esc or closing the window quits. The overlay, fullscreen and windowed size are remembered in `game/settings.ini`. Each launch writes its log to `game/logs/session-<date>-<time>.log` (the newest ten are kept); `--console` prints to the terminal instead.
+
+For a smaller player build without debug information, configure a separate build directory with `python scripts/port.py configure --build-dir build-release --build-type Release`, build it with `python scripts/port.py build --build-dir build-release`, and run it with `--build-dir build-release`. Release keeps the same `-O2` optimisation as the default developer build.
+
+### Runtime switches
+
+The defaults are the tested 60 FPS configuration. Each switch below restores one earlier behaviour for comparison or troubleshooting; set it in the environment of `python scripts/port.py run`, for example `TB_VK_ASYNC=0 python scripts/port.py run`.
+
+| Switch | Default | Effect when changed |
+| --- | --- | --- |
+| `TB_VBLANK_HZ` | `60` | Vblank beat in Hz (30 to 240); `62.5` is the old 16 ms frame clock |
+| `TB_PRESENT_ON_VBLANK=0` | on | Present each frame as soon as the renderer reaches its flip instead of on the next vblank |
+| `TB_PRESENT_THREAD=0` | on | Present on the renderer thread instead of a separate thread |
+| `TB_VK_PRESENT_MODE=fifo` | MAILBOX if offered | Force the FIFO swapchain mode |
+| `TB_LABEL_SYNC=1` | off | Wait for the GPU before every guest label or reference |
+| `TB_VK_ASYNC=0` | on | Submit and wait for every draw batch |
+| `TB_GPU_RESOLVE=0` | on | Run NV3089 surface blits through guest memory on the CPU |
+| `TB_DEPTH_GPU=0` | on | Convert depth surfaces for the CPU instead of on the GPU |
+| `TB_TEXTURE_DECODE_MODE=reference` | `specialized` | Use the original texture decoder |
+| `TB_FPS_OVERLAY` | saved setting, else off | `1` shows the overlay at start, `0` hides it |
+| `PS3RECOMP_FULLSCREEN=1` | saved setting | Start in borderless fullscreen |
+
+Diagnostics are opt-in and never change the defaults: `TB_FRAME_BUDGET=<file>` with `scripts/frame_budget.py` (per-frame renderer and guest timeline), `TB_PAGE_CENSUS=1` (which threads touch render-target memory; Linux only), and the capture and profile options described below.
 
 For analysis without translation, use `python scripts/port.py prepare --analyze-only`. Linux configuration enables Vulkan by default; use `python scripts/port.py configure --backend null` for headless diagnostics. Extra CMake options can follow `--`, for example `python scripts/port.py configure -- -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++` when using a fresh build directory. Run each subcommand with `--help` for path and tool overrides.
 
@@ -522,6 +590,6 @@ Contribute tooling, configuration, documentation, and original runtime fixes. Do
 
 This is an unofficial project and is not affiliated with or endorsed by Gameloft or Sony. Tank Battles and its original content belong to their respective rights holders.
 
-The index-remap reuse experiment also stays disabled for ordinary launches. `script_gameplay.py --depth-gpu --draw-remap-cache` or `TB_DRAW_REMAP_CACHE=1` selects two bounded exact-input entries; `--draw-verify` compares every reused result against fresh computation and is diagnostic only. Indices and vertex values are still read every draw, and constants, textures, targets and GPU resources stay fresh. `compare_rendering_runs.py --gameplay --draw-remap-ab ...` permits only that declared mode difference. Two matched clean Linux Battle minutes per mode measured 29.58 fresh versus 29.50 cached completed GAME FPS, so reuse is not enabled. This does not meet the Linux 60 GAME FPS target. `--decode-profile` now also reports bounded layout, vertex-fetch, remap, pipeline and texture-binding costs; inclusive paths overlap and must not be summed. Findings are retained locally under `analysis/draw-state-validation/`.
+The index-remap reuse experiment also stays disabled for ordinary launches. `script_gameplay.py --depth-gpu --draw-remap-cache` or `TB_DRAW_REMAP_CACHE=1` selects two bounded exact-input entries; `--draw-verify` compares every reused result against fresh computation and is diagnostic only. Indices and vertex values are still read every draw, and constants, textures, targets and GPU resources stay fresh. `compare_rendering_runs.py --gameplay --draw-remap-ab ...` permits only that declared mode difference. Two matched clean Linux Battle minutes per mode measured 29.58 fresh versus 29.50 cached completed GAME FPS, so reuse is not enabled. These historical measurements predate the default renderer changes that reached 60 GAME FPS. `--decode-profile` now also reports bounded layout, vertex-fetch, remap, pipeline and texture-binding costs; inclusive paths overlap and must not be summed. Findings are retained locally under `analysis/draw-state-validation/`.
 
 Linux fence polling is an opt-in experiment: `TB_VK_FENCE_POLL=1` or `script_gameplay.py --depth-gpu --fence-poll`. It probes at most 256 times with a 50-microsecond budget checked every eight probes, then falls back to the original blocking wait. All label publication and resource reuse still require completion. Two clean Battle minutes per mode measured 28.36 blocking versus 28.52 polling GAME FPS, with overlapping ranges and no useful demonstrated gain, so blocking remains the default. Use `compare_rendering_runs.py --gameplay --fence-poll-ab ...` for explicitly matched runs. `--decode-profile` now attributes direct backend waits and FIFO consumer methods separately; nested costs overlap. Local evidence is retained under `analysis/wait-validation/`.
