@@ -234,8 +234,21 @@ extern "C" void rsx_vulkan_backend_present_finish(void);
 extern "C" void tb_vk_idle_submit(void);   /* sdk_overrides/vulkan_async_batches.inc */
 /* Process lifetime on purpose: exit() must not destroy a condition variable
  * the present thread is still waiting on (glibc blocks in that destructor). */
-struct PresentQueue { std::mutex mu; std::condition_variable cv; unsigned requested = 0, finished = 0; };
+struct PresentQueue { std::mutex mu; std::condition_variable cv; unsigned requested = 0, finished = 0; uint64_t vblanks = 0; };
 static PresentQueue& present_queue(void) { static PresentQueue* q = new PresentQueue; return *q; }
+
+static bool present_on_vblank(void)
+{
+    static const bool on = [] { const char* e = getenv("TB_PRESENT_ON_VBLANK"); return !e || strcmp(e, "0") != 0; }();
+    return on;
+}
+
+static void present_note_vblank(void)
+{
+    PresentQueue& q = present_queue();
+    { std::lock_guard<std::mutex> lock(q.mu); q.vblanks++; }
+    q.cv.notify_all();
+}
 
 static bool present_thread_on(void)
 {
@@ -254,6 +267,13 @@ static DWORD WINAPI present_worker(LPVOID)
             std::unique_lock<std::mutex> lock(q.mu);
             q.cv.wait(lock, [&q] { return q.requested != q.finished; });
             q.finished = q.requested;   /* later requests complete earlier ones */
+            /* VSYNC flips become visible at the vblank, as on the console:
+             * show the frame on the next beat rather than whenever the walker
+             * reached its flip, so the display cadence is the beat's. */
+            if (present_on_vblank()) {
+                const uint64_t seen = q.vblanks;
+                q.cv.wait_for(lock, std::chrono::milliseconds(50), [&q, seen] { return q.vblanks != seen; });
+            }
         }
         const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
         rsx_vulkan_backend_present_finish();
@@ -312,7 +332,24 @@ static void walker_sleep_us(unsigned us)
 /* The vblank beat: cellGcmTickVBlank/TickFlip on a steady clock, on a thread
  * of its own so a long drain or a blocking present cannot delay it. Only
  * pending-work flags change here; guest handlers still run on guest threads
- * (ppu_gcm_pump). The period stays the 16 ms the frame clock always used. */
+ * (ppu_gcm_pump).
+ *
+ * 60 Hz, as RPCS3 emulates the PS3's display (Vblank Rate 60) and as the host
+ * display presents. The old frame clock ticked every whole 16 ms, 62.5 Hz:
+ * once the title kept up, it then completed 62.5 flips a second against a
+ * 60 Hz swapchain, so presents queued behind vsync and blocked the walker,
+ * and anything the title paces by vblank ran about 4% fast.
+ * TB_VBLANK_HZ (30..240) overrides it; TB_VBLANK_HZ=62.5 is the old beat. */
+static std::chrono::nanoseconds vblank_period(void)
+{
+    double hz = 60.0;
+    if (const char* e = getenv("TB_VBLANK_HZ")) {
+        const double v = strtod(e, nullptr);
+        if (v >= 30.0 && v <= 240.0) hz = v;
+    }
+    return std::chrono::nanoseconds((long long)(1e9 / hz + 0.5));
+}
+
 static DWORD WINAPI vblank_ticker(LPVOID)
 {
 #if defined(__linux__)
@@ -321,7 +358,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
 #endif
     while (g_rsx_state.load(std::memory_order_acquire) == 0) Sleep(1);
     using clock = std::chrono::steady_clock;
-    const auto period = std::chrono::milliseconds(16);
+    const auto period = vblank_period();
     auto next_tick = clock::now();
     for (;;) {
         std::this_thread::sleep_until(next_tick);
@@ -329,6 +366,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
         while (clock::now() >= next_tick && fired < 240) {
             cellGcmTickVBlank();
             cellGcmTickFlip();
+#if defined(PS3RECOMP_RSX_VULKAN)
+            present_note_vblank();
+#endif
             if (tb_frame_budget_on()) {
                 const uint64_t t = tb_frame_budget_now();
                 tb_frame_budget_span(TB_FT_VBLANK, 0, t, t);

@@ -3,7 +3,7 @@ import json,math,re
 from pathlib import Path
 
 STREAMS=('guest_flip','completed_frame','window_present')
-COMPAT=('scene','guest_resolution','internal_surfaces','window_size','gpu','driver','audio','input_source','build_type','compiler','effective_flags','diagnostics','sdk_verbose','overlay','executable_sha256','sdk_manifest_sha256','source_commit','source_inputs_sha256','submission_mode','texture_decode_mode','depth_conversion','color_readback_mode','draw_remap_mode','fence_wait_mode','label_publication','batch_submission','surface_blits','actual_audio','swapchain_sizes')
+COMPAT=('scene','guest_resolution','internal_surfaces','window_size','gpu','driver','audio','input_source','build_type','compiler','effective_flags','diagnostics','sdk_verbose','overlay','executable_sha256','sdk_manifest_sha256','source_commit','source_inputs_sha256','submission_mode','texture_decode_mode','depth_conversion','color_readback_mode','draw_remap_mode','fence_wait_mode','label_publication','batch_submission','surface_blits','vblank_hz','actual_audio','swapchain_sizes')
 
 def renderer_failures(log):
     pattern=r'\[(?:rsx engine|RSX vulkan)\].*(?:failed|unsupported|unhandled|skipped|object table full|stale .* release)'
