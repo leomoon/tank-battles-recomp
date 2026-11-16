@@ -92,6 +92,27 @@ int main(void)
     assert(rsx_vulkan_backend_presented_center()==0xffff0000u);
     s_vk.eng_active=0;s_vk.present_split=0;
     pixel(a,2,8,0,255,255);
+    {   /* NV3089 on the GPU: the 2:1 resolve from texel 1, inside an open batch,
+         * equals the guest point-sampling rule texel for texel. */
+        enum { SW = 64, SH = 32 };
+        static u8 seed[SW*SH*4], out[(SW/2)*(SH/2)*4];
+        for (u32 i = 0; i < SW*SH; i++) { seed[i*4]=(u8)i; seed[i*4+1]=(u8)(i>>8); seed[i*4+2]=(u8)(i*29); seed[i*4+3]=(u8)~i; }
+        const u32 src=vk_eng_color_target_create(NULL,RSX_BE_FMT_R8G8B8A8,SW,SH,seed,SW*4);
+        const u32 dst=vk_eng_color_target_create(NULL,RSX_BE_FMT_R8G8B8A8,SW/2,SH/2,NULL,0);assert(src&&dst);
+        s_vk.eng_active=1;
+        assert(tb_vk_blit_exact());                       /* the one-time device check */
+        draw_color(1,0,0,0);                              /* something pending in the batch */
+        const u32 w=(SW-1)/2,h=(SH-1)/2;
+        assert(tb_vk_surface_blit(src,1,1,2,2,dst,0,0,w,h));
+        assert(tb_async_active() ? s_eb_pending>=2 : !s_eb_pending);
+        vk_eng_readback(NULL,dst,0,0,w,h,out,w*4);
+        for (u32 y=0;y<h;y++) for (u32 x=0;x<w;x++)
+            assert(!memcmp(out+(y*w+x)*4,seed+((1+2*y)*SW+1+2*x)*4,4));
+        assert(!tb_vk_surface_blit(src,0,0,1,1,src,0,0,1,1));     /* no self copies */
+        assert(!tb_vk_surface_blit(src,2,1,2,2,dst,0,0,w+1,h));   /* last texel 2+2*31 is past the source edge */
+        s_vk.eng_active=0;
+        vk_eng_release(NULL,src);vk_eng_release(NULL,dst);
+    }
     draw_color(1,0,0,0);vk_eng_color_target_release(NULL,a);
     assert(!tb_group_open && !s_eb_pending);
     vk_eng_shutdown(NULL);vk_guest_shutdown();

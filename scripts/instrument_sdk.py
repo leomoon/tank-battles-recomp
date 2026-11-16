@@ -231,7 +231,7 @@ def main():
     ('    s_eb_pending = 0;               /* first: the submit below must not re-enter */\n    vk_submit_and_wait();',
      '    s_eb_pending = 0;               /* first: the submit below must not re-enter */\n    if (tb_async_flush()) return;\n    vk_submit_and_wait();'),
     ('static VkDeviceSize vk_eb_take(VkDeviceSize* head, VkDeviceSize cap, VkDeviceSize bytes, VkDeviceSize align)\n{\n    const VkDeviceSize at = (*head + align - 1u) / align * align;\n    if (at + bytes > cap) return (VkDeviceSize)-1;',
-     '#include "'+async_inc+'"\nstatic VkDeviceSize vk_eb_take(VkDeviceSize* head, VkDeviceSize cap, VkDeviceSize bytes, VkDeviceSize align)\n{\n    VkDeviceSize lo, hi;\n    tb_ring_window(cap, &lo, &hi);\n    const VkDeviceSize from = *head < lo ? lo : *head;\n    const VkDeviceSize at = (from + align - 1u) / align * align;\n    if (at + bytes > hi) return (VkDeviceSize)-1;'),
+     '#include "'+async_inc+'"\n#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_surface_blit.inc')+'"\nstatic VkDeviceSize vk_eb_take(VkDeviceSize* head, VkDeviceSize cap, VkDeviceSize bytes, VkDeviceSize align)\n{\n    VkDeviceSize lo, hi;\n    tb_ring_window(cap, &lo, &hi);\n    const VkDeviceSize from = *head < lo ? lo : *head;\n    const VkDeviceSize at = (from + align - 1u) / align * align;\n    if (at + bytes > hi) return (VkDeviceSize)-1;'),
     ('    s_eb.on = 1;\n    return 1;','    s_eb.on = 1;\n    tb_async_init();\n    return 1;'),
     ('    if (!vk_eb_active()) return -2;','    if (!vk_eb_active() && !tb_async_record()) return -2;'),
     ('    VK_CHECK(pvkBeginCommandBuffer(s_vk.cmd, &bi), "vkBeginCommandBuffer");\n',
@@ -258,6 +258,11 @@ def main():
    macro='#if defined(__linux__)\n#define TB_WAIT_SITE(label,fn) ({ TB_DEPTH_COST(label,0,0); tb_wait_label=label; fn(); })\n#else\n#define TB_WAIT_SITE(label,fn) fn()\n#endif\n'
    text='#include "'+str(header)+'"\n#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n'+macro+text
   if relative=='libs/video/cellGcmSys.c':
+   gpu_inc=str(Path(__file__).resolve().parent.parent/'sdk_overrides/nv3089_gpu.inc')
+   for before,after in [('static void nv3089_blit(void)\n{','#include "'+gpu_inc+'"\nstatic void nv3089_blit(void)\n{'),
+                        ('    /* Only the 32-bit colour formats are handled; anything else would need a\n','    if (tb_nv3089_gpu(in_pitch, dst_pitch, out_x, out_y, out_w, out_h)) return;\n    /* Only the 32-bit colour formats are handled; anything else would need a\n')]:
+    if text.count(before)!=1:raise SystemExit('NV3089 GPU anchor mismatch: '+before[:60])
+    text=text.replace(before,after)
    anchor='if ((m==0x0050u || m==0x0104u || m==0x1D70u || m==0x1D74u || m==0x1800u) && rsx_draw_engine_enabled()) rsx_draw_engine_flush();'
    cases=''.join('case '+method+'u: { TB_DEPTH_COST("fifo:'+method+'",0,0); tb_publication_flush_at('+method+'u); break; }' for method in ['0x0050','0x0104','0x1D70','0x1D74','0x1800'])
    if text.count(anchor)!=1:raise SystemExit('FIFO wait anchor mismatch')
@@ -269,12 +274,15 @@ def main():
     pattern=r'(^static [^;{]*?\b'+function+r'\([^;{]*?\)\n\{)'
     text,n=re.subn(pattern,lambda m:m[0]+'\n    TB_DEPTH_COST("'+label+'",0,g.frames);',text,flags=re.M)
     if n!=1:raise SystemExit('Draw cost anchor mismatch: '+function)
+   anchor0='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/page_census_arm.inc')+'"\n'
+   if text.count(anchor0)!=1:raise SystemExit('GPU blit engine anchor mismatch')
+   text=text.replace(anchor0,anchor0+'#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/gpu_blit_engine.inc')+'"\n')
    anchor='    if(tb_depth_guest_read(location,offset,pitch,w,h))return;'
    text=text.replace(anchor,'    TB_DEPTH_COST("surface-guest-read",(uint64_t)w*h*4,g.frames);\n'+anchor)
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}

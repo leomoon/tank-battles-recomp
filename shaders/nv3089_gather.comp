@@ -1,0 +1,16 @@
+#version 450
+// NV3089 point sampling at an integer scale: destination pixel (x, y) takes
+// source texel (ax + kx*x, ay + ky*y). Integer indexing, so the result is the
+// guest-memory loop's texel for texel; nearest-filtered blits at even scales
+// sample exactly on texel edges and are not.
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0, binding=0, std430) readonly buffer Source { uint src[]; };
+layout(set=0, binding=1, std430) writeonly buffer Destination { uint dst[]; };
+layout(push_constant) uniform Shape {
+    uint src_base, src_row, dst_base, dst_w, dst_h, kx, ky, ax, ay;
+} p;
+void main() {
+    uvec2 i = gl_GlobalInvocationID.xy;
+    if (i.x >= p.dst_w || i.y >= p.dst_h) return;
+    dst[p.dst_base + i.y * p.dst_w + i.x] = src[p.src_base + (p.ay + p.ky * i.y) * p.src_row + p.ax + p.kx * i.x];
+}
