@@ -264,6 +264,7 @@ add_executable(${PROJECT_NAME}
     input_events.cpp
     resource_diagnostics.cpp
     rendering_profile.cpp
+    frame_budget.cpp
     rsx_texture_diagnostics.cpp
     texture_decode.cpp
     texture_decode_fast.cpp

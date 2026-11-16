@@ -25,7 +25,7 @@ def summarize(directory, minimum_seconds=60):
     if session.get('interrupted') or session.get('launcher_exit_status',0) not in (0,124):raise ValueError('Failed or interrupted session')
     if not m['strict_passed'] or not m['live_gameplay_verified'] or m['phase']!='gameplay':raise ValueError('Need strict-clean verified live gameplay')
     begin,end=m['interval_seconds'];begin_ns,end_ns=round(begin*1e9),round(end*1e9);duration=(end_ns-begin_ns)/1e9
-    if minimum_seconds != 60 and (not m['diagnostics'].get('scopes') or not 10<=minimum_seconds<=60):raise ValueError('Short intervals require an explicit CPU/GPU profile')
+    if minimum_seconds != 60 and (not (m['diagnostics'].get('scopes') or m.get('quick_bench')) or not 10<=minimum_seconds<=60):raise ValueError('Short intervals require an explicit CPU/GPU profile or quick bench')
     if duration<minimum_seconds:raise ValueError('Need complete requested steady interval')
     if not m['visible_entire_interval']:raise ValueError('Hidden-window interval')
     if m.get('renderer_failures'):raise ValueError('Renderer failure in interval/run')

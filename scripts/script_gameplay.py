@@ -22,8 +22,8 @@ def default_battle_map(text):
 
 
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");a=parser.parse_args()
- if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and (not a.scopes or a.reference_template):parser.error('Shorter intervals require a native --scopes diagnostic and 10..60 seconds')
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");a=parser.parse_args()
+ if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and (not (a.scopes or a.quick) or a.reference_template):parser.error('Shorter intervals require a native --scopes or --quick run and 10..60 seconds')
  out=resolve(a.output)
  if not out.is_relative_to(ROOT/'analysis/performance') or out.exists():parser.error('Use a new output inside analysis/performance/')
  if not 1<=a.repeat<=5:parser.error('--repeat must be 1..5')
@@ -41,7 +41,10 @@ def main():
    if a.draw_verify:command+=['--draw-verify']
    if a.decode_profile:command+=['--decode-profile']
    if a.correctness_video:command+=['--correctness-video']
-   if a.scopes:command+=['--scopes','--profile-seconds',str(a.profile_seconds)]
+   if a.scopes:command+=['--scopes']
+   if a.quick:command+=['--quick']
+   if a.frame_budget:command+=['--frame-budget']
+   command+=['--profile-seconds',str(a.profile_seconds)]
    if a.overlay:command+=['--overlay']
    result=subprocess.run(command);outcomes.append(result.returncode);(out/'outcomes.json').write_text(json.dumps(outcomes))
   raise SystemExit(0 if not any(outcomes) else 1)
@@ -59,7 +62,10 @@ def main():
   if a.draw_verify:cmd+=['--draw-verify']
   if a.decode_profile:cmd+=['--decode-profile']
   if a.correctness_video:cmd+=['--correctness-video']
-  if a.scopes:cmd+=['--scopes','--profile-seconds',str(a.profile_seconds)]
+  if a.scopes:cmd+=['--scopes']
+  if a.quick:cmd+=['--quick']
+  if a.frame_budget:cmd+=['--frame-budget']
+  cmd+=['--profile-seconds',str(a.profile_seconds)]
   if a.overlay:cmd+=['--overlay']
  process=subprocess.Popen(cmd);start=time.monotonic();events=[];window=None;video=None;video_log=None
  def event(label,**fields):

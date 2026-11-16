@@ -1,6 +1,16 @@
 /* Short Linux fence polling keeps completion and publication synchronous.
  * Both time and probe count are bounded; long GPU work uses the original wait. */
+#include "../frame_budget.h"
+static VkResult tb_fence_wait_inner(VkFence fence);
 static VkResult tb_fence_wait(VkFence fence)
+{
+    if (!tb_frame_budget_on()) return tb_fence_wait_inner(fence);
+    const uint64_t t0 = tb_frame_budget_now();
+    const VkResult result = tb_fence_wait_inner(fence);
+    tb_frame_budget_span(TB_FT_FENCE_WAIT, 0, t0, tb_frame_budget_now());
+    return result;
+}
+static VkResult tb_fence_wait_inner(VkFence fence)
 {
 #if defined(__linux__)
     const char* mode=getenv("TB_VK_FENCE_POLL");

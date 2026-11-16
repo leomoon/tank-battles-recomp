@@ -39,6 +39,7 @@
 #include "offline_network.h"
 #include "guest_layout.h"
 #include "execution_policy_api.h"
+#include "frame_budget.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -103,6 +104,7 @@ extern int32_t g_sys_process_exit_code;
 /* Host-provided symbols the runtime and the HLE libraries link against. */
 uint8_t* vm_base = nullptr;
 extern uint32_t ppu_vm_size;                  /* ppu_loader.cpp: the OOB guard */
+extern uint32_t ppu_hle_inject_base;          /* cellGcmSys.c: the GCM window      */
 
 /* Guest-callback dispatch. g_ps3_guest_caller is the hook the HLE runtime
  * calls back into recompiled code through -- cellSysutil events and the GCM
@@ -197,10 +199,23 @@ extern "C" unsigned ppu_boot_frames_presented(void)
     return (unsigned)g_frames_presented;
 }
 
+/* One FIFO drain, recorded for the frame-budget timeline with the put it saw. */
+static void drain_fifo(void)
+{
+    TB_RENDER_SCOPE(10);
+    if (!tb_frame_budget_on()) { cellGcm_rsx_process_fifo(); return; }
+    const uint64_t t0 = tb_frame_budget_now();
+    const uint32_t put = vm_base ? __builtin_bswap32(*(const uint32_t*)(vm_base + ppu_hle_inject_base + 0x2000u)) : 0;
+    cellGcm_rsx_process_fifo();
+    tb_frame_budget_span(TB_FT_DRAIN_CALL, put, t0, tb_frame_budget_now());
+}
+
 static void present_guest_frame(void)
 {
     TB_RENDER_SCOPE(11);
+    const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
     rsx_backend_present();
+    if (t0) tb_frame_budget_span(10 /* PS3_FT_PRESENT */, 0, t0, tb_frame_budget_now());
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
     if (InterlockedIncrement(&g_frames_presented) == 1)
@@ -224,7 +239,13 @@ static DWORD WINAPI frame_clock(LPVOID)
     ULONGLONG next_tick = GetTickCount64();
 
     for (;;) {
-        Sleep(4);
+        if (tb_frame_budget_on()) {
+            const uint64_t t0 = tb_frame_budget_now();
+            Sleep(4);
+            tb_frame_budget_span(TB_FT_CLOCK_SLEEP, 0, t0, tb_frame_budget_now());
+        } else {
+            Sleep(4);
+        }
         ULONGLONG now = GetTickCount64();
 
         int fired = 0;
@@ -248,7 +269,7 @@ static DWORD WINAPI frame_clock(LPVOID)
             /* Drain the FIFO every tick. This is what writes the RSX sync-fence
              * labels the game's per-frame logic blocks on, so it has to keep
              * advancing at 60 Hz even while present() throttles. */
-            if (rsx_ok) { TB_RENDER_SCOPE(10); cellGcm_rsx_process_fifo(); }
+            if (rsx_ok) drain_fifo();
             next_tick += 16;             /* ~60 Hz */
             fired++;
         }
@@ -263,7 +284,7 @@ static DWORD WINAPI frame_clock(LPVOID)
                 present_guest_frame();
                 last_flip = cellGcm_flip_request_count();
             }
-            { TB_RENDER_SCOPE(10); cellGcm_rsx_process_fifo(); }
+            drain_fifo();
 
             if (rsx_backend_pump() != 0) {
                 rsx_ok = 0;              /* window closed */
@@ -438,6 +459,7 @@ int main(int argc, char** argv)
 #endif
 
     setvbuf(stdout, nullptr, _IONBF, 0);
+    tb_frame_budget_init();
     tank_battles_diagnostics_init();
     tank_battles_milestone("runner initialized");
     printf("=== Tank Battles Recomp (experimental) ===\n");
