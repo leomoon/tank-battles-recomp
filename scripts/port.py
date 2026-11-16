@@ -109,6 +109,24 @@ def build(args, config) -> None:
          "--target", "TankBattlesRecomp", "--parallel", str(args.jobs)])
 
 
+def setup(args, config) -> None:
+    from setup_game import install_game
+    args.elf = str(install_game(args, config, ROOT, resolve))
+    if args.import_only:
+        return
+    # Reuse the same translation and build paths as the individual commands.
+    args.sdk = None
+    args.analyze_only = False
+    args.recomp_dir = None
+    args.cmake_args = []
+    args.jobs = args.jobs or config["recompiler"]["jobs"]
+    prepare(args, config)
+    configure(args, config)
+    build(args, config)
+    suffix = " --build-dir " + shlex.quote(args.build_dir) if args.build_dir else ""
+    print("[setup] Ready. Launch with: python scripts/port.py run" + suffix)
+
+
 def launch_environment(config, paramsfo=None, mounts=None):
     env = os.environ.copy()
     if mounts:
@@ -148,6 +166,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="config.toml", help="TOML configuration, relative to repository root")
     commands = parser.add_subparsers(dest="command", required=True)
+    install = commands.add_parser("setup", help="Import your original game, decrypt, translate, configure and build")
+    sources = install.add_mutually_exclusive_group()
+    sources.add_argument("--pkg", help="Original purchased Tank Battles NPUB30154 PKG")
+    sources.add_argument("--game-dir", help="Original installed NPUB30154 folder containing EBOOT.BIN")
+    install.add_argument("--unlock", help="Purchased full-game unlock EDAT")
+    install.add_argument("--rap", help="Your purchased unlock's 16-byte RAP (license-2 EDAT only)")
+    install.add_argument("--keys", default=os.environ.get("PS3_KEYS"), help="Your scetool-format SELF keys; defaults to PS3_KEYS or game/keys")
+    install.add_argument("--rpcs3-source", help="Optional existing local RPCS3 source as the SELF key provider")
+    install.add_argument("--import-only", action="store_true", help="Import, decrypt and prepare the unlock without translation or compilation")
+    install.add_argument("--build-dir")
+    install.add_argument("--jobs", type=positive_int)
+    install.add_argument("--cmake", default="cmake")
+    install.add_argument("--ninja", default="ninja")
+    install.add_argument("--backend", choices=("auto", "vulkan", "null"), default="auto")
+    install.add_argument("--build-type", default="RelWithDebInfo")
     prep = commands.add_parser("prepare", help="Analyze and translate your decrypted game executable")
     prep.add_argument("--sdk")
     prep.add_argument("--elf")
@@ -177,7 +210,7 @@ def main() -> int:
     try:
         with resolve(args.config).open("rb") as file:
             config = tomllib.load(file)
-        result = {"prepare": prepare, "configure": configure, "build": build, "run": launch}[args.command](args, config)
+        result = {"setup": setup, "prepare": prepare, "configure": configure, "build": build, "run": launch}[args.command](args, config)
         return result if isinstance(result, int) else 0
     except (OSError, ValueError, KeyError) as error:
         parser.exit(2, f"error: {error}\n")

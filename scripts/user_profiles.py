@@ -7,6 +7,16 @@ import shutil
 UNLOCK = 'UP2006-NPUB30154_00-TANKBATTLES00KEY.edat'
 
 
+def entitlement_files(directory):
+    unlock = Path(directory) / UNLOCK
+    if unlock.is_file() and not unlock.is_symlink():
+        with unlock.open('rb') as stream:
+            header = stream.read(12)
+        if header[:4] == b'NPD\0' and header[8:12] == b'\0\0\0\3':
+            return (UNLOCK,)  # Runtime still authenticates the complete EDAT.
+    return (UNLOCK, UNLOCK+'.rifkey')
+
+
 def validate_private_tree(directory):
     """Save/license writes must never escape through links or shared inodes."""
     if directory.is_symlink():
@@ -49,11 +59,14 @@ def open_profile(path, source_hdd, content, title_id, mode='purchased', resume=F
             exdata = hdd / 'home/00000001/exdata'
             exdata.mkdir(parents=True)
             if mode == 'purchased':
-                for name in (UNLOCK, UNLOCK+'.rifkey'):
+                source_exdata = source_hdd / 'home/00000001/exdata'
+                for name in entitlement_files(source_exdata):
                     source = source_hdd / 'home/00000001/exdata' / name
                     if source.is_symlink() or not source.is_file():
                         raise ValueError('Purchased profile requires regular local unlock and RIF sidecar files')
                     shutil.copyfile(source, exdata / name)
+                    if name.endswith('.rifkey'):
+                        (exdata / name).chmod(0o600)
             manifest_path.write_text(json.dumps(manifest, indent=2)+'\n')
         for parent in (hdd, hdd/'game'):
             if parent.is_symlink():
@@ -65,7 +78,7 @@ def open_profile(path, source_hdd, content, title_id, mode='purchased', resume=F
             validate_private_tree(private)
         exdata = hdd / 'home/00000001/exdata'
         present = [(exdata/name).is_file() for name in (UNLOCK, UNLOCK+'.rifkey')]
-        if mode == 'missing-unlock' and any(present) or mode == 'purchased' and not all(present):
+        if mode == 'missing-unlock' and any(present) or mode == 'purchased' and not all((exdata/name).is_file() for name in entitlement_files(exdata)):
             raise ValueError('Profile entitlement files disagree with selected mode')
         mounts = dict(PS3_VFS_ROOT=str(content.resolve()), PS3_GAMEDATA_ROOT=str(path.resolve()),
                       PS3_HDD0_ROOT=str(hdd.resolve()), PS3_HDD1_ROOT=str((path/'dev_hdd1').resolve()))

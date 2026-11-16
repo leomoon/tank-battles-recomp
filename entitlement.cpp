@@ -35,11 +35,8 @@ uint32_t verify(uint64_t address) {
         fprintf(stderr,"[entitlement] unlock missing; trial result\n");
         return license_missing;
     }
-    const auto sidecar=fs::path(file.string()+".rifkey");
-    if (!fs::is_regular_file(sidecar,error) || fs::file_size(sidecar,error)!=16) {
-        fprintf(stderr,"[entitlement] missing or invalid local RIF sidecar; trial result\n");
-        return license_missing;
-    }
+    // The verifier requires an exact 16-byte sidecar for license 2 and
+    // authenticates license 3 directly with its platform free key.
     if (!tank_battles_validate_unlock(file.string().c_str(),unlock_id)) {
         fprintf(stderr,"[entitlement] unlock verification failed; trial result\n");
         return license_missing;

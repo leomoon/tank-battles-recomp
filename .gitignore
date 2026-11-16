@@ -8,6 +8,8 @@
 /licenses/*
 !/licenses/GoW-Ascension-Recomp-MIT.txt
 !/licenses/ps3kit-MIT.txt
+!/licenses/twistedmetal-MIT.txt
+!/licenses/RPCS3-GPL-2.0.txt
 /keys/
 /analysis/
 /out/

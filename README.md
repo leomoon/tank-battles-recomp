@@ -1,589 +1,102 @@
 # Tank Battles Recomp
 
-An experimental PC port scaffold for Tank Battles on PlayStation 3 (NPUB30154), built with [ps3recomp](https://github.com/sp00nznet/ps3recomp).
+A native Linux port of **Tank Battles for PS3 (NPUB30154)** using static recompilation. The game's PPU/SPU code is translated locally into C/C++ and compiled with a PS3 runtime and Vulkan renderer. Battle and Campaign are playable; Windows support is planned.
 
-**THIS REPOSITORY DOES NOT CONTAIN THE GAME.**
+**This repository does not contain the game, its assets, purchased licenses, private keys or generated game code. You must provide your own legitimately purchased copy.**
 
-To recompile or run the game, you must provide your own decrypted dump of a legitimately purchased copy of Tank Battles for PlayStation 3. Cloning this repository does not supply the game or a license to it. No game executables, assets, decrypted dumps, firmware, entitlement files, private keys, or generated translations of the game code are included. Translated code is generated locally from your own dump.
+## What you need
 
-## Status
-
-The repository has vendored ps3recomp sources, a native runner, configuration, and scripts for analysis, translation, build, and launch. The Linux Vulkan port is playable: default Battle and the first campaign mission run at 60 FPS (59.98 to 60.00 completed game frames per second, 95th-percentile frame time under 17 ms) at normal game speed with real audio, on a Ryzen 9 7950X and RTX 3060. The user reports completing and reloading the first two campaign levels. Windows is not supported yet, and broader mission, dialog, save, audio and physical-input coverage is still being verified. The synthetic smoke test checks the runner independently of Tank Battles.
-
-Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Remaining validation includes broader graphics and mission coverage, interactive system dialogs, and save/audio/input lifecycle behavior. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
-
-Linux play-lifecycle validation now includes two physical controllers, unplug/reconnect, keyboard takeover and Campaign handoff. The observed sdl2-compat unplug abort is fixed by serializing guest controller-event polling with the window event pump. A 30-minute mixed Battle/Campaign/menu soak completed with stable warmed resources and normal rendering-worker shutdown. Fullscreen, resize and focus/hide recovery retained roughly 60 FPS after transitions; short transition gaps up to 182 ms remain. Native minimize behavior was not established on Hyprland. Local evidence is under `analysis/linux-play-gates/`.
-
-## Structure
+Put your original game files here:
 
 ```text
-tank-battles-recomp/
-├── CMakeLists.txt          # Native executable and runtime integration
-├── config.toml             # Paths and translation settings used by scripts/port.py
-├── main.cpp                # PPU runner, graphics backend, and frame clock
-├── stubs.cpp               # Tank Battles-specific runtime hooks
-├── content_paths.cpp       # Title metadata, mount roots, and EDAT mapping
-├── asset_probe.cpp         # Opt-in native filesystem verification
-├── external/
-│   └── ps3recomp/           # Vendored SDK source
-├── scripts/
-│   ├── port.py             # Prepare, configure, build, and run
-│   └── smoke_test.py       # Synthetic boot test requiring no game files
-└── game/
-    └── .gitkeep            # Only this placeholder is tracked
+game/
+├── input/
+│   ├── tank-battles_NPUB30154.pkg
+│   └── tank-battles_NPUB30154_key.edat
+└── keys                  # Your scetool-format SELF key file
 ```
 
-The `analysis/`, `recompiled/`, `spu/`, and `build*/` directories hold local generated output and are ignored by Git. Everything inside `game/` except `.gitkeep` is ignored, including files whose names are not covered by extension rules.
+The tested original unlock EDAT needs no RAP. If your purchased unlock uses license type 2, also provide its `.rap` in `game/input/`. Everything under `game/` is ignored by Git.
 
-## Dependency
+For executable decryption, supply a scetool-format key file supporting NPDRM revision `0001`, including `NP_klic_free` and `NP_klic_key`. Alternatively, pass an existing local RPCS3 source checkout with `--rpcs3-source /path/to/rpcs3`. No keys or game files are downloaded, and no manual RPCS3 extraction/decryption is needed.
 
-The ps3recomp source is included in this repository. A normal clone includes the SDK:
+## Linux
+
+### Build dependencies
+
+Requires Python 3.11+ and a C17/C++20 compiler.
+
+**Arch Linux / Omarchy:**
+
+```bash
+sudo pacman -S --needed base-devel git python python-pip cmake ninja pkgconf sdl2-compat vulkan-headers vulkan-icd-loader glslang spirv-tools
+```
+
+**Ubuntu 24.04+ / Debian 13+:**
+
+```bash
+sudo apt update
+sudo apt install build-essential git python3 python3-venv python3-pip cmake ninja-build pkg-config libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools
+```
+
+Also install your GPU's Vulkan driver. Arch uses [sdl2-compat](https://archlinux.org/packages/extra/x86_64/sdl2-compat/) for SDL2; Ubuntu's [glslang packages](https://packages.ubuntu.com/noble/glslang-dev) include the development libraries required by the build.
+
+### Build and run
 
 ```bash
 git clone https://github.com/leomoon/tank-battles-recomp.git
 cd tank-battles-recomp
-```
-
-The vendored source matches upstream revision `de4f090328ea08bef6b2f15caec0b85e343a7ece`. Its origin, revision and license notices are documented in [external/README.md](external/README.md). No submodule commands are needed. Developers can still test a separate SDK checkout with `--sdk ../ps3recomp` for `prepare` and `configure`, or `-DPS3RECOMP_DIR=/path/to/ps3recomp` with CMake directly. Shared runtime fixes belong upstream; game-specific hooks belong here.
-
-## Requirements
-
-- Python 3.11 or newer for the port scripts and TOML configuration.
-- Git, CMake 3.20 or newer, Ninja, and a C17/C++20 toolchain. Clang is recommended, particularly for the SPU dispatch path.
-- The Python dependencies listed in `external/ps3recomp/requirements.txt`.
-- SDL2 development files on Linux and macOS.
-- Vulkan development headers, the Vulkan loader, a working Vulkan driver, and glslang development libraries/CMake targets for Linux graphics. This port requires glslang guest-shader translation when configuring Vulkan. On Arch, the relevant development packages are `vulkan-headers`, `vulkan-icd-loader`, `glslang`, and `sdl2`, plus your GPU driver. SPIRV-Cross is not required for the Vulkan path. The null backend is available for headless diagnostics.
-
-You can install the Python tools and portable build tools into a local environment:
-
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r external/ps3recomp/requirements.txt cmake ninja
 ```
 
-Native compiler, SDL2, Vulkan, and shader-tool dependencies must be available separately. Windows uses D3D12; macOS uses Metal. Platform build support does not imply that Tank Battles is playable.
-
-## Local game dump
-
-Put your purchased game's dump under `game/` using this layout:
-
-```text
-game/
-├── .gitkeep
-├── dev_hdd0/
-│   └── game/
-│       └── NPUB30154/
-│           ├── PARAM.SFO
-│           ├── USRDIR/
-│           │   ├── EBOOT.elf
-│           │   ├── assets_common.edat
-│           │   ├── assets_images.edat
-│           │   ├── assets_ps3.edat
-│           │   └── assets_sound.edat
-│           └── ...
-└── dev_hdd1/                # Writable cache, created on launch
-```
-
-Copy the entire installed `NPUB30154` directory from your own dump, including its other files (`C00`, `TROPDIR`, the extra `.edat` files). The full-game unlock goes in a separate folder:
-
-```text
-game/dev_hdd0/home/00000001/exdata/
-├── UP2006-NPUB30154_00-TANKBATTLES00KEY.edat
-└── UP2006-NPUB30154_00-TANKBATTLES00KEY.rap
-```
-
-### What you need and what needs decrypting
-
-You need three things from your own purchase:
-
-1. The installed game folder `NPUB30154`. Either copy it from your PS3's `/dev_hdd0/game/` or install the game PKG in RPCS3 with File → Install Packages/Raps/Edats, then copy it from RPCS3's `dev_hdd0/game/`.
-2. The full-game unlock, `UP2006-NPUB30154_00-TANKBATTLES00KEY.edat`, and the `.rap` licence for your purchase. Installing the unlock PKG in RPCS3 places the `.edat` in RPCS3's `dev_hdd0/home/00000001/exdata/`. The `.rap` comes from your own account or console, the same file RPCS3 needs.
-3. A decrypted copy of the executable, `USRDIR/EBOOT.elf`, made once as described below.
-
-| File | As installed | Who decrypts it |
-| --- | --- | --- |
-| Game PKG | encrypted package | RPCS3 when you install it (or copy the already installed folder from your PS3) |
-| `USRDIR/EBOOT.BIN` | encrypted NPDRM SELF | you, once, with RPCS3, producing `USRDIR/EBOOT.elf` |
-| `USRDIR/assets_*.edat` | encrypted NPDRM EDAT | the port, automatically at first launch; nothing to do |
-| `exdata/...KEY.edat` + `.rap` | purchase licence | stays encrypted; `scripts/prepare_entitlement.py` prepares a local key sidecar and the port verifies it at runtime |
-
-**Decrypt the executable with RPCS3.** Place the `.rap` in RPCS3's `dev_hdd0/home/00000001/exdata/` first (RPCS3 looks there for the licence when it decrypts NPDRM binaries). Then either:
-
-- in RPCS3, choose Utilities → Decrypt PS3 Binaries (Tools in older builds), select `USRDIR/EBOOT.BIN` of the installed game, and RPCS3 writes `EBOOT.elf` next to it; or
-- from a terminal: `rpcs3 --decrypt /path/to/NPUB30154/USRDIR/EBOOT.BIN` (with the AppImage: `./rpcs3-*.AppImage --decrypt ...`).
-
-Put the resulting `EBOOT.elf` in `game/dev_hdd0/game/NPUB30154/USRDIR/` beside `EBOOT.BIN`. `python scripts/port.py prepare` refuses an encrypted `EBOOT.BIN`. The tested version has these SHA-256 hashes, so compare yours with `sha256sum`:
-
-| File | SHA-256 |
-| --- | --- |
-| `PARAM.SFO` | `2857058f5131a73c916acc9301dfc3892abaa31755c92732006c31d6fa9849fc` |
-| `USRDIR/EBOOT.BIN` | `ca48282696515e0c706b93acca0b1ae33a07a0d3ee60b5a737156524ff1c39e1` |
-| `USRDIR/EBOOT.elf` (decrypted) | `b81cc67ed5cf306af601a22f8de003c06857dd71035f0dbf190e918e355e0538` |
-| `USRDIR/assets_common.edat` | `e1b58219e7c5e2b7296bb4e3e47475b00f6d4dfe9fa5cbc0d4dc8dad34105cf9` |
-| `USRDIR/assets_images.edat` | `ce9f2835ef97c9d5c7de2efad4e7d3f09e5d9011bfe546bd06a506917be38537` |
-| `USRDIR/assets_ps3.edat` | `80c5f4df23b521366da739d0c8f9361db7d4eef3c5779b531ab2881f621722ef` |
-| `USRDIR/assets_sound.edat` | `ca8aaab8f378f9e865b8221bfb252da3f901284a71a1b8c8206db7cdcedf4eba` |
-
-**Do not decrypt the asset EDATs yourself.** The game registers its own asset key while it boots, and the port decrypts each `assets_*.edat` into a `*.edat.dec` cache with a completion record beside it (first launch takes longer). RPCS3's `.unedat` outputs are not used at runtime; they are only needed for the optional verification in [Asset IO verification](#asset-io-verification).
-
-**Prepare the full-game unlock.** Copy the unlock `.edat` and `.rap` into `game/dev_hdd0/home/00000001/exdata/` and run `python scripts/prepare_entitlement.py --rpcs3-source /path/to/rpcs3-source`, where the RPCS3 source is a local clone used only for public format tables (`git clone --depth 1 https://github.com/RPCS3/rpcs3`). Details are in [Purchased full-game unlock](#purchased-full-game-unlock). Without the unlock the game runs as the trial, as it does on the console.
-
-No keys, firmware or game files are included in this repository, and the scripts never download or decrypt them for you.
-
-The scripts read `config.toml` and look for `game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf` by default. Paths are relative to the repository root. To analyze a decrypted executable elsewhere, pass `--elf /path/to/EBOOT.elf`; this does not copy the executable or its assets. Set matching filesystem paths in the configuration before trying to run the game. `PS3_VFS_ROOT`, `PS3_HDD0_ROOT`, `PS3_HDD1_ROOT`, `PS3_GAMEDATA_ROOT`, and `PS3_DEV_FLASH` can override the launch mounts. The default VFS root is the installed title directory, HDD0 is `game/dev_hdd0`, and the user-data root is `game`, so saves and writable caches stay in the ignored dump tree. The runner reads `PARAM.SFO`, checks the configured title ID, and supplies the installed HDD boot path. Override metadata with `--paramsfo /path/to/PARAM.SFO` or `PS3_PARAM_SFO`.
-
-## Prepare, build, and run
-
-From the repository root with the local dump in place:
+Add your files as shown above, then:
 
 ```bash
-# Analyze the executable and generate PPU C/C++ locally.
-python scripts/port.py prepare
-
-# Configure the native build and discover/lift embedded SPU programs.
-python scripts/port.py configure
-
-# Compile the experimental port.
-python scripts/port.py build --jobs 2
-
-# Launch using the local game dump and writable mounts.
+python scripts/port.py setup --jobs 4
 python scripts/port.py run
 ```
 
-While playing: a controller or the keyboard (Z/X and the arrow keys) works as input, F3 toggles the FPS overlay (off by default), F11 or Alt+Enter toggles fullscreen, and Esc or closing the window quits. The overlay, fullscreen and windowed size are remembered in `game/settings.ini`. Each launch writes its log to `game/logs/session-<date>-<time>.log` (the newest ten are kept); `--console` prints to the terminal instead.
+Setup extracts the package, decrypts the executable, prepares the unlock, translates the game and builds `build/TankBattlesRecomp`. Asset caches are created at first launch, so that launch takes longer. Lower `--jobs` if compilation uses too much memory. The ps3recomp source is already included.
 
-For a smaller player build without debug information, configure a separate build directory with `python scripts/port.py configure --build-dir build-release --build-type Release`, build it with `python scripts/port.py build --build-dir build-release`, and run it with `--build-dir build-release`. Release keeps the same `-O2` optimisation as the default developer build.
+To keep your keys elsewhere, add `--keys /path/to/keys` to setup. To use an installed game folder instead of a PKG, pass `--game-dir /path/to/NPUB30154`. Run `python scripts/port.py setup --help` for the other options.
 
-### Runtime switches
+Controllers are supported. Keyboard: **Z = Cross, X = Circle, arrows = movement, Enter = Start**. **F3** toggles the FPS overlay; **F11 / Alt+Enter** toggles fullscreen.
 
-The defaults are the tested 60 FPS configuration. Each switch below restores one earlier behaviour for comparison or troubleshooting; set it in the environment of `python scripts/port.py run`, for example `TB_VK_ASYNC=0 python scripts/port.py run`.
+### Keep a finished build
 
-| Switch | Default | Effect when changed |
-| --- | --- | --- |
-| `TB_VBLANK_HZ` | `60` | Vblank beat in Hz (30 to 240); `62.5` is the old 16 ms frame clock |
-| `TB_PRESENT_ON_VBLANK=0` | on | Present each frame as soon as the renderer reaches its flip instead of on the next vblank |
-| `TB_PRESENT_THREAD=0` | on | Present on the renderer thread instead of a separate thread |
-| `TB_VK_PRESENT_MODE=fifo` | MAILBOX if offered | Force the FIFO swapchain mode |
-| `TB_LABEL_SYNC=1` | off | Wait for the GPU before every guest label or reference |
-| `TB_VK_ASYNC=0` | on | Submit and wait for every draw batch |
-| `TB_GPU_RESOLVE=0` | on | Run NV3089 surface blits through guest memory on the CPU |
-| `TB_DEPTH_GPU=0` | on | Convert depth surfaces for the CPU instead of on the GPU |
-| `TB_TEXTURE_DECODE_MODE=reference` | `specialized` | Use the original texture decoder |
-| `TB_FPS_OVERLAY` | saved setting, else off | `1` shows the overlay at start, `0` hides it |
-| `PS3RECOMP_FULLSCREEN=1` | saved setting | Start in borderless fullscreen |
-
-Diagnostics are opt-in and never change the defaults: `TB_FRAME_BUDGET=<file>` with `scripts/frame_budget.py` (per-frame renderer and guest timeline), `TB_PAGE_CENSUS=1` (which threads touch render-target memory; Linux only), and the capture and profile options described below.
-
-For analysis without translation, use `python scripts/port.py prepare --analyze-only`. Linux configuration enables Vulkan by default; use `python scripts/port.py configure --backend null` for headless diagnostics. Extra CMake options can follow `--`, for example `python scripts/port.py configure -- -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++` when using a fresh build directory. Run each subcommand with `--help` for path and tool overrides.
-
-The build compiles the local generated code and links ps3recomp from source. It does not download a game, decrypt an executable, obtain keys, or implement the missing game behavior automatically. A successful build is an intermediate porting milestone.
-
-## Vulkan rendering verification
-
-Keep the graphics build separate from the null build used for CPU and filesystem diagnosis:
-
-```bash
-python scripts/port.py configure --backend vulkan --build-dir build-vulkan
-python scripts/port.py build --build-dir build-vulkan --jobs 4
-python scripts/port.py run --build-dir build-vulkan
-```
-
-The window shows an FPS overlay by default. Press **F3** to hide or show it, or launch with `TB_FPS_OVERLAY=0 python scripts/port.py run --build-dir build-vulkan` to start with it hidden. **GAME FPS** counts guest frames reaching their flip boundary; **PRESENT FPS** counts successful window presentations, including repeated refreshes of a completed frame. **FRAME MS** is the average guest-frame interval. The counters update every half second and measure rendering cadence, not simulation-speed correctness. The overlay is drawn only onto the window swapchain, so guest render targets and pre-window screenshots remain unchanged. Diagnostic `capture_rendering.py` runs hide it for reference comparisons unless `--fps` is supplied.
-
-Normal Vulkan launches enable `PS3RECOMP_VK_WINDOW=1` and `PS3RECOMP_VK_GUEST_PROGRAMS=1` unless explicitly overridden. At the pinned SDK revision these otherwise default to an offscreen target and fixed-function rendering. The port rejects unavailable requested window/guest-program support with exit status 87, and CMake rejects a Vulkan configuration without glslang translation. Explicitly setting either variable to `0` remains available for diagnostics but cannot pass the rendering verifier.
-
-```bash
-# Game-free glslang translation and shader-cache regression checks.
-python scripts/test_vulkan_shaders.py
-
-# Actual purchased game, real display and Vulkan device; bounded session.
-python scripts/verify_vulkan_rendering.py --timeout 15
-
-# Optional X11/XWayland window automation, requiring xdotool and libX11.
-python scripts/verify_vulkan_rendering.py --check-window --timeout 20
-```
-
-The verifier requires the register-file draw engine, guest shader modules and pipelines, recorded draws, texture uploads, flipped surfaces, successful window presentation, non-clear pixels, and no observed strict CPU execution fallback. It saves `startup.log`, exit metadata, `verification.json`, `frame.ppm`, and `frame.png` under ignored `analysis/vulkan/verification/`. Pixel variation is an automated rendering check, not recognition of a title screen; inspect the PNG visually. The window variant requests a resize, records actual geometry and swapchain sizes, then sends a standard X11 close request and requires a normal exit. A tiling compositor may keep its chosen geometry; swapchain resize evidence includes compositor sizing at startup.
-
-The local default Wayland bounded run and X11 window-control run pass on the RTX 3060. The captured frame shows a recognizable 1280×720 Tank Battles title screen with the press-X prompt. The renderer translated both shader stages, uploaded the title textures, and recreated the swapchain after compositor resizing. The X11 close test ended normally. No menu button was pressed during acceptance. Existing asset caches were used, audio used SDL's dummy driver, and no cold-cache startup or RPCS3 visual comparison was established by this check. The shader suite passes 28 assertions, including malformed input and damaged cache handling.
-
-A subsequent user session reports working gamepad input and audible sound, substantial visual glitches, and slow rendering. Enabling the SDK's experimental `VK_DRAW_BATCH=1` seemed slower in that session; this is an observation without measured frame timing. That legacy experiment remains disabled. The port now groups up to 64 compatible consecutive draws in one render pass using separate per-draw buffer slices and descriptor sets. Transfers, readbacks, guest labels/reports and presentation retain completion boundaries. Set `TB_VK_SUBMIT_MODE=serial` to diagnose the previous submission behavior; the default is `grouped`. Broader rendering fidelity and sustained 60 FPS remain unresolved.
-
-Vulkan diagnostics join the timeout snapshot as bounded counters and metadata. `window-present` counts successful/suboptimal `vkQueuePresentKHR` results, while `guest-draw` counts recorded draw calls; the framebuffer readback supplies separate pixel evidence. Generated backend instrumentation and requested-feature guards use the same reviewable source-copy workflow as the strict execution hooks, without editing the pinned SDK checkout or generated game code. Backend captures and shader dumps contain game-derived data and must remain in ignored local directories.
-
-## Rendering scenarios and frame timing
-
-`scripts/capture_rendering.py` creates a new ignored `analysis/rendering/` directory for each run, with isolated native save/cache mounts, a copy of the local purchased entitlement, and a shared content mount. Existing decrypted asset caches are reused; this is not a cold-asset test. Audio defaults to the dummy driver; use `--audio host` for audible playback. This setting applies only to that diagnostic child process. Normal `port.py run` launches use host audio. Keep each output directory unique so earlier evidence is preserved.
-
-Use `--user-profile analysis/user-profiles/purchased` to create a reusable isolated profile, then add `--resume-profile` in a new capture output directory to reopen it. Creation refuses an existing directory; reopening preserves saves and checks the selected title, content path, entitlement mode, private file isolation and exclusive session lock. `--entitlement missing-unlock` creates a separate profile without the title's unlock. It never removes the purchased original. Purchased profiles copy only this title's unlock and RIF sidecar into private files; reports contain mount paths and mode, not key material. Content remains shared, so use the independent content-root/cache fixtures for asset mutation tests.
-
-`--deny-host-ip` launches the game through a Linux seccomp guard that rejects new IPv4/IPv6 sockets and retains Unix IPC for display/audio. `--offline-trace` records bounded offline service results and queued dialog/callback events, suppressing repeated unchanged status polls. `--observe-entitlement` reads the validated guest trial/completion flags through Linux `/proc`; run it with `.venv/bin/python` for the capstone dependency. These options are diagnostics, not performance measurements. `python scripts/test_user_profiles.py` checks synthetic save/license isolation and reopening, and `python scripts/test_host_ip_guard.py` verifies denial persists after exec while local IPC works.
-
-```bash
-python scripts/capture_rendering.py --output analysis/rendering/access-purchased --user-profile analysis/user-profiles/purchased --deny-host-ip --offline-trace --capture --timeout 60
-python scripts/capture_rendering.py --output analysis/rendering/access-purchased-reopened --user-profile analysis/user-profiles/purchased --resume-profile --deny-host-ip --capture --timeout 60
-python scripts/capture_rendering.py --output analysis/rendering/access-trial --user-profile analysis/user-profiles/trial --entitlement missing-unlock --deny-host-ip --offline-trace --capture --timeout 60
-```
-
-The observed offline trial gate is a PSN sign-in requirement, not a reduced offline campaign menu. Both native and isolated RPCS3 missing-unlock sessions reach that restriction; native guest inspection reports trial `1`. The purchased profile reports trial `0`, exposes campaign selection, and reaches the default Deathmatch and first-campaign briefings with host IP denied. The purchased online-action route returns to a usable menu after the failed connection/cancellation flow. Native system notices currently use the SDK's logged automatic responses, while RPCS3 displays its system dialogs; matching service outcomes does not establish identical dialog presentation. These checks establish selected access/error paths, not mission completion, full save persistence, physical input lifecycle, or PSN support. Local route and comparison evidence is retained under `analysis/access-validation/`.
-
-Temporal comparisons require video, not just isolated screenshots. `--video-fps 60` records only the X11 game window without forcing the output frame rate or duplicating frames. `video.json` reports actual timestamps and capture gaps; this is capture cadence, not game simulation speed. Optional frame history saves up to 240 consecutive pre-window images and their display-buffer identities. Both recording and image writes add diagnostic overhead.
-
-`video_frame_report.py` decodes every recorded frame, retains every adjacent spatial-change measurement, and flags large isolated changes or returns to a similar image within 250 ms. The latter also catches a changed guest frame held across several recorded refreshes. These are inspection candidates: deliberate animation can trigger them, and their absence does not establish pixel-perfect fidelity. The report includes distinct-timestamp capture FPS so repeated timestamps cannot inflate the 30 FPS recording requirement. `python scripts/test_video_frames.py` tests single-frame flashes, flashes spanning multiple refreshes, ordinary transitions, and captures below 30 FPS.
-
-```bash
-python scripts/capture_rendering.py --output analysis/rendering/temporal-check --audio host --video-fps 60 --video-after 5 --video-duration 35 --timeout 45
-python scripts/video_frame_report.py analysis/rendering/temporal-check/window.mkv
-
-# Scalar generation tracing avoids framebuffer-file writes and RSX dumps.
-python scripts/capture_rendering.py --output analysis/rendering/frame-order --audio host --frame-order --timeout 60
-python scripts/frame_order_report.py analysis/rendering/frame-order/scanout-order.jsonl --scanout --output analysis/rendering/frame-order/order-report.json
-```
-
-The native source copies now keep NV3062/NV308A/NV3089 transfer commands out of the NV4097 register file. Previously their dimensions and pitches overwrote alpha/blend state; the user confirms the black shadow rectangles are repaired. Flip callbacks fire once at completion, and registered scanout buffers retain their own backend surfaces. A near-end flip uses its actual command-space requirement instead of the recycle helper's extra 4 KiB reserve, keeping the flip behind its preceding rendering commands. In the retained reference run, all nine older-buffer presentations followed an immediate fallback; the corrected 140-second route recorded zero older-buffer presentations across 5,881 refreshes. The user reports improved flicker and movement. These checks do not establish complete graphical fidelity or intended game speed.
-
-The final representative rendering check covers title/menu transitions, Battle level selection, default Deathmatch briefing and gameplay, and first-campaign briefing/entry. Nine native/reference recordings retain 28,833 decoded frames at more than 30 distinct capture frames/s, with 540 consecutive native pre-window frames. No large isolated or short-return flash candidates were flagged; the native runs report zero older-buffer presentations across 12,999 presents, zero observed CPU fallbacks, and no emitted renderer failures. Scene comparisons, exact logo/strip payloads, FIFO/scanout/cache regressions, shader tests, and window resize/normal-close checks pass. The local evidence is in `analysis/rendering_validation/REPORT.md` and `acceptance.json`. This selected-route check leaves sustained performance, simulation speed, full mission coverage, and broader visual fidelity for subsequent acceptance work.
-
-Linux audio consumption now waits for device queue space before advancing the guest audio ring. The previous rounded 5 ms sleep could produce 5.33 ms blocks faster than playback and grow latency. The real host run measures about 187.5 blocks/s with the SDL queue bounded to four blocks, about 21.3 ms; device/server latency is additional. The user confirms the delayed/cutting audio improved. Full audio acceptance across missions remains open.
-
-## Local RPCS3 command comparisons
-
-RPCS3's game-window Alt+C shortcut captures an RSX frame and pauses emulation. Its capture includes commands, initial registers, shaders and referenced guest memory; keep it local because it contains game data. Our reader supports little-endian RRC version 6. Ordinary RRC captures omit inherited transform constants, and a capture/reconstruction discrepancy in the retained UI vertex uploads remains unresolved. A dump is diagnostic evidence, not a complete replacement for full-rate reference video or a verified replay through our renderer.
-
-```bash
-# While this bounded session runs, navigate to the desired scene.
-python scripts/capture_rendering.py --output analysis/rendering/command-check --audio host --rsx-trace --timeout 120
-
-# From another terminal, request three guest flip scopes with a unique label.
-printf '%s\n' level-select > analysis/rendering/command-check/rsx/request
-
-# Compare the completed native frame prefix with your local RPCS3 capture.
-python scripts/rsx_capture_compare.py --reference /path/to/capture.rrc.gz --native analysis/rendering/command-check/rsx/level-select-000 --output analysis/rendering/command-check/comparison.json
-
-python scripts/test_rsx_capture_compare.py
-python scripts/test_rsx_engine_routing.py
-python scripts/test_scanout_registration.py
-python scripts/test_flip_callbacks.py
-python scripts/test_audio_clock.py
-```
-
-Only scopes with a `.done` marker are accepted. Host refreshes do not split the command scopes. Reports compare shader instructions, texture bytes and state while retaining ambiguous repeated draws and animation differences; an unwritten register can be inherited from an earlier frame. Guest texture-memory hashes cannot establish equality of GPU-rendered shadow/depth surfaces. These tools do not currently replay an RRC file through the port's renderer. The routing regression uses the actual GCM walker and NV4097 dispatcher; the scanout/cache fixture uses the actual generated draw engine with a test backend. The upstream synthetic boot explicitly uses guest-thread callback pumping to retain its vblank-thread contract, while the dedicated flip-delivery default is tested separately.
-
-```bash
-# Diagnostic screenshots and pass dumps add substantial overhead.
-python scripts/capture_rendering.py --output analysis/rendering/title-images --capture --passes --timeout 25
-
-# Measure the same steady title scene without screenshot writes or pass dumps.
-python scripts/capture_rendering.py --output analysis/rendering/title-timing --profile --no-gamepad --timeout 22
-python scripts/capture_rendering.py --output analysis/rendering/title-cadence --cadence-only --no-gamepad --timeout 22
-python scripts/compare_rendering_runs.py analysis/rendering/title-timing analysis/rendering/title-cadence --output analysis/rendering/comparison.json
-
-# A separate bounded SDK PPU/SPU wait trace, with its own instrumentation cost.
-python scripts/capture_rendering.py --output analysis/rendering/title-waits --wait-trace --timeout 22
-python external/ps3recomp/tools/ftrace_report.py analysis/rendering/title-waits/wait-trace.txt --frames 3
-python scripts/test_rendering_profile.py
-```
-
-Use `--no-gamepad` for passive timing scenes so physical controller activity cannot advance the game. On Hyprland, the tool records only the test window's visibility, size, and workspace. Optional `--focus-window` attempts to focus that window and records whether the compositor accepted the request; background/occluded presentation can dominate frame time. The tested compositor rejected automatic focus dispatch, so final timing runs use observation only. No desktop configuration is changed. The default driver for this tool is X11; use `--driver wayland` for a separately labeled presentation check. `--batch 1` is an explicit diagnostic alternative. `--actions path.json` accepts elapsed-time keyboard actions such as `[{"seconds": 12, "key": "z", "hold_seconds": 0.3}]`, targets the uniquely named test window, and excludes real controllers for that keyboard profile. Event delivery does not prove a game action occurred: the local synthetic keyboard attempt stayed at the title, so menu/3D acceptance used a connected gamepad and inspected captures. For manual scenarios, omit `--actions` and continue through the game with your controller during the bounded session. Periodic screenshots are bounded to 24 samples; the backend's `latest.ppm` continues updating afterward, and a final `final.png` is retained after a captured session ends.
-
-`TB_RENDER_PROFILE=/absolute/local/path.jsonl` enables aggregate CPU wall-time counters and logarithmic duration histograms for draws, submit/wait, translation, pipeline requests/variants, texture upload, FIFO drain, guest-flip presentation, window presentation, readback completion, and capture writing. Counters are inclusive and overlap, so do not add them together or interpret them as GPU execution timestamps. Profile snapshots default to a limit of 120; `TB_RENDER_PROFILE_MAX_REPORTS=1..600` selects a larger bounded diagnostic session. They contain cumulative data that the summary differences after its warmup cutoff. `TB_RENDER_PROFILE_MODE=cadence` disables scope clocks while retaining minimal frame-cadence telemetry. Normal launches leave profiling off. The synthetic C fixture verifies early-return cleanup, disabled profiling, and cadence-only behavior.
-
-## Shared texture decoder
-
-The shared CPU decoder adapts format-specialized loops and packed-color lookup tables from [GoW-Ascension-Recomp's published decoder](https://github.com/bc160201983/GoW-Ascension-Recomp/blob/55e277c094678e695cf5e193c254708013d14cda/ps3kit/libs/video/rsx_tex_decode.h). The port retains native R16, float/depth formats, destination pitch and shader-side channel remapping. The measured hot path is linear 2048×2048 DEPTH16: its endian swap uses baseline x86-64 SSE2 with a scalar fallback. Existing compressed/row-copy paths and unsupported formats use the pinned decoder. The SDK checkout remains unchanged; source-copy generation preserves the original decoder body as the reference. MIT notices for the reused techniques are retained in `licenses/`.
-
-Three matched clean Linux Battle minutes per mode average 22.00 reference versus 23.06 specialized completed GAME FPS (4.8% higher), with overlapping ranges of 21.38–22.82 and 21.87–23.82. These variable AI runs establish a modest measured improvement, not sustained 60 FPS. Separate live diagnostic profiles reduce the hot depth conversion from 5.62 ms to 0.38 ms per call; an isolated warmed microbenchmark measures 6.25 ms to 0.22 ms. Those decoder-only ratios are much larger than the whole-game benefit. Local exact identities, excluded runs and checks are retained under `analysis/texture-decode-validation/`.
-
-```bash
-# Game-free exact-output checks and an optional decoder-only microbenchmark.
-python scripts/test_texture_decode.py --benchmark
-
-# Identical-build gameplay comparison; all other settings must still match.
-python scripts/script_gameplay.py --output analysis/performance/decode-reference --scene battle --overlay --texture-decode-mode reference
-python scripts/script_gameplay.py --output analysis/performance/decode-specialized --scene battle --overlay --texture-decode-mode specialized
-python scripts/compare_rendering_runs.py --gameplay --texture-decode-ab analysis/performance/decode-reference analysis/performance/decode-specialized --output analysis/performance/decode-comparison.json
-
-# Separate bounded diagnostic census, excluded from clean FPS comparisons.
-python scripts/script_gameplay.py --output analysis/performance/decode-census --scene battle --overlay --scopes --profile-seconds 20 --decode-profile
-```
-
-Normal launches select the specialized decoder. Set `TB_TEXTURE_DECODE_MODE=reference` to use the original body for diagnosis. `TB_TEXTURE_DECODE_PROFILE=/absolute/path.jsonl` optionally records bounded cumulative format/dimension/pitch counts, decoded bytes and CPU wall time, with no texture payloads. Profiling is off by default; periodic snapshots can omit the final partial second and retain at most 128 format keys and 600 reports. Decoder microbenchmarks measure only the conversion loop and cannot predict whole-game FPS.
-
-Video and scope/census sessions label their windows as diagnostics. Full-rate recording adds CPU/GPU overhead, so a lower overlay FPS in that window is excluded from clean throughput comparisons. The normal launch and clean benchmark leave recording and profiling off.
-
-The standalone fixtures compare complete outputs and padding against the pinned C decoder, sweep packed values, exercise native formats, unaligned/padded storage, mip/cube dimensions, overlap fallback and concurrent lookup-table initialization, and retain the upstream expected-value contract. `.github/workflows/texture-decode.yml` prepares Linux and native Windows game-free checks without a purchased dump. Windows execution and full Windows host/renderer support remain separate verification gates; Linux is the current priority.
-
-## Live Battle performance measurements
-
-Default Battle is the primary benchmark: use the default Field of War I map and Deathmatch settings, four lives and three CPU opponents. Scripted navigation passes the briefing, then leaves player one neutral while the opponents fight. It sends no movement or firing during timing. Campaign is a secondary scene check. These runs measure rendering cadence; they do not replace physical-input or mission-completion acceptance.
-
-Before the submission correction, three clean 60-second Battle intervals on the Ryzen 9 7950X/RTX 3060 measured 16.22–17.70 completed FPS. The equivalent RPCS3 route averaged 59.76 reported FPS from its title counter. A separate CPU/GPU profile records about 418,000 synchronous submit/wait calls taking 28.1 seconds within a 59.7-second scope span. The native countdown also falls behind wall time at low FPS. This establishes a major render/FIFO synchronization cost; sustained 60 FPS and normal simulation speed remain unresolved. Detailed local evidence, rejected samples and measurement limits are retained in `analysis/performance/REPORT.md` and `verification.json`.
-
-The bounded draw-group correction subsequently improved matched clean Battle averages from 16.44 to 20.75 completed GAME FPS across three runs per build (26.2% higher). Separate live diagnostic profiles show about 67% fewer submit/waits per draw. Actual-GPU lifetime/order fixtures, guest-consumer completion tests, resize/normal-close and separate Battle/campaign videos at more than 56 distinct capture FPS pass the selected-route checks. The local source snapshots, strict comparison and temporal evidence are in `analysis/submission-validation/REPORT.md` and `verification.json`. Throughput remains below 60 FPS; measured texture/depth conversion and normal simulation speed remain open.
-
-```bash
-# Three independent runs, each with five seconds of warmup and 60 seconds timed.
-.venv/bin/python scripts/script_gameplay.py --output analysis/performance/battle-baseline --scene battle --overlay --repeat 3
-python scripts/compare_rendering_runs.py --gameplay analysis/performance/battle-baseline/run-1 analysis/performance/battle-baseline/run-2 analysis/performance/battle-baseline/run-3 --output analysis/performance/battle-comparison.json
-
-# Separate diagnostic run. Do not combine its throughput with clean baselines.
-.venv/bin/python scripts/script_gameplay.py --output analysis/performance/battle-profile --scene battle --overlay --scopes
-python scripts/profile_gameplay_report.py analysis/performance/battle-profile
-
-# An explicit overlay comparison allows only that manifest field to differ.
-.venv/bin/python scripts/script_gameplay.py --output analysis/performance/battle-no-overlay --scene battle
-python scripts/compare_rendering_runs.py --gameplay --overlay-ab analysis/performance/battle-baseline/run-1 analysis/performance/battle-no-overlay --output analysis/performance/overlay-comparison.json
-```
-
-These helpers require an existing `build-vulkan` build, the purchased local dump/unlock, Hyprland, X11 tools, FFmpeg, ImageMagick, Tesseract and the current NVIDIA device query. Each output and disposable purchased profile must be new. The helpers detach their test window from any desktop tab group before floating, pinning and sizing it; no desktop configuration is edited. Navigation screenshots and scene/timer evidence are taken outside the timed interval. No video, pass/texture dumps or input/wait traces run during a clean baseline. The measurement helper forces `PS3_VERBOSE=0` because redirecting stderr otherwise enables SDK wait logging; the manifest records this setting. Physical controllers and keyboard input are excluded from the scripted native route. The original save files are preserved; normal-launch saves currently reside under `game/dev_hdd0/home/00000001/savedata/NPUB30154-AUTOSAVE/`, while the measurement profiles have separate save roots.
-
-`TB_GAMEPLAY_TIMING=/absolute/path.jsonl` records exact monotonic timestamps for guest flips, new completed guest serials selected for successful presentation, and all successful window refreshes. Repeated refreshes and stale serials do not inflate completed FPS. Events flush once per second and stop after ten minutes. `capture_rendering.py --gameplay-timing` also enables this telemetry, but a capture run alone does not establish a valid live benchmark. `gameplay_report.py` and `compare_rendering_runs.py --gameplay` require a verified live scene, a full visible 60-second interval, actual host audio and strict-clean execution. They reject failed, hidden, incomplete or heavily instrumented intervals and incompatible scene/build/settings manifests. Completed FPS does not prove pixel uniqueness or correct simulation speed; compare the countdown with elapsed wall time separately.
-
-Use `--build-dir` to select a separate build or a frozen build directory, and `--submit-mode serial|grouped` to select submission behavior. Freeze a built executable and its source hashes, source archive, SDK manifest, CMake cache and compile commands before changing the implementation:
-
-```bash
-python scripts/build_identity.py --build-dir build-vulkan --output analysis/performance/frozen-baseline
-.venv/bin/python scripts/script_gameplay.py --output analysis/performance/selected-build --scene battle --overlay --build-dir analysis/performance/frozen-baseline --submit-mode serial
-python scripts/test_gameplay_timing.py
-python scripts/test_vulkan_draw_groups.py
-```
-
-For implementation comparisons, `compare_rendering_runs.py --gameplay --candidate-plan analysis/path/candidate-plan.json ...` accepts a JSON object with a nonempty `reason` and exact `variants.baseline` and `variants.candidate` identities. Each identity must contain every field in `scripts/build_identity.py`'s `BUILD_FIELDS`, copied from the corresponding retained measurement manifest. Every run must match exactly one declared identity, and both variants must be represented. This allows documented executable/build changes while preserving scene, quality, visibility, audio, input and diagnostic requirements. Ordinary comparisons continue requiring matching builds. The game-free Vulkan fixture uses the actual generated backend and a real GPU to check per-draw resources, bounded ring reuse, target changes, texture updates, readbacks, pending-present ordering and destruction; serial mode supplies its negative control.
-
-Run `script_gameplay.py --correctness-video` with a new output for separate temporal verification. It records the full navigation/gameplay route at a requested 60 capture FPS and retains scanout generations. Analyze every recorded frame with `video_frame_report.py`, verify at least 30 distinct capture timestamps per second, and inspect consecutive frames around transition/artifact candidates. These recordings are excluded from clean throughput comparisons.
-
-Linux launches enable exact GPU depth conversion by default; `TB_DEPTH_GPU=0` selects the reference path for diagnosis. For eligible linear Z16-to-DEPTH16 sampling, the Vulkan backend converts D32 values into exact R16 texels with an original integer compute shader, retains producer-generation caching, and reuses completed snapshot images. Unsupported formats or dimensions keep the waited CPU fallback. Contained transfer readers still materialize big-endian guest depth bytes; this does not establish general PPU/SPU depth-read tracking. Other platforms retain the reference default while Linux validation takes priority. The benchmark helpers deliberately default to reference mode: add `script_gameplay.py --depth-gpu` to measure the Linux production implementation. `compare_rendering_runs.py --gameplay --depth-gpu-ab ...` permits only the declared depth implementation to differ between otherwise matched runs. Resource exhaustion and stale release warnings reject timing acceptance.
-
-Three matched default Battle minutes per implementation measured 24.19 reference versus 27.88 GPU GAME FPS on the local RTX 3060, approximately 15.25% higher. This remains below the Linux 60 GAME FPS target. Separate Battle/Campaign temporal recordings and exact GPU/transfer fixtures pass for the selected routes. Local evidence and limitations are retained in `analysis/depth-validation/REPORT.md`; AI match variation and scaled recordings do not establish deterministic or pixel-perfect parity.
-
-Regenerate the embedded original SPIR-V with `python scripts/compile_depth_shader.py`, or use `--check` to compare it with compilation by the installed `glslangValidator`. A compiler upgrade may legitimately change the bytes and requires a reviewed regeneration. The shader source and embedded bytes are included in the SDK overlay manifest and frozen source identities.
-
-`python scripts/test_vulkan_depth16.py` checks exact GPU bytes around every 16-bit rounding boundary, random float32 values, special values, odd dimensions, views and changed producers, including more than 2,000 releases through the real engine callback. `python scripts/test_depth_visibility.py` checks the actual generated engine's depth sampling and transfer materialization, including NV0039's single-row byte-span pitch. The GPU fixture requires a working Vulkan device. `--decode-profile` adds a bounded depth producer/consumer census and Linux `[depth-cost]` counters for requested bytes and inclusive wall time around conversion, guest readback and NV0039 copies. Requested bytes include cache hits and failed calls, so they must not be reported as actual GPU traffic; these diagnostic runs are excluded from clean comparisons.
-
-`python scripts/depth_cost_report.py analysis/performance/selected-profile` aligns timestamped cost snapshots inside a verified live interval and normalizes them by completed game frames. It reports paths without sufficient live snapshots separately. Earlier unaligned counter logs cannot supply these per-frame costs.
-
-The color-readback snapshot experiment stays disabled for ordinary launches. `script_gameplay.py --depth-gpu --color-readback-cache` or `TB_COLOR_READBACK_CACHE=1` explicitly selects it. It retains one completed host snapshot of at most 32 MiB per GPU color producer and still materializes every requested guest region, including after arbitrary CPU changes to guest bytes. New producer generations and changed layouts require fresh readback; unknown or oversized producers keep the original path. It does not skip texture hashes or provide complete Linux PPU/SPU write tracking. Use `compare_rendering_runs.py --gameplay --color-readback-ab ...` only for otherwise matched runs, and keep profiling/video separate. The generated-engine visibility fixture checks partial regions, producer changes, guest mutation restoration, shutdown reuse and the size limit. Local findings are retained under `analysis/color-transfer-validation/`.
-
-Three separately compatible clean Battle pairs produced mixed results, with only a 0.2% pooled descriptive difference. The cache is therefore not enabled as a production optimization. Its 83.3% hit rate replaces regional readbacks with a full snapshot of essentially the same pixel volume; fewer readback calls did not establish a useful FPS gain. `depth_cost_report.py` reports clipped consumer spans and full snapshot extents separately, without treating them as measured GPU bus traffic.
-
-`--scopes` adds inclusive CPU scopes, 99 Hz user-space CPU sampling and sparse Vulkan timestamps on supported queues. The CPU sampler needs permission to sample its child and an unstripped executable for useful symbols. Use `--scopes --profile-seconds 20` for a shorter, explicitly diagnostic live segment when the AI ends a full-minute profile early. Short profiles retain before/after live-scene checks and cannot pass clean baseline comparisons; throughput acceptance still requires 60 seconds. GPU timestamps sample every 256th serialized general command using the existing fence wait, with at most 30,000 samples; they exclude whole-frame and window-present timing. CPU scope times overlap, and CPU samples exclude blocking/kernel time. A busy SPU polling core alone does not establish the frame-rate bottleneck.
-
-For the equivalent RPCS3 route, append `--reference-template analysis/access-validation/reference-purchased-checked --appimage /absolute/path/to/rpcs3.AppImage` to `script_gameplay.py` with a new output. This copies the reference configuration/licenses/cache into a separate profile and samples RPCS3's formatted FPS title once per second. It does not provide exact per-frame timestamps or comparable p95/p99 distributions. Retain the copied settings, live scene evidence and countdown progression alongside that reported FPS.
-
-Diagnostic log creation explicitly sets mode 0644. RPCS3 can create its compressed log with mode 000 while active; reference helpers restore readable permissions during observation and cleanup after termination. `python scripts/diagnostic_logs.py analysis/path/to/capture` repairs retained log files only, skipping symlinks and leaving license/key files untouched. Timing, CPU samples, copied reference state and captures remain local under ignored `analysis/`.
-
-Performance samples must match the scene and presentation state. A passive run with full timers spent roughly 12 seconds of a 13-second interval inside window presentation and presented about once per second; another run spent most of its time in FIFO drain and submit/wait. These identify distinct measured costs, not one universal bottleneck. Background/occlusion throttling is a candidate that requires the recorded visibility state to assess. Full-profile and cadence-only ranges vary and cannot establish a precise instrumentation overhead or optimization gain. Screenshot/pass-dump runs and the separate wait trace are excluded from performance comparisons. The final observed pair measured 9.66 presents/s with full scopes and 3.35 with cadence-only telemetry; 20/23 and 23/23 window observations respectively were marked visible. Those differing conditions and single samples do not establish the cost of profiling. In the full-scope sample, a 13.15-second window contained 9.99 seconds in FIFO drain, including 6.51 seconds in submit/wait, and 2.10 seconds in window presentation.
-
-One early uncontrolled sample left the title, attempted a ForestEnvironment asset load, and stopped under strict execution on a null PPU call. It is retained as failure evidence and excluded from the baseline; `compare_rendering_runs.py` rejects failed/interrupted sessions. The separate wait trace records PPU sleep/mixer waits, but no raw-SPU wait events. An absence of recorded SPU waits does not prove zero SPU waiting, and guest flip-request intervals in that trace are not interchangeable with presented frames or simulation speed.
-
-The port now executes the game's NV0039 memory-to-memory transfers on subchannel 1. The pinned SDK previously treated that subchannel as 3D commands, leaving stale staging bytes at the logo and animated title-strip addresses. `sdk_overrides/rsx_memory_copy.inc` handles the transfer registers and byte-column strides, signed row pitches, overlap-safe input snapshots, tiled-memory access, SPU write coherence, and draw-engine read/write notifications. The game's known default binding is selected in the generated SDK source copy; no generated PPU/SPU output or vendored SDK files are edited. The override's hash is included in the build manifest.
-
-The fixed 950×252 logo and 791×25 strip match their original base-level DDS payloads byte for byte before GPU upload. Captures show the title strip, main menu, and Battle setup panels restored, and the default Battle route reaches live gameplay with no observed CPU fallbacks. The user confirmed those UI improvements and reported remaining in-game graphics issues. The later controller complaint was traced to SDL label-based mapping on a Nintendo-identifying device; the positional input fix and its acceptance scope are described below. This change does not establish complete gameplay rendering, input reliability, or performance.
-
-For a local regression check, `--textures` captures at most 96 unique base-level texture views and 96 title draw-input records, plus shader diagnostics, inside the ignored output directory. These files contain game data and must remain local. The verifier compares the two UI payloads against DDS files from the user's purchased dump; the original broken capture fails and the fixed capture passes. The game-free fixture exercises the actual transfer override with original synthetic bytes.
-
-```bash
-python scripts/capture_rendering.py --output analysis/rendering/ui-copy-check --capture --textures --timeout 24
-python scripts/verify_texture_copies.py analysis/rendering/ui-copy-check/textures
-python scripts/test_rsx_memory_copy.py
-```
-
-The first bad title pass was already corrupt in the render target before presentation: background, dark bar, repeated BC3 strip quads, then glyph quads into a 2560×1440 target with pitch 10240. The strip's texture pitch, UVs, and vertex inputs were correct. A VRAM snapshot located its intact payload in a staging allocation, and the corresponding dropped NV0039 command named exactly that source and the stale sampler destination. RPCS3's local `NV47/HW/nv0039.cpp` supplied the format/pitch semantics check. No shader replacement, attachment-size change, or presentation workaround was needed.
-
-An offscreen A/B comparison measured 11.3–11.7 surface flips/s with old routing and 11.6–11.8 with the fix across two 10-second steady intervals per variant. All four runs were strict-clean and showed no observed core-throughput regression in these samples. These are offscreen GPU surface-flip measurements without window presentation or controller input, not windowed FPS or simulation-speed targets. Diagnostic captures, reference settings, and full scenario reports remain local under `analysis/rendering/`.
-
-## Controller and keyboard input
-
-Face buttons use physical positions: bottom → Cross, right → Circle, left → Square, top → Triangle. The SDL input source copy defaults `SDL_GAMECONTROLLER_USE_BUTTON_LABELS` to `0` before opening devices. This matters for PS-style controllers that identify as Nintendo Pro Controllers: SDL's label-based default can interchange Cross/Circle and Square/Triangle. The user confirmed the corrected controller mapping. An explicit `SDL_GAMECONTROLLER_USE_BUTTON_LABELS=1` environment override opts back into label mapping. Device connection logs include SDL's effective mapping and label-policy setting; a custom device mapping can still be supplied through SDL's `SDL_GAMECONTROLLERCONFIG` mechanism.
-
-| Guest control | Controller | Keyboard fallback |
-| --- | --- | --- |
-| Cross / Circle | Bottom / right face button | Z / X |
-| Square / Triangle | Left / top face button | A / S |
-| D-pad / left stick | D-pad / left stick | Arrow keys (also mirror left stick) |
-| Right stick | Right stick | Unassigned |
-| L1 / R1 | Left / right shoulder | Q / W |
-| L2 / R2 | Left / right trigger | 1 / 2 |
-| Start / Select | Start / Back | Enter / Tab |
-
-Keyboard fallback requires no attached controller on port 0 and keyboard focus on the game window. The Vulkan SDL event pump retains mapped key-down edges in `input_events.cpp` until a port-0 guest data report consumes them, so a short press/release between slow pumps is not lost. The frame clock also pumps SDL during catch-up ticks so accumulated rendering work does not defer keyboard processing until the whole catch-up interval ends. The user confirmed Z/X/arrows in the final build. Held keys still use SDL state; focus loss, disabled keyboard input, or an attached controller clears queued edges. Keyboard X is Circle/back; Z is Cross/confirm. Disconnecting a controller releases its buttons and centers its sticks; reconnecting the same SDL GUID should reclaim its port. Controller input can remain active without keyboard focus. `python scripts/test_input_mapping.py` checks the actual generated cellPad source using real SDL virtual devices for face positions, releases, analog input, held-button disconnect, neutral state, and reconnect. It also runs the SDK's keyboard/focus regression against that generated source, extended with original short-press, repeated-poll, and focus-loss edge tests. Virtual-device and mocked-keyboard results do not replace physical gameplay or desktop-focus acceptance. Diagnostic `PAD_FILE`/`PAD_SCRIPT`/`PAD_AUTOPRESS` input must be absent when checking physical controls.
-
-## Resource and cache recovery diagnostics
-
-On Linux, the generated filesystem source uses `sdk_overrides/edat_cache.inc`. A cache is reusable only when its versioned `.dec.complete` record matches the encrypted source fingerprint, plaintext fingerprint, and plaintext size from the EDAT header. SHA-1 fingerprints detect accidental changes; the original EDAT decryptor still authenticates encrypted blocks. Cache creation uses unique temporary files, a per-cache process lock, checked output close/sync, and atomic renames with the completion record published last. A killed writer leaves an unpublished temporary file that is never adopted. Unmarked legacy caches regenerate once; successful later opens reuse completed caches. This policy does not treat a plaintext cache as a purchased unlock: the separate entitlement verifier still checks the original purchased files.
-
-The raw `sys_fs_open` and generic `cellFsOpen` source copies now reject directories with `CELL_EISDIR` before `fopen`. Linux otherwise permits a read-only directory stream, which the guest treated as a successfully opened resource. The campaign's failed `armortrain_opa.jpg` lookup followed that path and reached a null JPEG decoder call; returning the correct directory error allows its fallback lookup and first-mission loading to proceed. The asset probe verifies the error and unchanged output descriptor in all three filesystem layers.
-
-`compare_asset_cache_boots.py` copies independent title/cache trees under ignored `analysis/resources/`, including deliberately truncated caches with newer timestamps and orphan temporary files. It never hardlinks or symlinks mutable cache contents to the purchased original. `capture_rendering.py --content-root` mounts one selected title copy, and `--build-dir` selects the runner. The ordinary capture helper still shares existing title content unless an independent root is explicitly supplied. Use copied profiles for cache mutation tests. A warm legacy profile may need one validated regeneration before measuring reuse.
-
-```bash
-python scripts/compare_asset_cache_boots.py --output analysis/resources/cache-check --build-dir build-vulkan --timeout 60 --scenario title
-python scripts/resource_reports.py analysis/rendering/cache-check/warm
-python scripts/test_edat_cache.py
-python scripts/test_resource_profiles.py
-python scripts/test_resource_reports.py
-```
-
-The optional `--resources` capture records bounded reads from the four asset containers and watches the actual ELF's imported Sail NIDs. `resource_reports.py` compares the bytes delivered to the guest with the selected archive, reconstructs fully covered compressed ZIP entries, and checks decompression size/CRC and reference bytes. Guest decompression output is a separate check; `verify_texture_copies.py` verifies the observed logo/strip payloads. A loose-file failure with a matching basename elsewhere in an archive does not prove the game selected that entry. Reports preserve exact and basename candidates without inventing filesystem aliases. Resource byte captures and metadata contain game data and remain ignored/local. Use `--allow-failed` only to inspect a failed session diagnostically; its report is never accepted for verification. `--resources --input-trace` also records bounded physical SDL and outgoing guest button changes. An SDK `PAD_FILE` route is explicitly synthetic input and does not validate a physical controller. These traces add substantial IO overhead and are excluded from performance measurements.
-
-## Bounded boot diagnostics
-
-Run a bounded session and keep combined stdout/stderr plus machine-readable exit metadata in the ignored analysis directory:
-
-```bash
-python scripts/port.py run --timeout 30 --log analysis/boot/session.log
-```
-
-The sidecar is `analysis/boot/session.log.result.json`. A timeout returns launcher status 124 while preserving the actual child return code and termination signal in the sidecar. Ordinary exits retain their exit status; signal exits use the shell convention of 128 plus the signal number. Without `--timeout`, the session is unbounded. Without `--log`, output goes to the terminal. POSIX timeout cleanup terminates the session's process group, including descendants.
-
-On Linux, a timeout first requests a diagnostic snapshot with SIGUSR1. The runner reports startup milestones and each recorded guest thread's last observed HLE NID, CIA, and LR. These are snapshots at HLE boundaries, not continuously sampled guest PCs, and may be stale inside long guest loops. Fatal-signal and ELF-load failures also produce diagnostics. Snapshot handling uses lock-free atomic records and signal-safe writes. Linux-only port dispatch checks Tank Battles overrides before the shared handler and routes overrides through the SDK's ABI guard using private NID registrations. Register overrides in `stubs.cpp` before guest dispatch; the hook runs after shared runtime initialization.
-
-The smoke test also checks an intentionally stalled runner, startup-failure reporting, and an override that must preserve the caller TOC. These fixtures are compiled only with `TANK_BATTLES_DIAGNOSTIC_TESTS=ON` in the synthetic build; the normal game build defaults to OFF. Run `python scripts/test_boot_session.py` for output, exit-status, and timeout process-group cleanup checks.
-
-## Synthetic boot check
-
-```bash
-python scripts/smoke_test.py
-```
-
-This builds the port's actual runner against ps3recomp's synthetic PPU program in `build-smoke/`, using the headless renderer on Linux. It checks memory loading, HLE calls, guest threads, callbacks, frame presentation, and exit-status propagation. It requires no game files and does not establish Tank Battles compatibility. The synthetic guest passes status 39 to the runtime; its verifier checks that status and returns zero with `[smoke] PASS` on success.
-
-## Import audit and startup triage
-
-After building the normal executable, generate an offline-profile import report:
-
-```bash
-python scripts/audit_imports.py
-python scripts/triage_boot.py --timeout 3
-```
-
-The audit loads the local ELF and initializes HLE registrations without dispatching guest code. On Linux it captures generic, context, fast, and port-override registrations, and probes the runtime's actual NID lookup. Results go to `analysis/step4/import-audit.json`. Optional host-network entries are distinguished from missing registrations. Handler presence, unresolved names, and known module limitations are separate fields; registration is not proof of compatibility. Capture is opt-in and stops before guest dispatch.
-
-The triage tool retains the original Step 4 profiles: repeated configured-root runs, a launch-only corrected-root profile, and the documented unresolved-import failure mode. It saves bounded logs, exit metadata, and observations under `analysis/step4/`. The current configuration already corrects the asset root, so those root profiles may now be equivalent. At the pinned SDK revision, the shared missing-table dispatcher returns success directly despite `PS3_HLE_UNRESOLVED=fail`. The native strict policy now rejects reached missing registrations, and the port overrides purchase verification with the local entitlement bridge below; its earlier unresolved-success result remains historical diagnostic evidence.
-
-Set `TB_TRACE_NID=0x2ECD48ED` when launching to log that import's entry and return values, capped at 32 calls. The native audit uses startup-only `TB_HLE_INVENTORY`, `TB_IMPORT_PROBE`, and `TB_HLE_AUDIT_ONLY` hooks; the Python tool manages them. Run `python scripts/smoke_test.py` followed by `python scripts/test_import_audit.py` to verify the inventory against synthetic generic/context/fast/override, inactive optional-network, and unknown-NID cases.
-
-## Asset IO verification
-
-On Linux, the port retains the SDK's `sceNpDrmIsAvailable` and `sceNpDrmIsAvailable2` handlers so the running game can register its own asset klicensee. After availability succeeds, the port maps the resulting plaintext `.edat.dec` cache into the generic C filesystem layer, whose default mappings and reads otherwise bypass the configured mounts and EDAT resolver. The PPU HLE and raw syscall layers already use that resolver. No private key is embedded in the port. RPCS3's `.unedat` suffix is not automatically discovered or used as a runtime filename.
-
-For local verification, first independently decrypt your four asset containers with your own RPCS3 installation and place its `assets_*.edat.unedat` outputs under `game/reference-rpcs3/assets/`. RPCS3's [command-line parser](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/rpcs3.cpp) supports `--headless --decrypt FILE`, and its [decrypt implementation](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Crypto/decrypt_binaries.cpp) handles EDAT output. Use your own asset klicensee when RPCS3 requests it. Keep reference files and raw RPCS3 logs local.
-
-```bash
-python scripts/verify_assets.py --key-log /path/to/your/local/RPCS3.log
-```
-
-This opt-in probe reads the asset key transiently from that local log and sends it to the native runner through stdin. It does not dispatch game code. It checks the game's availability handlers and open, size, seek, read, EOF, and close behavior in all three filesystem layers; compares full runtime plaintext hashes with the independent references; verifies cache reuse; and creates then removes unique test files under the configured HDD/cache roots. Reports are saved under ignored `analysis/step5/`. The Linux source-copy override now verifies completion records, source/plaintext fingerprints, and expected size before cache reuse; the unchanged upstream resolver uses modification time. Use disposable copies for corruption/recovery checks.
-
-Game-free regression checks cover missing or mismatched metadata, wrong-key rejection, initial decryption, stale-cache regeneration, cache reuse, and writable mount consistency:
-
-```bash
-python scripts/smoke_test.py
-python scripts/test_content_paths.py
-python external/ps3recomp/tools/test_edat_guest_klicensee.py
-```
-
-The local NPUB30154 check matches all four asset containers against independent RPCS3 plaintext. Normal startup now selects the correct HDD title and opens those containers, and now passes the original raw SPU mailbox wait after the main-stack correction; the Vulkan build now reaches the title screen with existing asset caches. Asset IO verification does not establish completed resource initialization or playable boot.
-
-## Purchased full-game unlock
-
-The base NPUB30154 executable identifies itself as a trial. The Linux port verifies the purchased C00 unlock through `sceNpDrmVerifyUpgradeLicense` instead of accepting the SDK's unresolved-import success fallback. Put your own files in this ignored directory:
+For your own use outside this source checkout, copy `build/TankBattlesRecomp` and `game/dev_hdd0/` into a new folder, then create an empty `game/dev_hdd1/` directory:
 
 ```text
-game/dev_hdd0/home/00000001/exdata/
-├── UP2006-NPUB30154_00-TANKBATTLES00KEY.edat
-└── UP2006-NPUB30154_00-TANKBATTLES00KEY.rap
+TankBattles/
+├── TankBattlesRecomp
+└── game/
+    ├── dev_hdd0/          # Installed game, unlock and saves; copy the whole folder
+    │   └── game/NPUB30154/USRDIR/EBOOT.elf
+    └── dev_hdd1/          # Writable cache
 ```
 
-Prepare the SDK's local `.edat.rifkey` sidecar from your purchased RAP:
+From that folder, launch:
 
 ```bash
-python scripts/prepare_entitlement.py --rpcs3-source ../rpcs3
+./TankBattlesRecomp game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf
 ```
 
-Preparation uses PyCryptodome from the existing Python environment and public format tables from an optional local [RPCS3 source checkout](https://github.com/RPCS3/rpcs3). The checkout is needed only for preparation; the native runner does not invoke RPCS3 or Python for license checks. The script writes the derived key locally with mode 0600, prints no key bytes, and refuses to replace a different existing sidecar. No title-specific or purchaser key is compiled into the port. Public platform format constants already exist in the SDK and the EDAT verifier; these do not grant ownership.
+The executable still needs the ELF and game data. Python, the SDK, generated C/C++ sources, original PKG and SELF key file are not needed to play. The destination Linux system needs compatible SDL2, glslang/SPIRV-Tools runtime libraries, the Vulkan loader and a GPU driver; this is not a self-contained AppImage. Saves are under `game/dev_hdd0/home/00000001/savedata/`.
 
-At runtime, the bridge looks only in the configured HDD0 root's `home/00000001/exdata` profile. It validates this title's observed C00 format, the outer content ID, NPD title and developer hashes, the encrypted data block, and the decrypted `GOMA` payload's content ID. It uses a private instance of the pinned SDK codec with a unique transient plaintext file that is removed after verification. Existing `.dec`/`.unedat` caches and ambient `PS3_RIF_KEY` values cannot satisfy this check. The implementation supports the observed 352-byte version-1/type-1/license-2 unlock, rather than every PS3 entitlement format.
+This finished folder contains game code, assets and your license material. Keep it private.
 
-Missing, invalid, or unrelated entitlements return `SCE_NP_DRM_ERROR_LICENSE_NOT_FOUND` (`0x80029521`); a null or unterminated argument returns `SCE_NP_DRM_ERROR_INVALID_PARAM` (`0x80029502`). Offline `sceNpDrmExecuteGamePurchase` returns `GAME_ERR_NOT_XMBBUY_CONTENT` (`0x80028F81`) and performs no purchase or guest restart. The missing-unlock worker retains the game's own sign-in poll with a 10 ms sleep; the offline profile does not fabricate signed-in state to terminate that worker.
+## Windows
 
-```bash
-python scripts/smoke_test.py
-python scripts/test_entitlement.py
-python scripts/verify_entitlement.py --timeout 3
-```
+Planned. Build and packaging instructions will be added when Windows is supported.
 
-The 13 game-free entitlement tests cover valid synthetic input, missing files, wrong keys, corrupt hashes/data, unrelated content IDs, bad payloads, invalid guest arguments, and offline purchase results. The Linux verification script needs an unstripped diagnostic runner, `nm`, and parent access to its child's `/proc` files. It checks the known local executable's instruction layout, reads only a guest pointer chain and three entitlement-state bytes, and compares bounded purchased/missing-unlock sessions using a separate ignored HDD fixture. It does not dump guest memory or remove your purchased files. Results go to `analysis/step6/entitlement-verification.json`.
+## Built with
 
-The actual game's trial flag is clear with the purchased unlock and set without it, matching the traced return-value gate and RPCS3's purchased reference. The purchased verification thread completes; the missing-unlock path remains in its offline-status loop. The main-stack correction resolves the original SPU mailbox wait; visible full-game content and mission access have not yet been revalidated in the native port.
+- [ps3recomp](https://github.com/sp00nznet/ps3recomp) by Ned Heller / sp00nznet: static recompiler and PS3 runtime. Vendored source and license details: [external/README.md](external/README.md).
+- [God of War: Ascension Recomp](https://github.com/bc160201983/GoW-Ascension-Recomp): adapted texture-decoding work and implementation references. [MIT notices](licenses/GoW-Ascension-Recomp-MIT.txt).
+- [Twisted Metal's SELF decryptor](https://github.com/sp00nznet/twistedmetal), through the God of War port: our portable executable-decryption tool. [MIT license](licenses/twistedmetal-MIT.txt).
+- [RPCS3](https://github.com/RPCS3/rpcs3): reference behavior and public RAP format data. [GPL-2.0 notice](licenses/RPCS3-GPL-2.0.txt).
+- [SDL2](https://www.libsdl.org/), [Vulkan](https://www.vulkan.org/) and [glslang](https://github.com/KhronosGroup/glslang): input, audio, windowing and graphics.
 
-## Offline PSN profile
-
-On Linux, `offline_network.cpp` implements the local/offline behavior for this title's imported PSN interfaces. Startup clears `PS3_NET_ONLINE` and `PSNR_SERVER` before initializing HLE, so those environment settings cannot enable host matchmaking in this port. Online multiplayer is outside the initial playable milestone. The pinned shared SDK is unchanged.
-
-| Interface | Offline behavior |
-| --- | --- |
-| NP manager | Reports OFFLINE; callback registration does not invent a sign-in event. |
-| NetCtl | An initialized state query succeeds with Disconnected. Network dialogs deliver LOADED, FINISHED, and UNLOADED through sysutil; the result is cancelled. |
-| Score and TUS | Local title contexts have valid releasable handles. Transaction creation fails without login; no request IDs or successful empty leaderboard results are fabricated. |
-| Matching2 | Local contexts and registrations succeed. An accepted context start delivers StartOver with NOT_NP_SIGN_IN; room requests fail immediately. |
-| Avc2 | Initializes the 132-byte parameter structure. Accepted voice loading delivers LOAD_FAILED with NOT_SUPPORTED; streaming does not report success. |
-| Invitations and signaling | Requests return explicit offline/unreachable errors without creating pending online operations. |
-
-The bridge holds deferred completions until `cellSysutilCheckCallback`, then uses the SDK's existing guest callback queue. Abort, context destruction, module termination, and NP termination clear the corresponding pending work. Failed requests leave output buffers and request-ID fields untouched. The imported callbacks remain guest callbacks with their original argument layout. Core initialization and local DRM checks remain usable without signing in.
-
-Run the native interface tests after building the synthetic runner:
-
-```bash
-python scripts/smoke_test.py
-python scripts/test_offline_network.py
-```
-
-The tests run the actual HLE dispatcher and callback queue with a child-only Linux seccomp filter that denies new sockets. Both normal and online-configured environment profiles pass the same checks, covering deferred delivery, callback arguments, cancellation, context cleanup, output boundaries, and rejection of unavailable services. The runner's opt-in `TB_OFFLINE_PROBE=1` performs these checks before guest dispatch and requires no private keys or game assets when used with the synthetic ELF. The synthetic build has no SPU program; actual game startup still requires separate validation.
-
-To reproduce the import and startup trace with your local game:
-
-```bash
-PS3_HLE_TRACE=1000 python scripts/port.py run --timeout 3 --log analysis/step7/game-boot.log
-python scripts/audit_imports.py --output analysis/step7/import-audit.json
-python scripts/trace_offline_imports.py
-```
-
-The bounded launch returns 124 when its diagnostic cutoff is reached; the original raw-SPU wait has been resolved by the main-stack correction. The historical Step 7 trace records 94 related imports and 239 static call sites for the local NPUB30154 dump, translating private port aliases through captured HLE registrations. That pre-fix trace reached NP, NP2, and TUS initialization plus local DRM checks; later NetCtl, matchmaking, and voice calls have been exercised by the native probe but have not yet been reached in normal startup. Static call sites do not establish that a path executed. The Vulkan title screen is now verified. Menu navigation and offline mission selection remain unverified.
-
-## Main-stack placement and SPU startup
-
-The runner places its 1 MiB main-thread stack in the PS3 stack region, with top `0xD0100000`, as defined in `guest_layout.h`. Tank Battles classifies certain transfers using the stack address's high nibble. The previous segment-zero stack selected a CPU-copy path for a null synchronization request, leaving the PPU waiting for an SPU command that had never been sent. The corrected layout sends the real synchronization command and receives its SPU acknowledgement. This changes the host runner's guest-memory layout without changing game instructions or synthesizing mailbox replies.
-
-Run `python scripts/test_guest_layout.py` for the original routing regression. Use `python scripts/compare_asset_cache_boots.py --output analysis/resources/asset-cache-fresh --timeout 60 --scenario title` to compare independent warm, fresh, and interrupted Vulkan cache profiles. The isolated cold/warm startup evidence is under `analysis/step8/`; three corrected boots pass the old mailbox wait, and the full cold-cache run reproduces all four independent asset hashes. Step 9 implements the subsequently reached text-conversion import and verifies bounded startup under strict execution; the Vulkan title-screen check below now verifies visible startup with existing asset caches. This is not yet a playable port. The historical startup probes exposed the pinned SDK's modification-time cache policy accepting partial caches. The port's Linux resolver override now rejects incomplete output and publishes completed caches atomically; purchased originals remain untouched by the isolated recovery checks.
-
-## Strict static execution diagnostics
-
-The Linux runner defaults to strict guest execution. A reached missing HLE import, unresolved/null PPU target, unverified PPU recovery, SPU interpreter entry, or untranslated SPU target stops the process with status 86 and a bounded diagnostic report. This also intercepts SDK branches that otherwise return success or silently skip invalid calls. `TB_EXECUTION_MODE=diagnostic` explicitly allows those SDK fallbacks for investigation while recording them; it does not establish static compatibility.
-
-`scripts/instrument_sdk.py` generates instrumented copies of fifteen SDK source files under the selected build directory. CMake builds those copies with the normal SDK include paths; the vendored SDK remains unchanged. The generator requires unique matching source anchors and records original/output hashes in `instrumented_sdk/manifest.json`. Original source changes trigger reconfiguration. No generated game translation is edited. Logs contain bounded target observations, counters, last image/address pairs, and a bounded image/overlay inventory. Counter and last-target writes use lock-free atomics; timeout reports use signal-safe output. A full image-inventory buffer terminates explicitly rather than silently dropping coverage.
-
-```bash
-python scripts/smoke_test.py
-python scripts/test_execution_policy.py
-python scripts/verify_static_startup.py --timeout 6
-```
-
-The eight policy/conversion tests exercise actual native missing-import, missing-target, full-interpreter, and untranslated-SPU paths, plus diagnostic mode, text conversion, and reproducible source generation. The startup verifier records its limited coverage in `analysis/static-execution/verification.json`: the run must reach its diagnostic timeout, report no observed execution failures/fallbacks, and match the observed image IDs against the generated static inventory. Passing this check proves only the recorded startup interval; other languages, later images, and campaign-wide coverage still require their planned checks. The separate Vulkan check below verifies the observed graphical startup interval.
-
-The newly reached NID `0x931FF25A` is `L10nConvertStr`. `text_conversion.cpp` implements the observed ISO-8859-1 to UTF-8 path and common UTF-8/UTF-16BE/UTF-32BE/UCS encodings through the host converter. Lengths are guest big-endian byte counts; length queries, partial output, invalid sequences, and unsupported converters return explicit results. Unsupported code pages remain unsupported rather than returning success with unchanged output. The port logs conversion metadata without string contents.
-
-For SPU pipeline checks, `python scripts/test_spu_pipeline.py` runs the pinned SDK suite with a fixture-only adapter supplying the two missing disabled local-store-watch symbols. The untouched upstream test currently fails three link cases for those symbols; the adapter leaves the SDK runtime blocks and test assertions unchanged, and all 15 tests pass. Other targeted dispatch tests run directly from the untouched SDK.
-
-## Credits and contributions
-
-This port uses [ps3recomp by sp00nznet / Ned Heller](https://github.com/sp00nznet/ps3recomp). The CMake scaffold and runner are adapted from its project template; upstream attribution is preserved in [LICENSE](LICENSE). ps3recomp and its bundled components have their own licensing notices.
-
-Contribute tooling, configuration, documentation, and original runtime fixes. Do not submit game files, firmware, licenses, keys, memory dumps, or generated game-code translations in commits, issues, or attachments. Review staged files before committing.
-
-This is an unofficial project and is not affiliated with or endorsed by Gameloft or Sony. Tank Battles and its original content belong to their respective rights holders.
-
-The index-remap reuse experiment also stays disabled for ordinary launches. `script_gameplay.py --depth-gpu --draw-remap-cache` or `TB_DRAW_REMAP_CACHE=1` selects two bounded exact-input entries; `--draw-verify` compares every reused result against fresh computation and is diagnostic only. Indices and vertex values are still read every draw, and constants, textures, targets and GPU resources stay fresh. `compare_rendering_runs.py --gameplay --draw-remap-ab ...` permits only that declared mode difference. Two matched clean Linux Battle minutes per mode measured 29.58 fresh versus 29.50 cached completed GAME FPS, so reuse is not enabled. These historical measurements predate the default renderer changes that reached 60 GAME FPS. `--decode-profile` now also reports bounded layout, vertex-fetch, remap, pipeline and texture-binding costs; inclusive paths overlap and must not be summed. Findings are retained locally under `analysis/draw-state-validation/`.
-
-Linux fence polling is an opt-in experiment: `TB_VK_FENCE_POLL=1` or `script_gameplay.py --depth-gpu --fence-poll`. It probes at most 256 times with a 50-microsecond budget checked every eight probes, then falls back to the original blocking wait. All label publication and resource reuse still require completion. Two clean Battle minutes per mode measured 28.36 blocking versus 28.52 polling GAME FPS, with overlapping ranges and no useful demonstrated gain, so blocking remains the default. Use `compare_rendering_runs.py --gameplay --fence-poll-ab ...` for explicitly matched runs. `--decode-profile` now attributes direct backend waits and FIFO consumer methods separately; nested costs overlap. Local evidence is retained under `analysis/wait-validation/`.
+Unofficial project, not affiliated with Gameloft or Sony. Third-party components retain their own licenses.

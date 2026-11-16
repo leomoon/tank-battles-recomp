@@ -49,6 +49,14 @@ class UserProfileTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.profile('full','missing-unlock',True)
         with self.assertRaises(ValueError):self.profile('absent',resume=True)
 
+    def test_license_three_profile_does_not_require_rif_sidecar(self):
+        (self.exdata/(UNLOCK+'.rifkey')).unlink()
+        (self.exdata/UNLOCK).write_bytes(b'NPD\0'+bytes(4)+b'\0\0\0\3')
+        metadata,lock=self.profile('free-format');lock.close()
+        exdata=Path(metadata['mounts']['PS3_HDD0_ROOT'])/'home/00000001/exdata'
+        self.assertEqual([p.name for p in exdata.iterdir()],[UNLOCK])
+        metadata,lock=self.profile('free-format',resume=True);lock.close()
+
     def test_resume_rejects_external_save_and_entitlement_links(self):
         metadata,lock=self.profile('full');lock.close()
         private=Path(metadata['mounts']['PS3_HDD0_ROOT'])/'home/00000001'

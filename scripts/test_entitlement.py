@@ -24,20 +24,20 @@ def constant(text, pattern):
     return bytes(int(v, 16) for v in re.findall(r'0x([0-9a-fA-F]{2})\b', values))
 
 
-def fixture(rif, *, outer=CONTENT_ID, inner=CONTENT_ID, magic=b'GOMA'):
+def fixture(rif, *, outer=CONTENT_ID, inner=CONTENT_ID, magic=b'GOMA', license=2):
     sdk = (ROOT / 'external/ps3recomp/libs/filesystem/edat.c').read_text()
     free = constant(sdk, r'"NP_KLIC_FREE"')
     omac2 = constant(sdk, r'NP_OMAC_KEY_2\[16\] =')
     omac3 = constant((ROOT / 'entitlement_edat.c').read_text(), r'unlock_title_omac\[16\] =')
     header = bytearray(256)
-    header[:16] = b'NPD\0' + struct.pack('>III', 1, 2, 1)
+    header[:16] = b'NPD\0' + struct.pack('>III', 1, license, 1)
     header[16:64] = outer.encode().ljust(48, b'\0')
     header[64:80] = bytes(range(16))
     header[80:96] = mac(omac3, header[16:64] + (CONTENT_ID + '.edat').encode())
     header[96:112] = mac(bytes(a ^ b for a, b in zip(free, omac2)), header[:96])
     header[128:144] = struct.pack('>IIQ', 0, 16384, 64)
     plain = magic + bytes(12) + inner.encode().ljust(48, b'\0')
-    block_key = AES.new(rif, AES.MODE_ECB).encrypt(bytes(16))
+    block_key = AES.new(free if license == 3 else rif, AES.MODE_ECB).encrypt(bytes(16))
     encrypted = AES.new(block_key, AES.MODE_CBC, iv=bytes(16)).encrypt(plain)
     return header + mac(block_key, encrypted) + encrypted + bytes(16)
 
@@ -70,8 +70,9 @@ class EntitlementTests(unittest.TestCase):
                         SDL_AUDIODRIVER='dummy', SDL_VIDEODRIVER='dummy')
 
     def probe(self, expected):
-        result = subprocess.run([str(ROOT / 'build-smoke/TankBattlesRecomp'),
-                                 str(ROOT / 'build-smoke/synthetic/smoke.elf')],
+        runner = Path(os.environ.get('TB_ENTITLEMENT_TEST_RUNNER', str(ROOT / 'build-smoke/TankBattlesRecomp')))
+        image = Path(os.environ.get('TB_ENTITLEMENT_TEST_ELF', str(ROOT / 'build-smoke/synthetic/smoke.elf')))
+        result = subprocess.run([str(runner), str(image)],
                                 env=self.env, cwd=ROOT, capture_output=True, timeout=10)
         log = (result.stdout + result.stderr).decode(errors='replace')
         (self.directory / 'probe.log').write_text(log)
@@ -81,6 +82,26 @@ class EntitlementTests(unittest.TestCase):
 
     def test_valid_unlock(self):
         self.probe(0)
+
+    def test_license_three_without_rap_or_sidecar(self):
+        self.rif.unlink()
+        self.edat.write_bytes(fixture(self.key, license=3))
+        self.probe(0)
+
+    def test_license_three_rejects_corruption(self):
+        self.rif.unlink()
+        original = fixture(self.key, license=3)
+        for offset in (80, 96, 335):
+            damaged = bytearray(original)
+            damaged[offset] ^= 1
+            self.edat.write_bytes(damaged)
+            with self.subTest(offset=offset):
+                self.probe(0x80029521)
+
+    def test_license_three_rejects_wrong_payload(self):
+        self.rif.unlink()
+        self.edat.write_bytes(fixture(self.key, license=3, magic=b'FAIL'))
+        self.probe(0x80029521)
 
     def test_missing_unlock(self):
         self.edat.unlink()
@@ -96,6 +117,10 @@ class EntitlementTests(unittest.TestCase):
 
     def test_invalid_rif_size(self):
         self.rif.write_bytes(b'invalid')
+        self.probe(0x80029521)
+
+    def test_oversized_rif_is_rejected(self):
+        self.rif.write_bytes(self.key + b'extra')
         self.probe(0x80029521)
 
     def test_wrong_rif_ignores_plaintext_cache_and_environment(self):

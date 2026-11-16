@@ -2,6 +2,7 @@
 """Derive a local SDK RIF sidecar from the user's purchased RAP, without logging keys."""
 from __future__ import annotations
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -12,8 +13,14 @@ from port import ROOT, resolve
 
 CONTENT_ID = "UP2006-NPUB30154_00-TANKBATTLES00KEY"
 
-def platform_tables(checkout):
-    # Public format constants remain in the user's RPCS3 source checkout.
+def platform_tables(checkout=None):
+    if checkout is None:
+        data = json.loads(Path(__file__).with_name("rap_format.json").read_text())
+        tables = {name: bytes.fromhex(value) for name, value in data["tables"].items()}
+        if set(tables) != {"RAP_KEY", "RAP_PBOX", "RAP_E1", "RAP_E2"} or any(len(value) != 16 for value in tables.values()):
+            raise ValueError("Invalid bundled RAP format tables")
+        return tables
+    # An explicit source checkout remains available for independent verification.
     header = (Path(checkout) / "rpcs3/Crypto/key_vault.h").read_text()
     tables = {}
     for name in ("RAP_KEY", "RAP_PBOX", "RAP_E1", "RAP_E2"):
@@ -46,7 +53,7 @@ def derive_rif(rap, tables):
             value[index] = (before - subtraction) & 255
     return bytes(value)
 
-def prepare(directory, checkout):
+def prepare(directory, checkout=None):
     directory = Path(directory)
     edat = directory / (CONTENT_ID + ".edat")
     rap = directory / (CONTENT_ID + ".rap")
@@ -66,13 +73,13 @@ def prepare(directory, checkout):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rpcs3-source", default="../rpcs3", help="Local RPCS3 source checkout containing public format tables")
+    parser.add_argument("--rpcs3-source", help="Optional local RPCS3 source checkout to verify against instead of bundled public format tables")
     parser.add_argument("--exdata", help="Local purchased unlock directory; defaults to the configured HDD0 profile")
     args = parser.parse_args()
     try:
         config = tomllib.loads((ROOT / "config.toml").read_text())
         directory = resolve(args.exdata) if args.exdata else resolve(os.environ.get("PS3_HDD0_ROOT") or config["paths"]["hdd0_root"]) / "home/00000001/exdata"
-        prepare(directory, resolve(args.rpcs3_source))
+        prepare(directory, resolve(args.rpcs3_source) if args.rpcs3_source else None)
         print("Prepared local unlock RIF sidecar; private key bytes were not logged.")
     except (OSError, ValueError) as error:
         parser.exit(1, f"error: {error}\n")

@@ -1,0 +1,11 @@
+{
+  "source": "RPCS3 rpcs3/Crypto/key_vault.h",
+  "license": "GPL-2.0-only; see licenses/RPCS3-GPL-2.0.txt",
+  "description": "Public RAP format constants, not a purchased license or per-title secret.",
+  "tables": {
+    "RAP_KEY": "869f7745c13fd890ccf29188e3cc3edf",
+    "RAP_PBOX": "0c030604010b0f08020700050a0e0d09",
+    "RAP_E1": "a93e1fd67c55a329b75fdda62a95c7a5",
+    "RAP_E2": "67d45da3296d006a4e7c537bf5538c74"
+  }
+}
