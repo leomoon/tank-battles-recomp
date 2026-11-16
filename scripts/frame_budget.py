@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 SYSCALL, USLEEP, DRAIN, FLIP_FIFO, FLIP_REQ, PRESENT, HLE = 1, 2, 7, 8, 9, 10, 15
-CLOCK_SLEEP, PUT_ADVANCE, FENCE_WAIT, DRAIN_CALL, VBLANK, PRESENT_FINISH = 16, 17, 18, 19, 20, 21
+CLOCK_SLEEP, PUT_ADVANCE, FENCE_WAIT, DRAIN_CALL, VBLANK, PRESENT_FINISH, BATCH_SUBMIT, PUBLISH = 16, 17, 18, 19, 20, 21, 22, 23
 SYSCALL_NAMES = {43: 'thread_yield', 44: 'thread_join', 85: 'event_flag_wait', 92: 'semaphore_wait',
                  97: 'lwmutex_lock', 102: 'mutex_lock', 107: 'cond_wait', 113: 'lwcond_wait',
                  130: 'event_queue_receive', 141: 'usleep', 142: 'sleep'}
@@ -163,11 +163,17 @@ def analyze(spans, names=None, nids=None):
     guests.sort(key=lambda g: -g['running_ms'])
     walker_sum = sum(walker_mean[p] for p in ('drain', 'present', 'clock_sleep', 'other'))
     vblanks = sum(1 for s in spans if s[0] == VBLANK and first <= s[4] < last)
+    submits = [s for s in spans if s[0] == BATCH_SUBMIT and first <= s[4] < last]
+    publications = sum(1 for s in spans if s[0] == PUBLISH and first <= s[4] < last)
+    fence_waits = sum(1 for s in spans if s[0] == FENCE_WAIT and first <= s[4] < last)
     finishing = Union((s[4], s[5]) for s in spans if s[0] == PRESENT_FINISH)
     present_thread = sum(finishing.within(a, b) for a, b in frames) / count
     return dict(frames=count, fps=1000.0 / frame_mean, vblank_hz=vblanks * 1000.0 / (last - first) if vblanks else None, frame_ms=summary([r['frame_ms'] for r in rows]),
                 walker_ms_per_frame=walker_mean, present_thread_ms_per_frame=present_thread, walker_accounted_fraction=walker_sum / frame_mean,
                 guest_threads=guests, put_to_drain_ms=summary(latency), put_advances=len(latency),
+                async_submits_per_frame=len(submits) / count,
+                idle_submits_per_frame=sum(1 for s in submits if s[2]) / count,
+                publications_per_frame=publications / count, fence_waits_per_frame=fence_waits / count,
                 drains_per_frame=sum(1 for t in drain_starts if first <= t < last) / count)
 
 
@@ -177,6 +183,13 @@ def render(result):
              'walker ms/frame: ' + '  '.join(f"{k} {v:.2f}" for k, v in result['walker_ms_per_frame'].items()),
              f"walker parts cover {100 * result['walker_accounted_fraction']:.1f}% of frame time; "
              f"{result['drains_per_frame']:.1f} drains/frame"]
+    line = (f"per frame: {result['publications_per_frame']:.1f} label/reference publications, "
+            f"{result['async_submits_per_frame']:.1f} async batch submits ({result['idle_submits_per_frame']:.1f} at idle), "
+            f"{result['fence_waits_per_frame']:.1f} fence waits")
+    if 'gpu_submissions_per_frame' in result:
+        line += (f"; {result['gpu_submissions_per_frame']:.1f} GPU submissions, "
+                 f"{result['publications_per_gpu_submission']:.1f} publications per submission")
+    lines.append(line)
     if result.get('present_thread_ms_per_frame'):
         lines.append(f"present thread {result['present_thread_ms_per_frame']:.2f} ms/frame (off the walker)")
     if result.get('vblank_hz'):
@@ -219,6 +232,12 @@ def report(trace, build_dir='build-vulkan', json_path=None):
     flips = sorted(s[4] for s in spans if s[0] == FLIP_FIFO)
     result['fence_waits_by_site'] = fence_sites(spans, wait_sites(Path(trace).parent / 'startup.log'),
                                                 flips[0], flips[-1], result['frames'])
+    # A serial site ("wait:") submits its own command buffer; slot reuse and
+    # completion waits only wait for batches already counted as submitted.
+    serial = sum(n for label, n, _ in result['fence_waits_by_site'] if label.startswith('wait:'))
+    if result['fence_waits_by_site']:
+        result['gpu_submissions_per_frame'] = result['async_submits_per_frame'] + serial
+        result['publications_per_gpu_submission'] = result['publications_per_frame'] / max(result['gpu_submissions_per_frame'], 1e-9)
     result['trace_header'] = header
     if json_path:
         Path(json_path).write_text(json.dumps(result, indent=2) + '\n')

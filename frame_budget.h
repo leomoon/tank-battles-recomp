@@ -14,6 +14,8 @@
 #define TB_FT_DRAIN_CALL  19  /* one cellGcm_rsx_process_fifo call, a = put seen */
 #define TB_FT_VBLANK      20  /* instant: one vblank beat was ticked             */
 #define TB_FT_PRESENT_FINISH 21 /* present thread: wait, swapchain blit, present  */
+#define TB_FT_BATCH_SUBMIT 22 /* instant: a draw batch was submitted, a = 1 idle */
+#define TB_FT_PUBLISH      23 /* instant: a label/reference/report was published, a = method */
 
 #ifdef __cplusplus
 extern "C" {

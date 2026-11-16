@@ -231,6 +231,7 @@ static void drain_fifo(void)
 #if defined(PS3RECOMP_RSX_VULKAN)
 extern "C" void rsx_vulkan_backend_present_begin(void);
 extern "C" void rsx_vulkan_backend_present_finish(void);
+extern "C" void tb_vk_idle_submit(void);   /* sdk_overrides/vulkan_async_batches.inc */
 /* Process lifetime on purpose: exit() must not destroy a condition variable
  * the present thread is still waiting on (glibc blocks in that destructor). */
 struct PresentQueue { std::mutex mu; std::condition_variable cv; unsigned requested = 0, finished = 0; };
@@ -412,7 +413,11 @@ static DWORD WINAPI rsx_walker(LPVOID)
              * like an idle walker so it does not spin a core. */
             if (gcm_control_word(4) != get || gcm_control_word(0) != put) { idle = 1; continue; }
         }
-        /* Idle: yield briefly, then poll at 100 us, and at 250 us after 2 ms. */
+        /* Idle: hand the GPU whatever is recorded, then yield briefly, then
+         * poll at 100 us, and at 250 us after 2 ms. */
+#if defined(PS3RECOMP_RSX_VULKAN)
+        if (idle == 1) tb_vk_idle_submit();
+#endif
         idle++;
         if (idle < 16)       std::this_thread::yield();
         else if (idle < 36)  walker_sleep_us(100);

@@ -129,6 +129,10 @@ static int tb_async_flush(void)
     if (vk_queue_submit(&si, s_vk.fence) != VK_SUCCESS) { VK_LOG("vkQueueSubmit (batch) failed\n"); return 1; }
     tb_slot[tb_cur].inflight = 1;
     s_eb.flushes++;
+    if (tb_frame_budget_on()) {
+        const uint64_t t = tb_frame_budget_now();
+        tb_frame_budget_span(TB_FT_BATCH_SUBMIT, tb_wait_label && !strcmp(tb_wait_label, "async:idle"), t, t);
+    }
 
     /* The next slot: wait for its previous batch, then its rings and pool are free. */
     tb_cur = (tb_cur + 1) % TB_VK_SLOTS;
@@ -141,6 +145,18 @@ static int tb_async_flush(void)
     s_eb.sets = 0;
     s_eb.vb_head = s_eb.ib_head = s_eb.ub_head = s_eb.sb_head = 0;
     return 1;
+}
+
+/* The walker found nothing to drain: hand the GPU what is recorded instead
+ * of leaving it in the open batch until the next boundary, so GPU work
+ * overlaps the guest building the rest of the frame. Never waits unless the
+ * next slot is still in flight. Walker thread only, like all recording. */
+void tb_vk_idle_submit(void)
+{
+    if (tb_async != 1 || !s_eb_pending) return;
+    tb_wait_label = "async:idle";
+    vk_eng_flush();
+    tb_wait_label = NULL;
 }
 
 /* Everything recorded so far submitted and finished: before destroying an

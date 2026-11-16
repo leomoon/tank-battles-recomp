@@ -259,7 +259,7 @@ def main():
    text='#include "'+str(header)+'"\n#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n'+macro+text
   if relative=='libs/video/cellGcmSys.c':
    anchor='if ((m==0x0050u || m==0x0104u || m==0x1D70u || m==0x1D74u || m==0x1800u) && rsx_draw_engine_enabled()) rsx_draw_engine_flush();'
-   cases=''.join('case '+method+'u: { TB_DEPTH_COST("fifo:'+method+'",0,0); tb_publication_flush(); break; }' for method in ['0x0050','0x0104','0x1D70','0x1D74','0x1800'])
+   cases=''.join('case '+method+'u: { TB_DEPTH_COST("fifo:'+method+'",0,0); tb_publication_flush_at('+method+'u); break; }' for method in ['0x0050','0x0104','0x1D70','0x1D74','0x1800'])
    if text.count(anchor)!=1:raise SystemExit('FIFO wait anchor mismatch')
    text=text.replace(anchor,'if(rsx_draw_engine_enabled())switch(m){'+cases+'default:break;}')
    text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/gcm_label_publication.inc')+'"\n'+text

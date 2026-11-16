@@ -22,6 +22,7 @@
  *
  * TB_LABEL_SYNC=1 restores the previous flush-and-wait before every
  * publication, for A/B comparison and as a fallback. */
+#include <stdint.h>
 #include <stdlib.h>
 int rsx_draw_engine_enabled(void);
 void rsx_draw_engine_flush(void);
@@ -37,7 +38,18 @@ static int tb_label_sync(void)
 }
 
 /* Called before a guest-visible publication. */
-static void tb_publication_flush(void)
+#include "../frame_budget.h"
+/* Standalone FIFO fixtures link this file without the port's timeline. */
+__attribute__((weak)) int tb_frame_budget_on(void) { return 0; }
+__attribute__((weak)) uint64_t tb_frame_budget_now(void) { return 0; }
+__attribute__((weak)) void tb_frame_budget_span(unsigned kind, uint32_t a, uint64_t t0, uint64_t t1)
+{ (void)kind; (void)a; (void)t0; (void)t1; }
+static void tb_publication_flush_at(uint32_t method)
 {
+    if (tb_frame_budget_on()) {
+        const uint64_t t = tb_frame_budget_now();
+        tb_frame_budget_span(TB_FT_PUBLISH, method, t, t);
+    }
     if (tb_label_sync() && rsx_draw_engine_enabled()) rsx_draw_engine_flush();
 }
+static void tb_publication_flush(void) { tb_publication_flush_at(0x006C); }   /* NV406E release */

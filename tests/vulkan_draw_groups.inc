@@ -58,6 +58,12 @@ int main(void)
     pixel(a,2,8,255,0,0);pixel(a,10,8,0,255,0);
     draw_color(0,0,1,0);vk_eng_bind_targets(NULL,&b,1,0);draw_color(1,1,0,8);
     assert(s_eb_pending==1);pixel(a,2,8,0,0,255);pixel(b,10,8,255,255,0);
+    if (tb_async_active()) {
+        /* An idle walker hands the open batch to the GPU without waiting. */
+        vk_eng_bind_targets(NULL,&a,1,0);draw_color(0,1,0,0);assert(s_eb_pending==1);
+        tb_vk_idle_submit();assert(!s_eb_pending && tb_async_inflight());
+        pixel(a,2,8,0,255,0);
+    }
     /* A partial upload has to end a pending draw pass before reusing staging;
      * with asynchronous batches it joins the batch through the staging ring. */
     u32 texture=vk_eng_texture_create(NULL,RSX_BE_FMT_R8G8B8A8,2,2,1,1,0xAAE4,0x85);assert(texture);

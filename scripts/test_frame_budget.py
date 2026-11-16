@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from frame_budget import (CLOCK_SLEEP, DRAIN_CALL, FENCE_WAIT, FLIP_FIFO, HLE, PRESENT, PUT_ADVANCE, SYSCALL,
+from frame_budget import (BATCH_SUBMIT, PUBLISH, CLOCK_SLEEP, DRAIN_CALL, FENCE_WAIT, FLIP_FIFO, HLE, PRESENT, PUT_ADVANCE, SYSCALL,
                           USLEEP, VBLANK, Union, analyze, load)
 
 
@@ -23,6 +23,9 @@ def two_frames():
               span(SYSCALL, 40, 44, who=1, a=92), span(PUT_ADVANCE, 12, 12, a=0x200),
               span(PUT_ADVANCE, 31, 31, a=0x300)]
     spans += [span(VBLANK, t, t) for t in range(0, 60, 16)]
+    # Ten publications, two batch submissions (one at idle) and two fence waits.
+    spans += [span(PUBLISH, 1 + t, 1 + t, a=0x1D70) for t in range(10)]
+    spans += [span(BATCH_SUBMIT, 9, 9), span(BATCH_SUBMIT, 40, 40, a=1)]
     return sorted(spans, key=lambda s: s[4])
 
 
@@ -41,6 +44,13 @@ class FrameBudgetTests(unittest.TestCase):
         self.assertLess(abs(result['walker_accounted_fraction'] - 1), 0.05)
         self.assertAlmostEqual(result['drains_per_frame'], 2)
         self.assertAlmostEqual(result['vblank_hz'], 4 * 1000 / 60)
+
+    def test_counts_publications_and_submissions_per_frame(self):
+        result = analyze(two_frames())
+        self.assertAlmostEqual(result['publications_per_frame'], 5)
+        self.assertAlmostEqual(result['async_submits_per_frame'], 1)
+        self.assertAlmostEqual(result['idle_submits_per_frame'], 0.5)
+        self.assertAlmostEqual(result['fence_waits_per_frame'], 1)
 
     def test_guest_blocking_is_a_union_not_a_sum(self):
         guest = analyze(two_frames(), nids={0xC44D8F34: 'cellGcmSetWaitFlip'})['guest_threads'][0]
