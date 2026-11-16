@@ -198,6 +198,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_present_mode.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/gcm_label_publication.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_async_batches.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/page_census_arm.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/scripts/submission_overlay.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_scanout.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/edat_cache.inc" "${PS3RECOMP_DIR}/libs/filesystem/edat.c")
@@ -268,6 +269,7 @@ add_executable(${PROJECT_NAME}
     resource_diagnostics.cpp
     rendering_profile.cpp
     frame_budget.cpp
+    page_census.cpp
     rsx_texture_diagnostics.cpp
     texture_decode.cpp
     texture_decode_fast.cpp

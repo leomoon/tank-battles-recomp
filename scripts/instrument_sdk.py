@@ -71,7 +71,7 @@ EDITS={
   '                return i;\n        const char* enabled=getenv("GCM_SCANOUT_SURFACES");\n        if (!enabled || atoi(enabled)) return tb_scanout_surface(d);\n    }\n    return eng_current_surface();'),
  ('    pd_present(target);', '    tb_scanout_sample(buffer_id,target,g.surfaces[target].offset);\n    tb_frame_order(buffer_id,g.surfaces[target].offset,g.surfaces[target].color_serial,g.frames);\n    pd_present(target);'),
  ('void rsx_draw_engine_note_flip(u32 buffer_id)\n{\n    g.last_flip_buffer = buffer_id & 7u;\n}',
-  'void rsx_draw_engine_note_flip(u32 buffer_id)\n{\n    g.last_flip_buffer = buffer_id & 7u;\n    tb_fps_guest_flip();\n    tb_trace_boundary();\n}'),
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/page_census_arm.inc')+'"\nvoid rsx_draw_engine_note_flip(u32 buffer_id)\n{\n    g.last_flip_buffer = buffer_id & 7u;\n    tb_fps_guest_flip();\n    tb_trace_boundary();\n    tb_page_census_arm();\n}'),
  ('    rsx_dispatch_method(&g.rsx, m, arg);', '    tb_trace_method(0,m,arg);\n    rsx_dispatch_method(&g.rsx, m, arg);'),
  ('            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,',
   '            if (!f && !m) tb_rsx_texture_capture(location,offset,fmt,w,h,pitch,face,tl->face_bytes,g.tex_staging,tl->dst_row_bytes,tl->rows);\n            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,')],
@@ -274,7 +274,7 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}
