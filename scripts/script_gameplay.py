@@ -22,7 +22,7 @@ def default_battle_map(text):
 
 
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");parser.add_argument("--label-sync",action="store_true");parser.add_argument("--vk-serial",action="store_true");parser.add_argument("--page-census",action="store_true");parser.add_argument("--cpu-resolve",action="store_true");parser.add_argument("--vblank-hz",default="60");a=parser.parse_args()
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");parser.add_argument("--label-sync",action="store_true");parser.add_argument("--vk-serial",action="store_true");parser.add_argument("--page-census",action="store_true");parser.add_argument("--cpu-resolve",action="store_true");parser.add_argument("--vblank-hz",default="60");parser.add_argument("--soak-minutes",type=float,default=0,help="Keep the session running after live gameplay, cycling rounds and sampling resources; then close normally");a=parser.parse_args()
  if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and (not (a.scopes or a.quick) or a.reference_template):parser.error('Shorter intervals require a native --scopes or --quick run and 10..60 seconds')
  out=resolve(a.output)
  if not out.is_relative_to(ROOT/'analysis/performance') or out.exists():parser.error('Use a new output inside analysis/performance/')
@@ -58,9 +58,10 @@ def main():
   if not a.appimage:parser.error('--reference-template requires --appimage')
   cmd=[sys.executable,str(ROOT/'scripts/measure_reference.py'),'--output',str(out),'--scene',a.scene,'--template',a.reference_template,'--appimage',a.appimage,'--timeout','260']
  else:
-  cmd=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--scene',a.scene,'--profile',str(ROOT/'analysis/performance/profiles'/str(out.relative_to(ROOT/'analysis/performance')).replace('/','-')),'--pin-window','--scripted-input',str(pad),'--timeout','260']
+  cmd=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--scene',a.scene,'--profile',str(ROOT/'analysis/performance/profiles'/str(out.relative_to(ROOT/'analysis/performance')).replace('/','-')),'--pin-window','--scripted-input',str(pad),'--timeout',str(int(260+60*a.soak_minutes))]
   cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
   if a.depth_gpu:cmd+=['--depth-gpu']
+  if a.soak_minutes:cmd+=['--lifecycle-stats']
   if a.color_readback_cache:cmd+=['--color-readback-cache']
   if a.fence_poll:cmd+=['--fence-poll']
   if a.label_sync:cmd+=['--label-sync']
@@ -102,6 +103,14 @@ def main():
   timer_text=subprocess.run(['tesseract',str(timer),'stdout','--psm','7','-c','tessedit_char_whitelist=0123456789'],capture_output=True,text=True).stdout
   (out/(label+'-timer.txt')).write_text(timer_text)
   return text
+ def close_owned_window():
+  # X11 can reuse the numeric window id after a child exits. Never close a
+  # newer session's window from an older route's exception cleanup.
+  try:
+   expected=int((out/'pid').read_text())
+   owner=int(subprocess.check_output(['xdotool','getwindowpid',window],text=True,stderr=subprocess.DEVNULL))
+   if owner==expected:request_close(window)
+  except (FileNotFoundError,ValueError,subprocess.CalledProcessError):pass
  def wait(label,words,timeout=65):
   deadline=time.monotonic()+timeout;text=''
   while process.poll() is None and time.monotonic()<deadline:
@@ -145,15 +154,43 @@ def main():
   if invalid_ending_scene(after) or a.scene=='battle' and not live_battle_timer((out/'gameplay-after-timer.txt').read_text()):
    event('invalid-ending-scene',reason='gameplay did not span full requested interval');(out/'invalid-scene.json').write_text(json.dumps(dict(reason='ending scene was not live gameplay')))
   (out/'scene-evidence.json').write_text(json.dumps(dict(before=before,after=after,scripted=True,frames_outside_interval=True),indent=2)+'\n')
+  if a.soak_minutes:
+   # Long session: Confirm every 20 s cycles rounds/results; resources sampled every 10 s.
+   pid=int((out/'pid').read_text());soak_begin=time.monotonic();soak_end=soak_begin+60*a.soak_minutes;last_press=0;samples=[]
+   while time.monotonic()<soak_end and process.poll() is None:
+    now=time.monotonic()
+    if now-last_press>=20:
+     text=capture('soak-latest');event('soak-scene',ocr=text)
+     control=out/'soak-control.json'
+     action=json.loads(control.read_text()) if control.exists() else {'mask':0x4000}
+     pad.write_text(str(action.get('mask',0x4000))+' 2\n');last_press=now;event('soak-input',mask=action.get('mask',0x4000))
+     if control.exists():control.unlink()
+    try:
+     status=dict(l.split(':',1) for l in Path(f'/proc/{pid}/status').read_text().splitlines() if ':' in l)
+     fds=len(list(Path(f'/proc/{pid}/fd').iterdir()))
+     gpu=subprocess.run(['nvidia-smi','--query-compute-apps=pid,used_memory','--format=csv,noheader,nounits'],capture_output=True,text=True).stdout
+     gpu_rows=[x for x in gpu.splitlines() if x.split(',')[0].strip()==str(pid)]
+     gpu_mb=sum(int(x.split(',')[1]) for x in gpu_rows) if gpu_rows else None
+     samples.append(dict(seconds=round(now-origin,1),rss_kb=int(status['VmRSS'].split()[0]),threads=int(status['Threads']),fds=fds,gpu_mb=gpu_mb))
+     (out/'soak.json').write_text(json.dumps(samples,indent=1)+'\n')
+    except (FileNotFoundError,KeyError,ValueError):pass
+    time.sleep(10)
+   event('soak-end',samples=len(samples),elapsed_seconds=time.monotonic()-soak_begin,duration_passed=time.monotonic()>=soak_end)
+   capture('soak-final')
   import os,signal
-  if not a.reference_template:os.kill(int((out/'pid').read_text()),signal.SIGUSR1);time.sleep(.3)
+  guest_alive=Path('/proc', (out/'pid').read_text().strip()).exists() if not a.reference_template else True
+  if not a.reference_template and guest_alive:
+   try:os.kill(int((out/'pid').read_text()),signal.SIGUSR1);time.sleep(.3)
+   except ProcessLookupError:guest_alive=False
   if a.reference_template:(out/'stop.json').write_text('{}')
-  else:request_close(window)
+  elif guest_alive:close_owned_window()
+  close_requested=time.monotonic()
   process.wait(timeout=20)
+  event('closed',seconds_to_exit=round(time.monotonic()-close_requested,2))
  except BaseException as error:
   event('route-failure',error=str(error))
   if window:
-   try:request_close(window)
+   try:close_owned_window()
    except Exception:pass
   try:process.wait(timeout=20)
   except subprocess.TimeoutExpired:process.terminate();process.wait(timeout=10)

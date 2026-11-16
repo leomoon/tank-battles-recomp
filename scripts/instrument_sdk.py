@@ -10,6 +10,16 @@ EDITS={
  'libs/filesystem/cellFs.c':[(
   '    const char* mode = flags_to_mode(flags);\n    FILE* fp = fopen(host_path, mode);',
   '    HOST_STAT_T tb_directory;\n    if (HOST_STAT(host_path, &tb_directory) == 0 && (tb_directory.st_mode & S_IFMT) == S_IFDIR)\n        return (s32)CELL_EISDIR;\n    const char* mode = flags_to_mode(flags);\n    FILE* fp = fopen(host_path, mode);')],
+ 'libs/system/cellGame.c':[('static char s_content_path[CELL_GAME_PATH_MAX] = "./gamedata/dev_hdd0/game";','/* Host paths (the repository can live anywhere) need more than the 128-byte\n * guest limit CELL_GAME_PATH_MAX: a truncated host USRDIR path created stray\n * prefix directories such as USR or USRD. Guest-visible paths keep the limit. */\n#define TB_HOST_PATH_MAX 4096\nstatic char s_content_path[TB_HOST_PATH_MAX] = "./gamedata/dev_hdd0/game";'),
+ ('static char s_content_info_path[CELL_GAME_PATH_MAX] = "";\nstatic char s_usrdir_path[CELL_GAME_PATH_MAX] = "";\nstatic char s_tmp_path[CELL_GAME_PATH_MAX] = "";','static char s_content_info_path[TB_HOST_PATH_MAX] = "";\nstatic char s_usrdir_path[TB_HOST_PATH_MAX] = "";\nstatic char s_tmp_path[TB_HOST_PATH_MAX] = "";'),
+ ('static void ensure_dirs(const char* path)\n{\n    char tmp[CELL_GAME_PATH_MAX];','static void ensure_dirs(const char* path)\n{\n    char tmp[TB_HOST_PATH_MAX];'),
+ ('static s32 content_free_kb(void)\n{\n    char path[CELL_GAME_PATH_MAX];','static s32 content_free_kb(void)\n{\n    char path[TB_HOST_PATH_MAX];'),
+ ('    char path[CELL_GAME_PATH_MAX];\n    snprintf(path, sizeof(path), "%s/%s", content_root(), check_dir);','    char path[TB_HOST_PATH_MAX];\n    snprintf(path, sizeof(path), "%s/%s", content_root(), check_dir);'),
+ ('    char path[CELL_GAME_PATH_MAX];\n    snprintf(path, sizeof(path), "%s/%s", content_root(), create_dir);','    char path[TB_HOST_PATH_MAX];\n    snprintf(path, sizeof(path), "%s/%s", content_root(), create_dir);'),
+ ('    char usrdir[CELL_GAME_PATH_MAX];\n    snprintf(usrdir, sizeof(usrdir), "%s/USRDIR", path);','    char usrdir[TB_HOST_PATH_MAX];\n    snprintf(usrdir, sizeof(usrdir), "%s/USRDIR", path);'),
+ (
+  '            extern const char* ppu_vfs_root;\n            char vpath[CELL_GAME_PATH_MAX];\n            snprintf(vpath, sizeof vpath, "%s/game/%s/USRDIR", ppu_vfs_root, s_check_dir);\n            ensure_dirs(vpath);',
+  '            /* Only for a disc-style VFS root with no separate HDD0 mount. Here the\n             * VFS root is the installed, read-only title folder and /dev_hdd0 is\n             * PS3_HDD0_ROOT (already created above), so this made\n             * NPUB30154/game/NPUB30154/USRDIR inside the game. */\n            extern const char* ppu_vfs_root;\n            const char* tb_hdd0 = getenv("PS3_HDD0_ROOT");\n            if (!tb_hdd0 || !*tb_hdd0) {\n            char vpath[TB_HOST_PATH_MAX];\n            snprintf(vpath, sizeof vpath, "%s/game/%s/USRDIR", ppu_vfs_root, s_check_dir);\n            ensure_dirs(vpath);\n            }')],
  'libs/input/cellPad.c':[
  ('    if (!pad_host_window_focused()) {',
   '    if (!pad_host_window_focused()) {\n        (void)tb_keyboard_take();'),
@@ -201,7 +211,16 @@ def main():
   if relative == 'libs/filesystem/edat.c': text += '\n#endif /* Linux cache override */\n'
   text=re.sub(r'#include "([^"\n]+)"',include,text)
   text='#include "'+str(Path(__file__).resolve().parent.parent/'execution_policy_api.h')+'"\n'+text
+  if relative in ('libs/video/rsx_vulkan_backend.c','libs/input/cellPad.c'):
+   functions=['rsx_vulkan_backend_pump_messages'] if relative.endswith('rsx_vulkan_backend.c') else ['pad_poll_sdl2','pad_sdl_hotplug','pad_sdl_close']
+   include='#include \"'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/sdl_event_gate.h')+'\"\n'
+   for function in functions:
+    pattern=r'(^'+('int ' if function.startswith('rsx_') else 'static void ')+function+r'\([^;{]*\)\n\{)'
+    text,count=re.subn(pattern,lambda m:include+m[0]+'\n    TB_SDL_EVENT_GATE();',text,flags=re.M)
+    if count!=1:raise SystemExit('SDL event gate anchor mismatch: '+function)
   if relative=='libs/video/rsx_vulkan_backend.c':
+   anchor='int rsx_vulkan_backend_pump_messages(void)\n{'
+   text=text.replace(anchor,'#include \"'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/lifecycle_stats.inc')+'\"\n'+anchor+'\n    tb_lifecycle_stats();')
    for anchor in ('X(vkCreateFence) X(vkDestroyFence)','static int vk_submit_and_wait(void)\n{','pvkWaitForFences(s_vk.device, 1, &s_vk.fence, VK_TRUE, UINT64_MAX)'):
     if text.count(anchor)!=1:raise SystemExit('Fence poll anchor mismatch: '+anchor)
    text=text.replace('X(vkCreateFence) X(vkDestroyFence)', 'X(vkGetFenceStatus) X(vkCreateFence) X(vkDestroyFence)')
@@ -282,7 +301,7 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}
@@ -294,6 +313,8 @@ def main():
   if relative=='libs/video/rsx_draw_engine.c':
    record['port_inputs']['color_readback_cache.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/color_readback_cache.inc').read_bytes()).hexdigest()
    record['port_inputs']['index_remap_cache.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/index_remap_cache.inc').read_bytes()).hexdigest()
+  if relative in ('libs/video/rsx_vulkan_backend.c','libs/input/cellPad.c'):
+   record.setdefault('port_inputs',{})['sdl_event_gate.h']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/sdl_event_gate.h').read_bytes()).hexdigest()
   records.append(record)
  (out/'manifest.json').write_text(json.dumps(records,indent=2)+'\n')
 if __name__=='__main__':main()

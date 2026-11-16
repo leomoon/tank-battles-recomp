@@ -234,6 +234,10 @@ extern "C" void rsx_vulkan_backend_present_finish(void);
 extern "C" void tb_vk_idle_submit(void);   /* sdk_overrides/vulkan_async_batches.inc */
 /* Process lifetime on purpose: exit() must not destroy a condition variable
  * the present thread is still waiting on (glibc blocks in that destructor). */
+static std::atomic<bool> render_stopping{false};
+static HANDLE walker_handle, ticker_handle, present_handle;
+static DWORD walker_tid, ticker_tid, present_tid;
+static void stop_render_workers(void);
 struct PresentQueue { std::mutex mu; std::condition_variable cv; unsigned requested = 0, finished = 0; uint64_t vblanks = 0; };
 static PresentQueue& present_queue(void) { static PresentQueue* q = new PresentQueue; return *q; }
 
@@ -261,18 +265,19 @@ static DWORD WINAPI present_worker(LPVOID)
 #if defined(__linux__)
     prctl(PR_SET_NAME, "tb-present", 0, 0, 0);
 #endif
-    for (;;) {
+    while (!render_stopping.load(std::memory_order_acquire)) {
         PresentQueue& q = present_queue();
         {
             std::unique_lock<std::mutex> lock(q.mu);
-            q.cv.wait(lock, [&q] { return q.requested != q.finished; });
+            q.cv.wait(lock, [&q] { return render_stopping.load(std::memory_order_acquire) || q.requested != q.finished; });
+            if (render_stopping.load(std::memory_order_acquire)) break;
             q.finished = q.requested;   /* later requests complete earlier ones */
             /* VSYNC flips become visible at the vblank, as on the console:
              * show the frame on the next beat rather than whenever the walker
              * reached its flip, so the display cadence is the beat's. */
             if (present_on_vblank()) {
                 const uint64_t seen = q.vblanks;
-                q.cv.wait_for(lock, std::chrono::milliseconds(50), [&q, seen] { return q.vblanks != seen; });
+                q.cv.wait_for(lock, std::chrono::milliseconds(50), [&q, seen] { return render_stopping.load(std::memory_order_acquire) || q.vblanks != seen; });
             }
         }
         const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
@@ -282,6 +287,24 @@ static DWORD WINAPI present_worker(LPVOID)
     return 0;
 }
 #endif
+
+/* Runs on the host quit coordinator, before process-owned objects destruct. */
+static void stop_render_workers(void)
+{
+#if defined(PS3RECOMP_RSX_VULKAN)
+    render_stopping.store(true, std::memory_order_release);
+    present_queue().cv.notify_all();
+    const DWORD self = GetCurrentThreadId();
+    for (auto item : {std::pair<HANDLE, DWORD>{walker_handle, walker_tid},
+                      {ticker_handle, ticker_tid}, {present_handle, present_tid}}) {
+        if (!item.first || item.second == self) continue;
+        if (WaitForSingleObject(item.first, 5000) == WAIT_OBJECT_0) {
+            CloseHandle(item.first);
+            fprintf(stderr, "[shutdown] joined render worker %u\n", (unsigned)item.second);
+        } else fprintf(stderr, "[shutdown] render worker join timed out %u\n", (unsigned)item.second);
+    }
+#endif
+}
 
 static void present_frame_now(void)
 {
@@ -356,11 +379,19 @@ static DWORD WINAPI vblank_ticker(LPVOID)
     prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
     prctl(PR_SET_NAME, "tb-vblank", 0, 0, 0);
 #endif
-    while (g_rsx_state.load(std::memory_order_acquire) == 0) Sleep(1);
+    while (g_rsx_state.load(std::memory_order_acquire) == 0) {
+#if defined(PS3RECOMP_RSX_VULKAN)
+        if (render_stopping.load(std::memory_order_acquire)) return 0;
+#endif
+        Sleep(1);
+    }
     using clock = std::chrono::steady_clock;
     const auto period = vblank_period();
     auto next_tick = clock::now();
     for (;;) {
+#if defined(PS3RECOMP_RSX_VULKAN)
+        if (render_stopping.load(std::memory_order_acquire)) break;
+#endif
         std::this_thread::sleep_until(next_tick);
         int fired = 0;
         while (clock::now() >= next_tick && fired < 240) {
@@ -409,7 +440,7 @@ static DWORD WINAPI rsx_walker(LPVOID)
     g_rsx_state.store(rsx_ok ? 1 : -1, std::memory_order_release);
     if (!rsx_ok) return 0;
 #if defined(PS3RECOMP_RSX_VULKAN)
-    if (present_thread_on()) CreateThread(NULL, 1u * 1024 * 1024, present_worker, NULL, 0, NULL);
+    if (present_thread_on()) present_handle = CreateThread(NULL, 1u * 1024 * 1024, present_worker, NULL, 0, &present_tid);
 #endif
 
     using clock = std::chrono::steady_clock;
@@ -418,6 +449,9 @@ static DWORD WINAPI rsx_walker(LPVOID)
     unsigned idle = 0;
 
     for (;;) {
+#if defined(PS3RECOMP_RSX_VULKAN)
+        if (render_stopping.load(std::memory_order_acquire)) break;
+#endif
         const auto now = clock::now();
         /* Events at least every 2 ms, however busy the FIFO keeps the walker. */
         if (now - last_pump >= std::chrono::milliseconds(2)) {
@@ -682,8 +716,14 @@ int main(int argc, char** argv)
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
     g_ps3_guest_caller = harness_guest_caller;
+#if defined(PS3RECOMP_RSX_VULKAN)
+    atexit(stop_render_workers);
+    walker_handle = CreateThread(NULL, 4u * 1024 * 1024, rsx_walker, NULL, 0, &walker_tid);
+    ticker_handle = CreateThread(NULL, 1u * 1024 * 1024, vblank_ticker, NULL, 0, &ticker_tid);
+#else
     CreateThread(NULL, 4u * 1024 * 1024, rsx_walker, NULL, 0, NULL);
     CreateThread(NULL, 1u * 1024 * 1024, vblank_ticker, NULL, 0, NULL);
+#endif
 
     printf("\n[boot] dispatching entry OPD 0x%08X (stack top 0x%08X)\n\n",
            entry, STACK_TOP);

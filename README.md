@@ -12,6 +12,8 @@ The repository has a pinned ps3recomp dependency, a native runner, configuration
 
 Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Remaining validation includes sustained gameplay performance and simulation speed, broader graphics and mission coverage, and save/audio/input lifecycle behavior. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
 
+Linux play-lifecycle validation now includes two physical controllers, unplug/reconnect, keyboard takeover and Campaign handoff. The observed sdl2-compat unplug abort is fixed by serializing guest controller-event polling with the window event pump. A 30-minute mixed Battle/Campaign/menu soak completed with stable warmed resources and normal rendering-worker shutdown. Fullscreen, resize and focus/hide recovery retained roughly 60 FPS after transitions; short transition gaps up to 182 ms remain. Native minimize behavior was not established on Hyprland. Local evidence is under `analysis/linux-play-gates/`.
+
 ## Structure
 
 ```text

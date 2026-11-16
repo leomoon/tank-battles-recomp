@@ -194,6 +194,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/fps_vulkan.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/gpu_timing.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_draw_group.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/lifecycle_stats.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/sdl_event_gate.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_fence_poll.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_present_mode.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/gcm_label_publication.inc"
@@ -242,6 +244,9 @@ foreach(component rsx_draw_engine.c cellGcmSys.c rsx_texture_layout.c)
     list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)${component}$")
     list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/video/${component}")
 endforeach()
+list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)cellGame.c$")
+list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/system/cellGame.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/libs/system/cellGame.c")
 list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)cellPad.c$")
 list(APPEND EXECUTION_RUNTIME_SOURCES "${EXECUTION_SDK}/libs/input/cellPad.c")
 list(FILTER EXECUTION_RUNTIME_SOURCES EXCLUDE REGEX "(^|/)cellAudio.c$")
