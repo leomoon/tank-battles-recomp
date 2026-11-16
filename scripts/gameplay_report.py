@@ -3,7 +3,7 @@ import json,math,re
 from pathlib import Path
 
 STREAMS=('guest_flip','completed_frame','window_present')
-COMPAT=('scene','guest_resolution','internal_surfaces','window_size','gpu','driver','audio','input_source','build_type','compiler','effective_flags','diagnostics','sdk_verbose','overlay','executable_sha256','sdk_manifest_sha256','source_commit','source_inputs_sha256','submission_mode','texture_decode_mode','depth_conversion','actual_audio','swapchain_sizes')
+COMPAT=('scene','guest_resolution','internal_surfaces','window_size','gpu','driver','audio','input_source','build_type','compiler','effective_flags','diagnostics','sdk_verbose','overlay','executable_sha256','sdk_manifest_sha256','source_commit','source_inputs_sha256','submission_mode','texture_decode_mode','depth_conversion','color_readback_mode','actual_audio','swapchain_sizes')
 
 def renderer_failures(log):
     pattern=r'\[(?:rsx engine|RSX vulkan)\].*(?:failed|unsupported|unhandled|skipped|object table full|stale .* release)'
@@ -47,7 +47,7 @@ def summarize(directory, minimum_seconds=60):
     return dict(manifest=m,cadence=out,baseline_eligible=not any(m['diagnostics'].values()) and m.get('sdk_verbose') is False,scope='Timing measures selected completed guest serials, not pixel uniqueness or simulation speed. Confirm scene and wall-clock progression separately.')
 
 def compare(reports,allowed_variants=(),candidate_plan=None):
-    if set(allowed_variants)-{'overlay','texture_decode_mode','depth_conversion'}:raise ValueError('Unsupported comparison variant')
+    if set(allowed_variants)-{'overlay','texture_decode_mode','depth_conversion','color_readback_mode'}:raise ValueError('Unsupported comparison variant')
     if not reports or any(not r['baseline_eligible'] for r in reports):raise ValueError('Comparison needs clean baselines with verbose SDK logging explicitly disabled; keep profiles separate')
     build_variants=()
     if candidate_plan is not None:
@@ -55,6 +55,7 @@ def compare(reports,allowed_variants=(),candidate_plan=None):
         build_variants=validate_candidate_plan(reports,candidate_plan)
     if 'texture_decode_mode' in allowed_variants and {r['manifest'].get('texture_decode_mode') for r in reports}!={'reference','specialized'}:raise ValueError('Decoder comparison requires exact reference and specialized modes')
     if 'depth_conversion' in allowed_variants and {r['manifest'].get('depth_conversion') for r in reports}!={'reference','gpu'}:raise ValueError('Depth comparison requires exact reference and gpu modes')
+    if 'color_readback_mode' in allowed_variants and {r['manifest'].get('color_readback_mode') for r in reports}!={'reference','cached'}:raise ValueError('Color readback comparison requires reference and cached modes')
     first=reports[0]['manifest']
     for r in reports[1:]:
         for key in COMPAT:

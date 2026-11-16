@@ -36,7 +36,17 @@ def report(directory):
         delta={k:last[k]-first[k] for k in ('calls','requested_bytes','inclusive_ns')}
         if any(v<0 for v in delta.values()):raise ValueError('Nonmonotonic cumulative costs')
         out[path]=dict(observed_anywhere_in_capture=True,aligned_window_available=True,seconds=(last['stamp']-first['stamp'])/1e9,completed_frames=frames,**delta,ms_per_completed_frame=delta['inclusive_ns']/frames/1e6,requested_bytes_per_completed_frame=delta['requested_bytes']/frames)
-    return dict(paths=out,limitations=['Diagnostic inclusive wall time, not CPU cycles or clean throughput. Nested paths overlap; do not sum them.','Each path uses its own first/last cumulative snapshots strictly inside the verified live interval.','Requested bytes include cache hits and rejected calls; they are not actual GPU traffic.','An absent path means no logged calls in this bounded capture, not global PPU/SPU read coverage.'])
+    cache=[]
+    for fields in re.findall(r'\[color-readback\] frame=(\d+) calls=(\d+) hits=(\d+) requested_bytes=(\d+) fetched_bytes=(\d+) monotonic_ns=(\d+)',(directory/'startup.log').read_text(errors='replace')):
+        row=list(map(int,fields))
+        if begin<=row[-1]<end:cache.append(row)
+    snapshot=dict(aligned_window_available=False)
+    if len(cache)>1:
+        first,last=cache[0],cache[-1];delta=[b-a for a,b in zip(first,last)]
+        frames=sum(first[-1]<=t<last[-1] for t in completed)
+        if not frames or any(n<0 for n in delta) or delta[2]>delta[1]:raise ValueError('Invalid color snapshot counters')
+        snapshot=dict(aligned_window_available=True,completed_frames=frames,seconds=delta[-1]/1e9,calls=delta[1],hits=delta[2],hit_fraction=delta[2]/delta[1] if delta[1] else None,clipped_requested_bytes_per_frame=delta[3]/frames,backend_snapshot_bytes_per_frame=delta[4]/frames)
+    return dict(paths=out,color_snapshot=snapshot,limitations=['Diagnostic inclusive wall time, not CPU cycles or clean throughput. Nested paths overlap; do not sum them.','Each path uses its own first/last cumulative snapshots strictly inside the verified live interval.','Requested bytes include cache hits and rejected calls; they are not actual GPU traffic. Color snapshot counters describe clipped consumer spans and full backend readback extents, not GPU bus traffic.','An absent path means no logged calls in this bounded capture, not global PPU/SPU read coverage.'])
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

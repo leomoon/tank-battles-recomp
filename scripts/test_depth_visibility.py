@@ -14,7 +14,7 @@ assert s.count('int main(void)')==1
 s=s.replace('int main(void)',(ROOT/'tests/scanout_registration.inc').read_text()+'\n'+(ROOT/'tests/depth_visibility.inc').read_text()+'\nint main(void)')
 s=s.replace('    test_queued_flip_buffer();','    test_queued_flip_buffer();\n    test_registered_scanout_memory();\n    test_texture_write_within_frame();')
 s=s.replace('    test_surface_set();','    test_guest_flip_trace_scope();\n    test_surface_set();')
-s=s.replace('    test_z16_read_as_depth16_on_gpu();','    test_z16_read_as_depth16_on_gpu();test_depth_guest_visibility();')
+s=s.replace('    test_z16_read_as_depth16_on_gpu();','    test_z16_read_as_depth16_on_gpu();test_depth_guest_visibility();test_color_readback_generation_cache();')
 s+='\nvoid tb_frame_order(uint32_t b,uint32_t o,uint64_t s,uint32_t p){(void)b;(void)o;(void)s;(void)p;}\nvoid tb_scanout_sample(uint32_t b,uint32_t s,uint32_t o){(void)b;(void)s;(void)o;}\nvoid tb_rsx_texture_capture(uint32_t a,uint32_t b,uint32_t c,uint32_t d,uint32_t e,uint32_t f,const void* g,uint32_t h,const void* i,uint32_t j,uint32_t k){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;}\n'
 s+='\nvoid tb_fps_guest_flip(void){}\n'
 (out/'fixture.c').write_text(s)

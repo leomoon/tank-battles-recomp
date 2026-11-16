@@ -40,6 +40,16 @@ EDITS={
  ('const char* edat_resolve(const char* host_path, char* buf, size_t cap)',
   '#if defined(__linux__)\n#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/edat_cache.inc')+'"\n#else\nconst char* edat_resolve(const char* host_path, char* buf, size_t cap)')],
  'libs/video/rsx_draw_engine.c':[
+ ('        u8* src = rows + (size_t)r * n * bpp;\n        if (bpp == 8u) {',
+  '        u8* src = tb_cached ? (u8*)tb_cached+(size_t)r*s->w*bpp : rows+(size_t)r*n*bpp;\n        if (!tb_cached && bpp == 8u) {'),
+ ('        } else if (!rgba) {\n            eng_row_convert(src, src, n, 0, 1);',
+  '        } else if (!tb_cached && !rgba) {\n            eng_row_convert(src, src, n, 0, 1);'),
+
+ ('static void eng_row_convert(u8* dst, const u8* src, u32 w, int rgba, int to_guest)',
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/color_readback_cache.inc')+'"\nstatic void eng_row_convert(u8* dst, const u8* src, u32 w, int rgba, int to_guest)'),
+ ('    g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);\n    g.be->readback(g.be->user, s->handle, x, y, n, h, rows, n * bpp);',
+  '    const u8* tb_cached=tb_color_readback_rows(s,x,y,n,h,bpp);\n    if(!tb_cached) {\n    g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);\n    g.be->readback(g.be->user, s->handle, x, y, n, h, rows, n * bpp);\n    }'),
+ ('void rsx_draw_engine_shutdown(void)\n{', 'void rsx_draw_engine_shutdown(void)\n{\n    tb_color_readback_reset();'),
  ('static int eng_zdepth_to_guest(u32 slot)\n{', 'static int eng_zdepth_to_guest(u32 slot)\n{\n    TB_DEPTH_COST("depth-to-guest",(uint64_t)g.zdepths[slot].used_w*g.zdepths[slot].used_h*(g.zdepths[slot].zfmt==1?2:4),g.frames);'),
  ('void rsx_draw_engine_guest_read(u32 location, u32 offset, u32 pitch, u32 w, u32 h)\n{', '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_guest_read.inc')+'"\nvoid rsx_draw_engine_guest_read(u32 location, u32 offset, u32 pitch, u32 w, u32 h)\n{\n    if(tb_depth_guest_read(location,offset,pitch,w,h))return;'),
  ('static u32 eng_zdepth_as_color(u32 slot, const rsx_dsp_texture* t)\n{',
@@ -204,6 +214,8 @@ def main():
     record['port_inputs']['shaders/'+name]=hashlib.sha256((Path(__file__).resolve().parent.parent/'shaders'/name).read_bytes()).hexdigest()
   if relative in ('libs/video/rsx_draw_engine.c','libs/video/cellGcmSys.c'):
    record.setdefault('port_inputs',{})['depth_cost_trace.h']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h').read_bytes()).hexdigest()
+  if relative=='libs/video/rsx_draw_engine.c':
+   record['port_inputs']['color_readback_cache.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/color_readback_cache.inc').read_bytes()).hexdigest()
   records.append(record)
  (out/'manifest.json').write_text(json.dumps(records,indent=2)+'\n')
 if __name__=='__main__':main()

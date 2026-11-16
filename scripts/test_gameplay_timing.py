@@ -102,6 +102,17 @@ int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666
    for field in ('scene','guest_resolution','internal_surfaces','audio','diagnostics','input_source','overlay','executable_sha256'):
     c=dict(b,manifest=dict(b['manifest']));c['manifest'][field]='changed'
     with self.assertRaises(ValueError):compare([a,c],allowed_variants=('depth_conversion',))
+ def test_color_readback_variant_preserves_other_manifest_guards(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);self.fixture(p);r=summarize(p)
+   a=dict(r,manifest=dict(r['manifest'],color_readback_mode='reference'))
+   b=dict(r,manifest=dict(r['manifest'],color_readback_mode='cached'))
+   with self.assertRaises(ValueError):compare([a,b])
+   self.assertEqual(len(compare([a,b],allowed_variants=('color_readback_mode',))),2)
+   with self.assertRaises(ValueError):compare([b],allowed_variants=('color_readback_mode',))
+   for field in ('scene','guest_resolution','internal_surfaces','audio','diagnostics','input_source','overlay','executable_sha256'):
+    c=dict(b,manifest=dict(b['manifest']));c['manifest'][field]='changed'
+    with self.assertRaises(ValueError):compare([a,c],allowed_variants=('color_readback_mode',))
  def test_decoder_variant_is_explicit_and_does_not_relax_other_settings(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p);r=summarize(p)

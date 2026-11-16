@@ -33,4 +33,16 @@ class DepthCostReportTests(unittest.TestCase):
             (p/'startup.log').write_text('[depth-cost] old unaligned data')
             with self.assertRaisesRegex(ValueError,'timestamped'):report(p)
 
+    def test_snapshot_hits_do_not_imply_fewer_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            p=Path(temporary);self.fixture(p)
+            with (p/'startup.log').open('a') as f:
+                f.write('[color-readback] frame=1 calls=6 hits=5 requested_bytes=96 fetched_bytes=100 monotonic_ns=12000000000\n')
+                f.write('[color-readback] frame=2 calls=12 hits=10 requested_bytes=192 fetched_bytes=200 monotonic_ns=14000000000\n')
+            row=report(p)['color_snapshot']
+            self.assertAlmostEqual(row['hit_fraction'],5/6)
+            self.assertEqual(row['completed_frames'],4)
+            self.assertEqual(row['clipped_requested_bytes_per_frame'],24)
+            self.assertEqual(row['backend_snapshot_bytes_per_frame'],25)
+
 if __name__=='__main__':unittest.main()
