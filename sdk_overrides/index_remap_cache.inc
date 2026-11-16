@@ -13,8 +13,10 @@ static void tb_remap_reset(void) {
 static int tb_remap_build(rsx_vertex_remap* remap,rsx_vertex_ref* refs,u32 count,u32* unique)
 {
  TB_DEPTH_COST("index-remap",0,g.frames);
- const char* enabled=getenv("TB_DRAW_REMAP_CACHE");
- if(!enabled || strcmp(enabled,"1") || !remap || !refs || !unique || !count || count>TB_REMAP_LIMIT)
+ static int enabled=-1,verify=-1;   /* per draw: read the switches once */
+ if(enabled<0){const char* e=getenv("TB_DRAW_REMAP_CACHE");enabled=e && !strcmp(e,"1");}
+ if(verify<0){const char* e=getenv("TB_DRAW_REMAP_VERIFY");verify=e && !strcmp(e,"1");}
+ if(!enabled || !remap || !refs || !unique || !count || count>TB_REMAP_LIMIT)
   return rsx_vertex_remap_build(remap,refs,count,unique);
  const size_t source_bytes=(size_t)count*sizeof *refs;
  for(unsigned i=0;i<2;i++) {
@@ -23,8 +25,7 @@ static int tb_remap_build(rsx_vertex_remap* remap,rsx_vertex_ref* refs,u32 count
   u8* data=tb_remap_entries[i].data;
   rsx_vertex_ref* output=(rsx_vertex_ref*)(data+source_bytes);
   u32* occurrences=(u32*)(data+source_bytes*2);
-  const char* verify=getenv("TB_DRAW_REMAP_VERIFY");
-  if(verify && !strcmp(verify,"1")) {
+   if(verify) {
    rsx_vertex_ref* fresh=malloc(source_bytes);rsx_vertex_remap check={0};u32 n=count;
    if(!fresh)return rsx_vertex_remap_build(remap,refs,count,unique);
    memcpy(fresh,refs,source_bytes);

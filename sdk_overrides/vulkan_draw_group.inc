@@ -6,10 +6,13 @@
 static VkFramebuffer tb_group_framebuffer;
 static VkRenderPass tb_group_renderpass;
 static int tb_group_open;
+/* Read once: this is asked several times per draw, and getenv was about 6% of
+ * the walker's samples once the GPU waits were gone. */
 static int tb_group_on(void)
 {
-    const char* mode=getenv("TB_VK_SUBMIT_MODE");
-    return !mode || strcmp(mode,"grouped")==0;
+    static int on=-1;
+    if(on<0){const char* mode=getenv("TB_VK_SUBMIT_MODE");on=!mode || strcmp(mode,"grouped")==0;}
+    return on;
 }
 static void tb_group_end(void)
 {
