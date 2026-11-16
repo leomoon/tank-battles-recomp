@@ -14,8 +14,15 @@ def live_battle_timer(text):
  return any(0<=int(value)<=120 for value in re.findall(r'^\s*(\d{1,3})\s*$',text,re.M))
 
 
+def default_battle_map(text):
+ # Recognize the selected map as well as the heading; OCR often loses the
+ # heading's animated letters. This does not establish live gameplay.
+ normalized=' '.join(text.upper().split())
+ return bool(re.search(r'FIELD [O0]F WAR [I1]',normalized) and 'CONFIRM' in normalized and 'BACK' in normalized)
+
+
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");a=parser.parse_args()
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");a=parser.parse_args()
  if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and (not a.scopes or a.reference_template):parser.error('Shorter intervals require a native --scopes diagnostic and 10..60 seconds')
  out=resolve(a.output)
  if not out.is_relative_to(ROOT/'analysis/performance') or out.exists():parser.error('Use a new output inside analysis/performance/')
@@ -29,6 +36,7 @@ def main():
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
    if a.depth_gpu:command+=['--depth-gpu']
    if a.color_readback_cache:command+=['--color-readback-cache']
+   if a.fence_poll:command+=['--fence-poll']
    if a.draw_remap_cache:command+=['--draw-remap-cache']
    if a.draw_verify:command+=['--draw-verify']
    if a.decode_profile:command+=['--decode-profile']
@@ -46,6 +54,7 @@ def main():
   cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
   if a.depth_gpu:cmd+=['--depth-gpu']
   if a.color_readback_cache:cmd+=['--color-readback-cache']
+  if a.fence_poll:cmd+=['--fence-poll']
   if a.draw_remap_cache:cmd+=['--draw-remap-cache']
   if a.draw_verify:cmd+=['--draw-verify']
   if a.decode_profile:cmd+=['--decode-profile']
@@ -83,7 +92,7 @@ def main():
    text=capture('navigation')
    if a.reference_template and ('AUTO LOAD' in text or 'HDD ACCESS' in text):press(0x4000,'autosave notice');continue
    if a.reference_template and 'NOT SIGNED' in text:press(0x2000,'offline notice');continue
-   if all(w in ' '.join(text.split()) for w in words):
+   if all(w in ' '.join(text.split()) for w in words) or label=='map' and default_battle_map(text):
     (out/(label+'.png')).write_bytes((out/'navigation.png').read_bytes());event(label,ocr=text);return
    time.sleep(2)
   raise RuntimeError('Did not reach '+label+': '+text)

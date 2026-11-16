@@ -201,6 +201,32 @@ def main():
   if relative == 'libs/filesystem/edat.c': text += '\n#endif /* Linux cache override */\n'
   text=re.sub(r'#include "([^"\n]+)"',include,text)
   text='#include "'+str(Path(__file__).resolve().parent.parent/'execution_policy_api.h')+'"\n'+text
+  if relative=='libs/video/rsx_vulkan_backend.c':
+   for anchor in ('X(vkCreateFence) X(vkDestroyFence)','static int vk_submit_and_wait(void)\n{','pvkWaitForFences(s_vk.device, 1, &s_vk.fence, VK_TRUE, UINT64_MAX)'):
+    if text.count(anchor)!=1:raise SystemExit('Fence poll anchor mismatch: '+anchor)
+   text=text.replace('X(vkCreateFence) X(vkDestroyFence)', 'X(vkGetFenceStatus) X(vkCreateFence) X(vkDestroyFence)')
+   text=text.replace('static int vk_submit_and_wait(void)\n{','#include \"'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_fence_poll.inc')+'\"\nstatic int vk_submit_and_wait(void)\n{')
+   text=text.replace('pvkWaitForFences(s_vk.device, 1, &s_vk.fence, VK_TRUE, UINT64_MAX)', 'tb_fence_wait(s_vk.fence)')
+   header=Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h'
+   # Unique generated call-site labels preserve separate monotonic counters.
+   definitions=list(re.finditer(r'^static [^;{]*?\b(\w+)\([^;{]*?\)\n\{',text,re.M))
+   def wait_site(match):
+    owner=next((d[1] for d in reversed(definitions) if d.start()<match.start()),'unknown')
+    line=text[:match.start()].count('\n')+1
+    fn=match[1];label=('wait:' if fn=='vk_submit_and_wait' else 'flush:')+owner+':'+str(line)
+    return 'TB_WAIT_SITE("'+label+'",'+fn+')'
+   text=re.sub(r'\b(vk_submit_and_wait|vk_eng_flush)\(\)',wait_site,text)
+   anchor='static void vk_eng_submit_and_wait(void* user, u32 reason)\n{'
+   consumer='\n#if defined(__linux__)\n    static tb_depth_cost_totals totals[4];\n    static const char* names[]={"consumer:vertex-ring","consumer:guest-reference","consumer:shutdown","consumer:unknown"};\n    unsigned slot=reason<3?reason:3;\n    tb_depth_cost_scope consumer_scope __attribute__((cleanup(tb_depth_cost_end))) =\n        {&totals[slot],names[slot],tb_depth_cost_enabled()?tb_depth_cost_now():0,0,0};\n#endif\n'
+   if text.count(anchor)!=1:raise SystemExit('Consumer scope anchor mismatch')
+   text=text.replace(anchor,anchor+consumer)
+   macro='#if defined(__linux__)\n#define TB_WAIT_SITE(label,fn) ({ TB_DEPTH_COST(label,0,0); fn(); })\n#else\n#define TB_WAIT_SITE(label,fn) fn()\n#endif\n'
+   text='#include "'+str(header)+'"\n'+macro+text
+  if relative=='libs/video/cellGcmSys.c':
+   anchor='if ((m==0x0050u || m==0x0104u || m==0x1D70u || m==0x1D74u || m==0x1800u) && rsx_draw_engine_enabled()) rsx_draw_engine_flush();'
+   cases=''.join('case '+method+'u: { TB_DEPTH_COST("fifo:'+method+'",0,0); rsx_draw_engine_flush(); break; }' for method in ['0x0050','0x0104','0x1D70','0x1D74','0x1800'])
+   if text.count(anchor)!=1:raise SystemExit('FIFO wait anchor mismatch')
+   text=text.replace(anchor,'if(rsx_draw_engine_enabled())switch(m){'+cases+'default:break;}')
   if relative=='libs/video/rsx_draw_engine.c':
    text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h')+'"\n'+text
    for function,label in [('eng_vertex_layout','vertex-layout'),('dc_fetch','vertex-fetch'),('eng_pipeline_get','engine-pipeline'),('sink_bind_textures','texture-binding')]:
@@ -212,14 +238,14 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}
   if relative=='libs/video/rsx_vulkan_backend.c':
    for name in ('depth16.comp','depth16_spirv.inc'):
     record['port_inputs']['shaders/'+name]=hashlib.sha256((Path(__file__).resolve().parent.parent/'shaders'/name).read_bytes()).hexdigest()
-  if relative in ('libs/video/rsx_draw_engine.c','libs/video/cellGcmSys.c'):
+  if relative in ('libs/video/rsx_vulkan_backend.c','libs/video/rsx_draw_engine.c','libs/video/cellGcmSys.c'):
    record.setdefault('port_inputs',{})['depth_cost_trace.h']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h').read_bytes()).hexdigest()
   if relative=='libs/video/rsx_draw_engine.c':
    record['port_inputs']['color_readback_cache.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/color_readback_cache.inc').read_bytes()).hexdigest()

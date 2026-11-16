@@ -25,7 +25,7 @@ def report(directory):
         samples.setdefault(path,[]).append(dict(frame=int(frame),calls=int(calls),requested_bytes=int(size),inclusive_ns=int(cost),stamp=int(stamp)))
     if not samples:raise ValueError('Need timestamped depth costs; old power-of-two logs cannot be aligned exactly')
     out={}
-    for path in ('depth-to-guest','depth-as-color','surface-guest-read','nv0039-copy','index-remap','index-remap-hit','vertex-layout','vertex-fetch','engine-pipeline','texture-binding'):
+    for path in tuple(sorted(p for p in samples if p.startswith(('wait:', 'flush:', 'consumer:', 'fifo:'))))+('depth-to-guest','depth-as-color','surface-guest-read','nv0039-copy','index-remap','index-remap-hit','vertex-layout','vertex-fetch','engine-pipeline','texture-binding'):
         selected=[s for s in samples.get(path,[]) if begin<=s['stamp']<end]
         if len(selected)<2:
             out[path]=dict(observed_anywhere_in_capture=path in samples,aligned_window_available=False)

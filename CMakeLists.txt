@@ -194,6 +194,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/fps_vulkan.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/gpu_timing.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_draw_group.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_fence_poll.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/scripts/submission_overlay.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_scanout.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/edat_cache.inc" "${PS3RECOMP_DIR}/libs/filesystem/edat.c")

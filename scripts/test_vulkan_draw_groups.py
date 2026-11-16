@@ -39,6 +39,7 @@ if '--build-only' not in sys.argv:
  resource.setrlimit(resource.RLIMIT_CORE,(0,0))
  env={k:v for k,v in os.environ.items() if not k.startswith(('TB_','PS3RECOMP_VK_','VK_DRAW_'))}
  subprocess.run([str(out/'build/groups')],env=env,check=True,timeout=40)
+ subprocess.run([str(out/'build/groups')],env=dict(env,TB_VK_FENCE_POLL='1'),check=True,timeout=40)
  legacy=subprocess.run([str(out/'build/groups')],env=dict(env,TB_VK_SUBMIT_MODE='serial'),capture_output=True,text=True,timeout=40)
  if legacy.returncode==0 or 'tb_group_open' not in legacy.stderr:raise AssertionError('Serial negative control did not reject queued-draw assertion')
  print('PASS: serial negative control rejects the queued-draw assertion')

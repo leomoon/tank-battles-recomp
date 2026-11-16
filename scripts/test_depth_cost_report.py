@@ -24,6 +24,18 @@ class DepthCostReportTests(unittest.TestCase):
             self.assertEqual(row['ms_per_completed_frame'],.002)
             self.assertFalse(result['depth-to-guest']['observed_anywhere_in_capture'])
 
+    def test_wait_and_consumer_sites_remain_independent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            p=Path(temporary);self.fixture(p)
+            text=(p/'startup.log').read_text()
+            for label in ('wait:vk_eng_flush:1','flush:vk_eng_draw:2','consumer:guest-reference','fifo:0x1D70'):
+                text+=(p/'startup.log').read_text().replace('surface-guest-read',label)
+            (p/'startup.log').write_text(text)
+            rows=report(p)['paths']
+            for label in ('wait:vk_eng_flush:1','flush:vk_eng_draw:2','consumer:guest-reference','fifo:0x1D70'):
+                self.assertEqual(rows[label]['inclusive_ns'],8000)
+                self.assertEqual(rows[label]['completed_frames'],4)
+
     def test_rejects_failed_scene_and_unalignable_logs(self):
         with tempfile.TemporaryDirectory() as temporary:
             p=Path(temporary);self.fixture(p)
