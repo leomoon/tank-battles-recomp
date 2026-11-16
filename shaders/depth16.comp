@@ -1,0 +1,22 @@
+#version 450
+layout(local_size_x=64) in;
+layout(set=0,binding=0,std430) readonly buffer InputDepth { uint depth[]; };
+layout(set=0,binding=1,std430) writeonly buffer OutputDepth { uint packed[]; };
+layout(push_constant) uniform Shape { uint pixels; } shape;
+// Exact floor(double(clamp(depth,0,1))*65535 + 0.5), using integer
+// float32 decomposition. No Float64 feature or intermediate float rounding.
+uint quantize(uint bits) {
+    if ((bits & 0x80000000u)!=0u || bits>0x7f800000u) return 0u;
+    if (bits>=0x3f800000u) return 65535u;
+    uint exponent=(bits>>23)&255u;
+    if(exponent==0u) return 0u;
+    uint shift=150u-exponent;
+    if(shift>40u) return 0u;
+    uint hi,lo;umulExtended((bits&0x7fffffu)|0x800000u,65535u,hi,lo);
+    if(shift>32u)return (hi+(1u<<(shift-33u)))>>(shift-32u);
+    if(shift==32u)return hi+(lo>>31u);
+    return ((hi<<(32u-shift))|(lo>>shift))+((lo>>(shift-1u))&1u);
+}
+void main(){uint i=gl_GlobalInvocationID.x*2u;if(i>=shape.pixels)return;
+uint a=quantize(depth[i]),b=i+1u<shape.pixels?quantize(depth[i+1u]):0u;
+packed[i/2u]=a|(b<<16u);}

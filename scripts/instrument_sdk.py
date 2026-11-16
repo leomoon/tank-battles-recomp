@@ -40,6 +40,10 @@ EDITS={
  ('const char* edat_resolve(const char* host_path, char* buf, size_t cap)',
   '#if defined(__linux__)\n#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/edat_cache.inc')+'"\n#else\nconst char* edat_resolve(const char* host_path, char* buf, size_t cap)')],
  'libs/video/rsx_draw_engine.c':[
+ ('static int eng_zdepth_to_guest(u32 slot)\n{', 'static int eng_zdepth_to_guest(u32 slot)\n{\n    TB_DEPTH_COST("depth-to-guest",(uint64_t)g.zdepths[slot].used_w*g.zdepths[slot].used_h*(g.zdepths[slot].zfmt==1?2:4),g.frames);'),
+ ('void rsx_draw_engine_guest_read(u32 location, u32 offset, u32 pitch, u32 w, u32 h)\n{', '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_guest_read.inc')+'"\nvoid rsx_draw_engine_guest_read(u32 location, u32 offset, u32 pitch, u32 w, u32 h)\n{\n    if(tb_depth_guest_read(location,offset,pitch,w,h))return;'),
+ ('static u32 eng_zdepth_as_color(u32 slot, const rsx_dsp_texture* t)\n{',
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_path_trace.inc')+'"\nstatic u32 eng_zdepth_as_color(u32 slot, const rsx_dsp_texture* t)\n{\n    TB_DEPTH_COST("depth-as-color",(uint64_t)t->width*t->height*(g.zdepths[slot].zfmt==1?2:4),g.frames);\n    tb_depth_trace(slot,t);'),
  ('    s->w = want_w; s->h = want_h; s->fmt = want_fmt; s->aa_grid = aa_grid;',
   '    s->w = want_w; s->h = want_h; s->fmt = want_fmt; s->aa_grid = aa_grid;\n    if(getenv("TB_GAMEPLAY_TIMING")) fprintf(stderr,"[gameplay-surface] %ux%u fmt=%u aa_grid=0x%X\\n",want_w,want_h,(unsigned)want_fmt,aa_grid);'),
  ('static void eng_textures_touch(u32 location, u32 offset, u32 bytes)\n{\n    for (u32 i = 0; i < g.n_textures; i++) {\n        eng_texture* e = &g.textures[i];\n        if (e->location == location && e->offset >= offset && e->offset - offset < bytes) {\n            e->last_hash_frame = g.frames - 1u;\n            e->last_full_frame = g.frames - ENG_TEXHASH_FULL_EVERY;   /* hash it all */\n            e->rewritten = 1;\n        }\n    }\n}',
@@ -93,6 +97,10 @@ EDITS={
  ('                u32 m = (type == 0) ? method + i * 4 : method;\n                /* GCM_SET_USER_COMMAND',
   '                u32 m = (type == 0) ? method + i * 4 : method;\n                if (subch == 1 && s1_2d) { gcm_2d_method(subch, m, vm_read32(dea)); continue; }\n                /* GCM_SET_USER_COMMAND')],
  'libs/video/rsx_vulkan_backend.c':[
+ ('X(vkCreateGraphicsPipelines) X(vkDestroyPipeline)', 'X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline)'),
+ ('static void vk_eng_shutdown(void* user)\n{', 'static void tb_depth16_shutdown(void);\nstatic void vk_eng_shutdown(void* user)\n{\n    tb_depth16_shutdown();'),
+ ('/* ---- E2: pipelines and draws', '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_depth16.inc')+'"\n/* ---- E2: pipelines and draws'),
+ ('    .depth_readback       = vk_eng_depth_readback,', '    .depth_readback       = vk_eng_depth_readback,\n    .depth_as_color       = tb_vk_depth16,'),
  ('    X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkDeviceWaitIdle)',
   '    X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp) X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkDeviceWaitIdle)'),
  ('static int vk_begin(void)',
@@ -180,13 +188,22 @@ def main():
   if relative == 'libs/filesystem/edat.c': text += '\n#endif /* Linux cache override */\n'
   text=re.sub(r'#include "([^"\n]+)"',include,text)
   text='#include "'+str(Path(__file__).resolve().parent.parent/'execution_policy_api.h')+'"\n'+text
+  if relative=='libs/video/rsx_draw_engine.c':
+   text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h')+'"\n'+text
+   anchor='    if(tb_depth_guest_read(location,offset,pitch,w,h))return;'
+   text=text.replace(anchor,'    TB_DEPTH_COST("surface-guest-read",(uint64_t)w*h*4,g.frames);\n'+anchor)
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':'rsx_memory_copy.inc','libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}
+  if relative=='libs/video/rsx_vulkan_backend.c':
+   for name in ('depth16.comp','depth16_spirv.inc'):
+    record['port_inputs']['shaders/'+name]=hashlib.sha256((Path(__file__).resolve().parent.parent/'shaders'/name).read_bytes()).hexdigest()
+  if relative in ('libs/video/rsx_draw_engine.c','libs/video/cellGcmSys.c'):
+   record.setdefault('port_inputs',{})['depth_cost_trace.h']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h').read_bytes()).hexdigest()
   records.append(record)
  (out/'manifest.json').write_text(json.dumps(records,indent=2)+'\n')
 if __name__=='__main__':main()

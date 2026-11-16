@@ -181,6 +181,12 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(EXECUTION_SDK "${CMAKE_BINARY_DIR}/instrumented_sdk")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_memory_copy.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_texture_coherence.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/depth_path_trace.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/depth_guest_read.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/depth_cost_trace.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_depth16.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/depth16.comp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/depth16_spirv.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_trace.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/audio_clock.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/fps_vulkan.inc"

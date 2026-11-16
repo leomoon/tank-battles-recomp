@@ -1,9 +1,21 @@
 import json,subprocess,tempfile,unittest
 from pathlib import Path
-from gameplay_report import summarize,compare,COMPAT
+from gameplay_report import summarize,compare,COMPAT,renderer_failures
 from port import ROOT
 
 class GameplayTimingTests(unittest.TestCase):
+ def test_backend_resource_lifetime_failures_reject_measurement(self):
+  refused='[RSX vulkan] engine: stale texture release of object 352 (kind 1, 2048x2048) refused'
+  full='[RSX vulkan] engine: object table full (2048)'
+  self.assertEqual(renderer_failures(refused+'\n'+full),[refused,full])
+  self.assertEqual(len(renderer_failures((full+'\n')*100)),64)
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);m=self.fixture(p);m['renderer_failures']=renderer_failures(refused)
+   (p/'measurement.json').write_text(json.dumps(m))
+   with self.assertRaisesRegex(ValueError,'Renderer failure'):summarize(p)
+   m['renderer_failures']=[];(p/'measurement.json').write_text(json.dumps(m))
+   (p/'startup.log').write_text(full)
+   with self.assertRaisesRegex(ValueError,'retained startup log'):summarize(p)
  def test_real_cadence_deduplicates_refreshes_and_stale_serials(self):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp);source=path/'test.cpp';source.write_text('''#include "gameplay_timing.h"
@@ -79,6 +91,17 @@ int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666
    changed=dict(b,manifest=dict(b['manifest'],executable_sha256='undeclared'))
    with self.assertRaises(ValueError):compare([a,changed],candidate_plan=plan)
    with self.assertRaises(ValueError):compare([b],candidate_plan=plan)
+ def test_depth_variant_preserves_other_manifest_guards(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);self.fixture(p);r=summarize(p)
+   a=dict(r,manifest=dict(r['manifest'],depth_conversion='reference'))
+   b=dict(r,manifest=dict(r['manifest'],depth_conversion='gpu'))
+   with self.assertRaises(ValueError):compare([a,b])
+   self.assertEqual(len(compare([a,b],allowed_variants=('depth_conversion',))),2)
+   with self.assertRaises(ValueError):compare([b],allowed_variants=('depth_conversion',))
+   for field in ('scene','guest_resolution','internal_surfaces','audio','diagnostics','input_source','overlay','executable_sha256'):
+    c=dict(b,manifest=dict(b['manifest']));c['manifest'][field]='changed'
+    with self.assertRaises(ValueError):compare([a,c],allowed_variants=('depth_conversion',))
  def test_decoder_variant_is_explicit_and_does_not_relax_other_settings(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p);r=summarize(p)

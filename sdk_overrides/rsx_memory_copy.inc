@@ -1,3 +1,4 @@
+#include "depth_cost_trace.h"
 /* Tank Battles uses NV0039 on subchannel 1 without SET_OBJECT commands.
  * These registers describe byte columns, not pixels or an endian conversion.
  * Keep this source in the port; instrument_sdk.py includes it in the pinned SDK. */
@@ -18,6 +19,7 @@ static int tb_m2mf_range(u32 dma, u32 offset, u32 width, u32 rows, s32 pitch)
 
 static void tb_m2mf_copy(void)
 {
+    TB_DEPTH_COST("nv0039-copy",(uint64_t)tb_m2mf.columns*tb_m2mf.rows,0);
     const u32 n = tb_m2mf.columns, rows = tb_m2mf.rows;
     const u32 si = tb_m2mf.format & 0xffu, di = (tb_m2mf.format >> 8) & 0xffu;
     if (!n || !rows) return;

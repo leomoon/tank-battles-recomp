@@ -69,7 +69,7 @@ int main(int argc,char** argv) {
 }
 ''')
         cls.binary = directory / 'fixture'
-        subprocess.run(['cc', '-std=c17', '-I', str(ROOT), str(fixture), '-o', str(cls.binary)], check=True)
+        subprocess.run(['cc', '-std=c17', '-D_POSIX_C_SOURCE=200809L', '-I', str(ROOT), str(fixture), '-o', str(cls.binary)], check=True)
 
     def test_transfer_semantics(self):
         cases = ['linear zero-pitch row', 'main-to-local pitched rows', 'overlapping rows',
