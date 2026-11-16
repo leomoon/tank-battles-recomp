@@ -8,7 +8,7 @@ To recompile or run the game, you must provide your own decrypted dump of a legi
 
 ## Status
 
-The repository has a pinned ps3recomp dependency, a native runner, configuration, and scripts for analysis, translation, build, and launch. The Linux Vulkan port is playable: default Battle and the first campaign mission run at 60 FPS (59.98 to 60.00 completed game frames per second, 95th-percentile frame time under 17 ms) at normal game speed with real audio, on a Ryzen 9 7950X and RTX 3060. The user reports completing and reloading the first two campaign levels. Windows is not supported yet, and broader mission, dialog, save, audio and physical-input coverage is still being verified. The synthetic smoke test checks the runner independently of Tank Battles.
+The repository has vendored ps3recomp sources, a native runner, configuration, and scripts for analysis, translation, build, and launch. The Linux Vulkan port is playable: default Battle and the first campaign mission run at 60 FPS (59.98 to 60.00 completed game frames per second, 95th-percentile frame time under 17 ms) at normal game speed with real audio, on a Ryzen 9 7950X and RTX 3060. The user reports completing and reloading the first two campaign levels. Windows is not supported yet, and broader mission, dialog, save, audio and physical-input coverage is still being verified. The synthetic smoke test checks the runner independently of Tank Battles.
 
 Initial static analysis of NPUB30154 found approximately 17,300 candidate PPU functions, 274 imports across 19 libraries, and one embedded SPU ELF of 3,136 bytes. Remaining validation includes broader graphics and mission coverage, interactive system dialogs, and save/audio/input lifecycle behavior. Scanning the main executable does not rule out additional code loaded from assets or system libraries.
 
@@ -25,7 +25,7 @@ tank-battles-recomp/
 ├── content_paths.cpp       # Title metadata, mount roots, and EDAT mapping
 ├── asset_probe.cpp         # Opt-in native filesystem verification
 ├── external/
-│   └── ps3recomp/           # Pinned Git submodule
+│   └── ps3recomp/           # Vendored SDK source
 ├── scripts/
 │   ├── port.py             # Prepare, configure, build, and run
 │   └── smoke_test.py       # Synthetic boot test requiring no game files
@@ -37,20 +37,14 @@ The `analysis/`, `recompiled/`, `spu/`, and `build*/` directories hold local gen
 
 ## Dependency
 
-Clone the port with its ps3recomp dependency:
+The ps3recomp source is included in this repository. A normal clone includes the SDK:
 
 ```bash
-git clone --recurse-submodules https://github.com/leomoon/tank-battles-recomp.git
+git clone https://github.com/leomoon/tank-battles-recomp.git
 cd tank-battles-recomp
 ```
 
-For an existing clone:
-
-```bash
-git submodule update --init --recursive
-```
-
-The submodule is pinned to the revision recorded in Git, initially `de4f090328ea08bef6b2f15caec0b85e343a7ece`. Do not use `git submodule update --remote` unless deliberately testing an SDK upgrade. Developers can use a separate SDK checkout with `--sdk ../ps3recomp` for `prepare` and `configure`, or `-DPS3RECOMP_DIR=/path/to/ps3recomp` with CMake directly. Shared runtime fixes belong upstream; game-specific hooks belong here.
+The vendored source matches upstream revision `de4f090328ea08bef6b2f15caec0b85e343a7ece`. Its origin, revision and license notices are documented in [external/README.md](external/README.md). No submodule commands are needed. Developers can still test a separate SDK checkout with `--sdk ../ps3recomp` for `prepare` and `configure`, or `-DPS3RECOMP_DIR=/path/to/ps3recomp` with CMake directly. Shared runtime fixes belong upstream; game-specific hooks belong here.
 
 ## Requirements
 
@@ -383,7 +377,7 @@ Performance samples must match the scene and presentation state. A passive run w
 
 One early uncontrolled sample left the title, attempted a ForestEnvironment asset load, and stopped under strict execution on a null PPU call. It is retained as failure evidence and excluded from the baseline; `compare_rendering_runs.py` rejects failed/interrupted sessions. The separate wait trace records PPU sleep/mixer waits, but no raw-SPU wait events. An absence of recorded SPU waits does not prove zero SPU waiting, and guest flip-request intervals in that trace are not interchangeable with presented frames or simulation speed.
 
-The port now executes the game's NV0039 memory-to-memory transfers on subchannel 1. The pinned SDK previously treated that subchannel as 3D commands, leaving stale staging bytes at the logo and animated title-strip addresses. `sdk_overrides/rsx_memory_copy.inc` handles the transfer registers and byte-column strides, signed row pitches, overlap-safe input snapshots, tiled-memory access, SPU write coherence, and draw-engine read/write notifications. The game's known default binding is selected in the generated SDK source copy; no generated PPU/SPU output or submodule files are edited. The override's hash is included in the build manifest.
+The port now executes the game's NV0039 memory-to-memory transfers on subchannel 1. The pinned SDK previously treated that subchannel as 3D commands, leaving stale staging bytes at the logo and animated title-strip addresses. `sdk_overrides/rsx_memory_copy.inc` handles the transfer registers and byte-column strides, signed row pitches, overlap-safe input snapshots, tiled-memory access, SPU write coherence, and draw-engine read/write notifications. The game's known default binding is selected in the generated SDK source copy; no generated PPU/SPU output or vendored SDK files are edited. The override's hash is included in the build manifest.
 
 The fixed 950×252 logo and 791×25 strip match their original base-level DDS payloads byte for byte before GPU upload. Captures show the title strip, main menu, and Battle setup panels restored, and the default Battle route reaches live gameplay with no observed CPU fallbacks. The user confirmed those UI improvements and reported remaining in-game graphics issues. The later controller complaint was traced to SDL label-based mapping on a Nintendo-identifying device; the positional input fix and its acceptance scope are described below. This change does not establish complete gameplay rendering, input reliability, or performance.
 
@@ -568,7 +562,7 @@ Run `python scripts/test_guest_layout.py` for the original routing regression. U
 
 The Linux runner defaults to strict guest execution. A reached missing HLE import, unresolved/null PPU target, unverified PPU recovery, SPU interpreter entry, or untranslated SPU target stops the process with status 86 and a bounded diagnostic report. This also intercepts SDK branches that otherwise return success or silently skip invalid calls. `TB_EXECUTION_MODE=diagnostic` explicitly allows those SDK fallbacks for investigation while recording them; it does not establish static compatibility.
 
-`scripts/instrument_sdk.py` generates instrumented copies of fifteen SDK source files under the selected build directory. CMake builds those copies with the normal SDK include paths; the pinned submodule remains unchanged. The generator requires unique matching source anchors and records original/output hashes in `instrumented_sdk/manifest.json`. Original source changes trigger reconfiguration. No generated game translation is edited. Logs contain bounded target observations, counters, last image/address pairs, and a bounded image/overlay inventory. Counter and last-target writes use lock-free atomics; timeout reports use signal-safe output. A full image-inventory buffer terminates explicitly rather than silently dropping coverage.
+`scripts/instrument_sdk.py` generates instrumented copies of fifteen SDK source files under the selected build directory. CMake builds those copies with the normal SDK include paths; the vendored SDK remains unchanged. The generator requires unique matching source anchors and records original/output hashes in `instrumented_sdk/manifest.json`. Original source changes trigger reconfiguration. No generated game translation is edited. Logs contain bounded target observations, counters, last image/address pairs, and a bounded image/overlay inventory. Counter and last-target writes use lock-free atomics; timeout reports use signal-safe output. A full image-inventory buffer terminates explicitly rather than silently dropping coverage.
 
 ```bash
 python scripts/smoke_test.py

@@ -27,7 +27,7 @@ def main() -> int:
         sdk, build_dir = resolve(args.sdk), resolve(args.build_dir)
         source = sdk / "runtime/ppu/tests/smoke/smoke_recomp.c"
         if not source.is_file():
-            raise ValueError("Missing ps3recomp submodule. Run git submodule update --init --recursive.")
+            raise ValueError("Missing ps3recomp source. Restore external/ps3recomp from this repository, or pass --sdk /path/to/ps3recomp.")
         cmake, ninja = tool(args.cmake), tool(args.ninja)
         generated = build_dir / "synthetic"
         generated.mkdir(parents=True, exist_ok=True)

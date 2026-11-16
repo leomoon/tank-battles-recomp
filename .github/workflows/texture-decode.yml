@@ -7,7 +7,7 @@ on:
       - 'tests/texture_decode*'
       - 'tests/texture_decode/**'
       - 'scripts/instrument_sdk.py'
-      - 'external/ps3recomp'
+      - 'external/ps3recomp/**'
       - '.github/workflows/texture-decode.yml'
   pull_request:
     paths:
@@ -15,7 +15,7 @@ on:
       - 'tests/texture_decode*'
       - 'tests/texture_decode/**'
       - 'scripts/instrument_sdk.py'
-      - 'external/ps3recomp'
+      - 'external/ps3recomp/**'
       - '.github/workflows/texture-decode.yml'
 permissions:
   contents: read
@@ -28,8 +28,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'

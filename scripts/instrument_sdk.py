@@ -1,4 +1,4 @@
-"""Generate reviewable instrumented SDK source copies without editing the submodule."""
+"""Generate reviewable instrumented SDK source copies without editing vendored sources."""
 import argparse,hashlib,json,re
 from pathlib import Path
 

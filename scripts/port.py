@@ -33,7 +33,7 @@ def run(command: list[str], **kwargs) -> None:
 def sdk_path(args, config) -> Path:
     sdk = resolve(args.sdk or config["paths"]["sdk"])
     if not (sdk / "tools/ppu_loader.py").is_file():
-        raise ValueError("Missing ps3recomp dependency. Run git submodule update --init --recursive, or pass --sdk /path/to/ps3recomp.")
+        raise ValueError("Missing ps3recomp source. Restore external/ps3recomp from this repository, or pass --sdk /path/to/ps3recomp.")
     return sdk
 
 

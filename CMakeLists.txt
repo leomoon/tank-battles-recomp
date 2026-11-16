@@ -31,10 +31,10 @@ endif()
 #         -DRECOMP_DIR=/path/to/my_game/recompiled
 #
 set(PS3RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/ps3recomp" CACHE PATH
-    "ps3recomp source checkout (defaults to the pinned submodule)")
+    "ps3recomp source directory (defaults to the vendored SDK)")
 get_filename_component(PS3RECOMP_DIR "${PS3RECOMP_DIR}" ABSOLUTE)
 if(NOT EXISTS "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp")
-    message(FATAL_ERROR "ps3recomp dependency is missing. Run git submodule update --init --recursive, or set -DPS3RECOMP_DIR=/path/to/ps3recomp.")
+    message(FATAL_ERROR "Vendored ps3recomp source is missing. Restore external/ps3recomp from this repository, or set -DPS3RECOMP_DIR=/path/to/ps3recomp.")
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     option(PS3RECOMP_RSX_VULKAN "Build the Linux Vulkan renderer" ON)
