@@ -11,7 +11,7 @@ from build_identity import source_identity
 
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',required=True);p.add_argument('--scene',required=True,choices=['battle','campaign']);p.add_argument('--profile',required=True);p.add_argument('--resume',action='store_true');p.add_argument('--scripted-input',help='Explicit PAD_FILE path for labeled scripted navigation/gameplay');p.add_argument('--scopes',action='store_true');p.add_argument('--overlay',action='store_true');p.add_argument('--pin-window',action='store_true',help='Float/pin only this test window across workspace switches');p.add_argument('--timeout',type=float,default=300);p.add_argument('--correctness-video',action='store_true');p.add_argument('--build-dir',default='build-vulkan');p.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');p.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds, shorter intervals require --scopes and cannot be clean baselines');p.add_argument('--decode-profile',action='store_true');p.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');p.add_argument('--depth-gpu',action='store_true',help='Select exact GPU depth conversion (the Linux production path) for a declared implementation comparison');p.add_argument("--color-readback-cache",action="store_true");a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',required=True);p.add_argument('--scene',required=True,choices=['battle','campaign']);p.add_argument('--profile',required=True);p.add_argument('--resume',action='store_true');p.add_argument('--scripted-input',help='Explicit PAD_FILE path for labeled scripted navigation/gameplay');p.add_argument('--scopes',action='store_true');p.add_argument('--overlay',action='store_true');p.add_argument('--pin-window',action='store_true',help='Float/pin only this test window across workspace switches');p.add_argument('--timeout',type=float,default=300);p.add_argument('--correctness-video',action='store_true');p.add_argument('--build-dir',default='build-vulkan');p.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');p.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds, shorter intervals require --scopes and cannot be clean baselines');p.add_argument('--decode-profile',action='store_true');p.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');p.add_argument('--depth-gpu',action='store_true',help='Select exact GPU depth conversion (the Linux production path) for a declared implementation comparison');p.add_argument("--color-readback-cache",action="store_true");p.add_argument("--draw-remap-cache",action="store_true");p.add_argument("--draw-verify",action="store_true");a=p.parse_args()
  if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and not a.scopes:p.error('Shorter profile intervals require --scopes and 10..60 seconds')
  build=resolve(a.build_dir)
  out=resolve(a.output)
@@ -31,6 +31,8 @@ def main():
  # Benchmark defaults deliberately select the reference implementation.
  env['TB_DEPTH_GPU']='1' if a.depth_gpu else '0'
  env['TB_COLOR_READBACK_CACHE']='1' if a.color_readback_cache else '0'
+ env['TB_DRAW_REMAP_CACHE']='1' if a.draw_remap_cache else '0'
+ if a.draw_verify:env['TB_DRAW_REMAP_VERIFY']='1'
  if a.scopes:env.update(TB_RENDER_PROFILE=str(out/'scopes.jsonl'),TB_RENDER_PROFILE_MAX_REPORTS='600',TB_GPU_TIMING=str(out/'gpu-timing.jsonl'))
  if a.scripted_input:
   env.update(PAD_FILE=str(resolve(a.scripted_input)),PAD_NO_KEYBOARD='1',SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT='0x0000/0x0000')
@@ -40,7 +42,7 @@ def main():
  for kind,needle in [('ppu','ppu_recomp_'),('spu','spu_recomp.c.o'),('runtime','rendering_profile.cpp.o')]:
   matches=[l for l in commands.splitlines() if needle in l and ' -c ' in l];flags[kind]=matches[0] if matches else None
  gpu=subprocess.check_output(['nvidia-smi','--query-gpu=name,driver_version','--format=csv,noheader'],text=True).strip()
- exe=build/'TankBattlesRecomp';manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver='x11/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,submission_mode=a.submit_mode,texture_decode_mode=a.texture_decode_mode,color_readback_mode="cached" if a.color_readback_cache else "reference",depth_conversion="gpu" if a.depth_gpu else "reference",build_directory=str(build),source_inputs_sha256=hashlib.sha256(json.dumps(frozen['files'],sort_keys=True).encode()).hexdigest() if frozen else source_identity(),build_type=re.search(r'^CMAKE_BUILD_TYPE:STRING=(.*)$',(build/'CMakeCache.txt').read_text(),re.M)[1],compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],effective_flags=flags,diagnostics=dict(video=a.correctness_video,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes,texture_decode_profile=a.decode_profile),overlay=a.overlay,source_commit=frozen['commit'] if frozen else subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=hashlib.sha256((build/'instrumented_sdk/manifest.json').read_bytes()).hexdigest(),profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
+ exe=build/'TankBattlesRecomp';manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver='x11/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,submission_mode=a.submit_mode,texture_decode_mode=a.texture_decode_mode,draw_remap_mode="cached" if a.draw_remap_cache else "reference",color_readback_mode="cached" if a.color_readback_cache else "reference",depth_conversion="gpu" if a.depth_gpu else "reference",build_directory=str(build),source_inputs_sha256=hashlib.sha256(json.dumps(frozen['files'],sort_keys=True).encode()).hexdigest() if frozen else source_identity(),build_type=re.search(r'^CMAKE_BUILD_TYPE:STRING=(.*)$',(build/'CMakeCache.txt').read_text(),re.M)[1],compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],effective_flags=flags,diagnostics=dict(video=a.correctness_video,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes,texture_decode_profile=a.decode_profile,draw_verify=a.draw_verify),overlay=a.overlay,source_commit=frozen['commit'] if frozen else subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=hashlib.sha256((build/'instrumented_sdk/manifest.json').read_bytes()).hexdigest(),profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
  import threading
  stop=threading.Event();observations=[];child=None;marker=None;sampler=None;sample_streams=[]
@@ -65,6 +67,12 @@ def main():
     address=c['address']
     if not re.fullmatch(r'0x[0-9a-fA-F]+',address):raise ValueError('Unexpected window address')
     prefix='address:'+address
+    monitors=json.loads(subprocess.check_output(['hyprctl','-j','monitors'],text=True))
+    monitor=next((m for m in monitors if m['id']==c.get('monitor')),None)
+    position=None
+    if monitor:
+     scale=monitor.get('scale',1);mx,my=monitor['x'],monitor['y'];mw,mh=monitor['width']/scale,monitor['height']/scale
+     x,y=c['at'];w,h=c['size'];position=[round(min(max(x,mx+8),mx+mw-w-8)),round(min(max(y,my+8),my+mh-h-8))]
     if c.get('grouped'):
      operations=['hl.dsp.window.move({ window = "'+prefix+'", out_of_group = true })']
     elif not c.get('floating'):
@@ -73,6 +81,8 @@ def main():
      operations=['hl.dsp.window.pin({ window = "'+prefix+'" })']
     elif c.get('size')!=[1280,720]:
      operations=['hl.dsp.window.resize({ window = "'+prefix+'", x = 1280, y = 720 })']
+    elif position and position!=c['at']:
+     operations=[f'hl.dsp.window.move({{ window = "{prefix}", x = {position[0]}, y = {position[1]} }})']
     else:
      operations=['hl.dsp.window.alter_zorder({ window = "'+prefix+'", mode = "top" })','hl.dsp.focus({ window = "'+prefix+'" })']
      (out/'window-prepared.json').write_text(json.dumps(dict(verified=c,operations=operations),indent=2))

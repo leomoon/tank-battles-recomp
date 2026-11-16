@@ -40,6 +40,9 @@ EDITS={
  ('const char* edat_resolve(const char* host_path, char* buf, size_t cap)',
   '#if defined(__linux__)\n#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/edat_cache.inc')+'"\n#else\nconst char* edat_resolve(const char* host_path, char* buf, size_t cap)')],
  'libs/video/rsx_draw_engine.c':[
+ ('static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)',
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/index_remap_cache.inc')+'"\nstatic void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)'),
+ ('rsx_vertex_remap_build(&dc.ref_remap, dc.refs, dc.n_refs, &unique)', 'tb_remap_build(&dc.ref_remap, dc.refs, dc.n_refs, &unique)'),
  ('        u8* src = rows + (size_t)r * n * bpp;\n        if (bpp == 8u) {',
   '        u8* src = tb_cached ? (u8*)tb_cached+(size_t)r*s->w*bpp : rows+(size_t)r*n*bpp;\n        if (!tb_cached && bpp == 8u) {'),
  ('        } else if (!rgba) {\n            eng_row_convert(src, src, n, 0, 1);',
@@ -49,7 +52,7 @@ EDITS={
   '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/color_readback_cache.inc')+'"\nstatic void eng_row_convert(u8* dst, const u8* src, u32 w, int rgba, int to_guest)'),
  ('    g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);\n    g.be->readback(g.be->user, s->handle, x, y, n, h, rows, n * bpp);',
   '    const u8* tb_cached=tb_color_readback_rows(s,x,y,n,h,bpp);\n    if(!tb_cached) {\n    g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);\n    g.be->readback(g.be->user, s->handle, x, y, n, h, rows, n * bpp);\n    }'),
- ('void rsx_draw_engine_shutdown(void)\n{', 'void rsx_draw_engine_shutdown(void)\n{\n    tb_color_readback_reset();'),
+ ('void rsx_draw_engine_shutdown(void)\n{', 'void rsx_draw_engine_shutdown(void)\n{\n    tb_remap_reset();\n    tb_color_readback_reset();'),
  ('static int eng_zdepth_to_guest(u32 slot)\n{', 'static int eng_zdepth_to_guest(u32 slot)\n{\n    TB_DEPTH_COST("depth-to-guest",(uint64_t)g.zdepths[slot].used_w*g.zdepths[slot].used_h*(g.zdepths[slot].zfmt==1?2:4),g.frames);'),
  ('void rsx_draw_engine_guest_read(u32 location, u32 offset, u32 pitch, u32 w, u32 h)\n{', '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_guest_read.inc')+'"\nvoid rsx_draw_engine_guest_read(u32 location, u32 offset, u32 pitch, u32 w, u32 h)\n{\n    if(tb_depth_guest_read(location,offset,pitch,w,h))return;'),
  ('static u32 eng_zdepth_as_color(u32 slot, const rsx_dsp_texture* t)\n{',
@@ -200,6 +203,10 @@ def main():
   text='#include "'+str(Path(__file__).resolve().parent.parent/'execution_policy_api.h')+'"\n'+text
   if relative=='libs/video/rsx_draw_engine.c':
    text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h')+'"\n'+text
+   for function,label in [('eng_vertex_layout','vertex-layout'),('dc_fetch','vertex-fetch'),('eng_pipeline_get','engine-pipeline'),('sink_bind_textures','texture-binding')]:
+    pattern=r'(^static [^;{]*?\b'+function+r'\([^;{]*?\)\n\{)'
+    text,n=re.subn(pattern,lambda m:m[0]+'\n    TB_DEPTH_COST("'+label+'",0,g.frames);',text,flags=re.M)
+    if n!=1:raise SystemExit('Draw cost anchor mismatch: '+function)
    anchor='    if(tb_depth_guest_read(location,offset,pitch,w,h))return;'
    text=text.replace(anchor,'    TB_DEPTH_COST("surface-guest-read",(uint64_t)w*h*4,g.frames);\n'+anchor)
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
@@ -216,6 +223,7 @@ def main():
    record.setdefault('port_inputs',{})['depth_cost_trace.h']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h').read_bytes()).hexdigest()
   if relative=='libs/video/rsx_draw_engine.c':
    record['port_inputs']['color_readback_cache.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/color_readback_cache.inc').read_bytes()).hexdigest()
+   record['port_inputs']['index_remap_cache.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/index_remap_cache.inc').read_bytes()).hexdigest()
   records.append(record)
  (out/'manifest.json').write_text(json.dumps(records,indent=2)+'\n')
 if __name__=='__main__':main()
