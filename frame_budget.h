@@ -12,6 +12,7 @@
 #define TB_FT_PUT_ADVANCE 17  /* instant: the guest's FIFO put moved, a = put    */
 #define TB_FT_FENCE_WAIT  18  /* walker blocked on a GPU fence                   */
 #define TB_FT_DRAIN_CALL  19  /* one cellGcm_rsx_process_fifo call, a = put seen */
+#define TB_FT_VBLANK      20  /* instant: one vblank beat was ticked             */
 
 #ifdef __cplusplus
 extern "C" {

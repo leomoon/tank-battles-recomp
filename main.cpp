@@ -47,6 +47,10 @@
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +58,9 @@
 
 #ifndef _WIN32
 #include <sys/mman.h>   /* mmap: the guest arena, see alloc_guest_vm */
+#endif
+#if defined(__linux__)
+#include <sys/prctl.h>  /* walker/ticker names and timer slack */
 #endif
 
 #if defined(__APPLE__)
@@ -119,6 +126,7 @@ uint64_t ppu_guest_call(uint32_t, uint64_t, uint64_t, uint64_t, uint64_t,
 void     cellGcmTickVBlank(void);
 void     cellGcmTickFlip(void);
 int      cellGcm_take_flip_pending(void);
+void*    cellGcm_fifo_kick_event(void);     /* signalled by guest fence polls */
 void     cellGcm_rsx_process_fifo(void);      /* drain get -> put */
 unsigned cellGcm_flip_request_count(void);
 }
@@ -222,8 +230,73 @@ static void present_guest_frame(void)
         tank_battles_milestone("first guest frame presented");
 }
 
-static DWORD WINAPI frame_clock(LPVOID)
+/* The guest's FIFO control registers (big-endian in the GCM window). */
+static uint32_t gcm_control_word(uint32_t offset)
 {
+    if (!vm_base) return 0;
+    uint32_t v;
+    memcpy(&v, vm_base + ppu_hle_inject_base + 0x2000u + offset, sizeof v);
+    return __builtin_bswap32(v);
+}
+
+/* 0 until the walker has tried to bring the backend up, then 1 (up) or -1. */
+static std::atomic<int> g_rsx_state{0};
+
+/* Sleep for about `us` microseconds, recorded on the frame-budget timeline. */
+static void walker_sleep_us(unsigned us)
+{
+    const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
+    std::this_thread::sleep_for(std::chrono::microseconds(us));
+    if (t0) tb_frame_budget_span(TB_FT_CLOCK_SLEEP, us, t0, tb_frame_budget_now());
+}
+
+/* The vblank beat: cellGcmTickVBlank/TickFlip on a steady clock, on a thread
+ * of its own so a long drain or a blocking present cannot delay it. Only
+ * pending-work flags change here; guest handlers still run on guest threads
+ * (ppu_gcm_pump). The period stays the 16 ms the frame clock always used. */
+static DWORD WINAPI vblank_ticker(LPVOID)
+{
+#if defined(__linux__)
+    prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
+    prctl(PR_SET_NAME, "tb-vblank", 0, 0, 0);
+#endif
+    while (g_rsx_state.load(std::memory_order_acquire) == 0) Sleep(1);
+    using clock = std::chrono::steady_clock;
+    const auto period = std::chrono::milliseconds(16);
+    auto next_tick = clock::now();
+    for (;;) {
+        std::this_thread::sleep_until(next_tick);
+        int fired = 0;
+        while (clock::now() >= next_tick && fired < 240) {
+            cellGcmTickVBlank();
+            cellGcmTickFlip();
+            if (tb_frame_budget_on()) {
+                const uint64_t t = tb_frame_budget_now();
+                tb_frame_budget_span(TB_FT_VBLANK, 0, t, t);
+            }
+            next_tick += period;
+            fired++;
+        }
+        if (fired >= 240) next_tick = clock::now() + period;   /* fell too far behind -- resync */
+    }
+    return 0;
+}
+
+/* The RSX walker: owns the backend and the window, drains the guest FIFO as
+ * soon as `put` moves and presents each guest flip once.
+ *
+ * It used to share one loop with the vblank beat and sleep 4 ms between
+ * passes, so every label or fence the guest waited on paid up to a 4 ms poll
+ * on top of the work, and frames that missed a beat were paced to two.
+ * Idle, it polls `put` and the toolkit's fence kick at sub-millisecond
+ * intervals instead. A drain that stops at a flip leaves the frame to present
+ * before anything after it is drained. */
+static DWORD WINAPI rsx_walker(LPVOID)
+{
+#if defined(__linux__)
+    prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
+    prctl(PR_SET_NAME, "tb-rsx-walker", 0, 0, 0);
+#endif
     const char* title = getenv("PS3_TITLE");
     if (!title || !*title) title = "Tank Battles Recomp";
 
@@ -234,76 +307,55 @@ static DWORD WINAPI frame_clock(LPVOID)
 #if defined(PS3RECOMP_RSX_VULKAN)
     if (!rsx_ok) { tank_battles_report("Vulkan initialization failed"); _exit(87); }
 #endif
+    g_rsx_state.store(rsx_ok ? 1 : -1, std::memory_order_release);
+    if (!rsx_ok) return 0;
 
-    unsigned  last_flip = 0;
-    ULONGLONG next_tick = GetTickCount64();
+    using clock = std::chrono::steady_clock;
+    HANDLE kick = (HANDLE)cellGcm_fifo_kick_event();
+    auto last_pump = clock::now(), last_boot_present = last_pump;
+    unsigned idle = 0;
 
     for (;;) {
-        if (tb_frame_budget_on()) {
-            const uint64_t t0 = tb_frame_budget_now();
-            Sleep(4);
-            tb_frame_budget_span(TB_FT_CLOCK_SLEEP, 0, t0, tb_frame_budget_now());
-        } else {
-            Sleep(4);
-        }
-        ULONGLONG now = GetTickCount64();
-
-        int fired = 0;
-        while ((long long)(now - next_tick) >= 0 && fired < 240) {
-            // Catch-up work must not starve the SDL keyboard event pump.
-            if (rsx_ok && rsx_backend_pump() != 0) {
+        const auto now = clock::now();
+        /* Events at least every 2 ms, however busy the FIFO keeps the walker. */
+        if (now - last_pump >= std::chrono::milliseconds(2)) {
+            last_pump = now;
+            if (rsx_backend_pump() != 0) {
+                /* Quit, as the console's Quit Game does, rather than leave
+                 * the game running with no window. */
                 ps3_host_quit("window closed");
                 return 0;
             }
-            cellGcmTickVBlank();
-            cellGcmTickFlip();
-            /* Present a pending flip BEFORE draining any further. The flip
-             * fires at a get==put frame boundary on the guest thread, so the
-             * batch held right now is exactly the completed frame; presenting
-             * after the drain races the guest's next-frame writes and shows a
-             * mixed one. */
-            if (rsx_ok && cellGcm_take_flip_pending()) {
-                present_guest_frame();
-                last_flip = cellGcm_flip_request_count();
-            }
-            /* Drain the FIFO every tick. This is what writes the RSX sync-fence
-             * labels the game's per-frame logic blocks on, so it has to keep
-             * advancing at 60 Hz even while present() throttles. */
-            if (rsx_ok) drain_fifo();
-            next_tick += 16;             /* ~60 Hz */
-            fired++;
         }
-        if (fired >= 240) next_tick = now;   /* fell too far behind -- resync */
+        /* A flip the last drain stopped at: show exactly that frame before
+         * draining any of the next one. */
+        if (cellGcm_take_flip_pending()) {
+            present_guest_frame();
+            idle = 0;
+            continue;
+        }
+        /* Before the first flip present on a 16 ms cadence, so a fresh
+         * window is not left blank through a long boot. */
+        if (cellGcm_flip_request_count() == 0 &&
+            now - last_boot_present >= std::chrono::milliseconds(16)) {
+            last_boot_present = now;
+            rsx_backend_present();
+        }
 
-        /* Drain at the outer cadence too, not only on the 16 ms tick: titles
-         * fence every render pass on a label the drain writes, and one wave of
-         * those at 16 ms apiece paces the guest into single-figure frame rates.
-         * The real RSX writes them in microseconds. */
-        if (rsx_ok) {
-            if (cellGcm_take_flip_pending()) {
-                present_guest_frame();
-                last_flip = cellGcm_flip_request_count();
-            }
+        const uint32_t put = gcm_control_word(0), get = gcm_control_word(4);
+        const int kicked = kick && WaitForSingleObject(kick, 0) == WAIT_OBJECT_0;
+        if (put != get || kicked || idle == 0) {
             drain_fifo();
-
-            if (rsx_backend_pump() != 0) {
-                rsx_ok = 0;              /* window closed */
-                /* ...so quit, as the console's Quit Game does, instead of
-                 * leaving the game running with no window. */
-                ps3_host_quit("window closed");
-                continue;
-            }
-            /* Present on a guest flip. A present on a fixed clock can catch the
-             * drain mid-frame and flash a partial one. Before the first flip
-             * present freely, so the window is not blank during boot. */
-            unsigned fc = cellGcm_flip_request_count();
-            if (fc != last_flip) {
-                present_guest_frame();
-                last_flip = fc;
-            } else if (fc == 0) {
-                rsx_backend_present();
-            }
+            /* Progress, or a flip to present: go round at once. A drain
+             * that moved nothing (an ACQUIRE still unreleased) backs off
+             * like an idle walker so it does not spin a core. */
+            if (gcm_control_word(4) != get || gcm_control_word(0) != put) { idle = 1; continue; }
         }
+        /* Idle: yield briefly, then poll at 100 us, and at 250 us after 2 ms. */
+        idle++;
+        if (idle < 16)       std::this_thread::yield();
+        else if (idle < 36)  walker_sleep_us(100);
+        else                 walker_sleep_us(250);
     }
     return 0;
 }
@@ -524,7 +576,8 @@ int main(int argc, char** argv)
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
     g_ps3_guest_caller = harness_guest_caller;
-    CreateThread(NULL, 4u * 1024 * 1024, frame_clock, NULL, 0, NULL);
+    CreateThread(NULL, 4u * 1024 * 1024, rsx_walker, NULL, 0, NULL);
+    CreateThread(NULL, 1u * 1024 * 1024, vblank_ticker, NULL, 0, NULL);
 
     printf("\n[boot] dispatching entry OPD 0x%08X (stack top 0x%08X)\n\n",
            entry, STACK_TOP);

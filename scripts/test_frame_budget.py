@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from frame_budget import (CLOCK_SLEEP, DRAIN_CALL, FENCE_WAIT, FLIP_FIFO, HLE, PRESENT, PUT_ADVANCE, SYSCALL,
-                          USLEEP, Union, analyze, load)
+                          USLEEP, VBLANK, Union, analyze, load)
 
 
 def span(kind, t0, t1, who=0, a=0):
@@ -22,6 +22,7 @@ def two_frames():
     spans += [span(USLEEP, 5, 20, who=1), span(HLE, 18, 25, who=1, a=0xC44D8F34),
               span(SYSCALL, 40, 44, who=1, a=92), span(PUT_ADVANCE, 12, 12, a=0x200),
               span(PUT_ADVANCE, 31, 31, a=0x300)]
+    spans += [span(VBLANK, t, t) for t in range(0, 60, 16)]
     return sorted(spans, key=lambda s: s[4])
 
 
@@ -39,6 +40,7 @@ class FrameBudgetTests(unittest.TestCase):
         self.assertAlmostEqual(walker['other'], 0)
         self.assertLess(abs(result['walker_accounted_fraction'] - 1), 0.05)
         self.assertAlmostEqual(result['drains_per_frame'], 2)
+        self.assertAlmostEqual(result['vblank_hz'], 4 * 1000 / 60)
 
     def test_guest_blocking_is_a_union_not_a_sum(self):
         guest = analyze(two_frames(), nids={0xC44D8F34: 'cellGcmSetWaitFlip'})['guest_threads'][0]
