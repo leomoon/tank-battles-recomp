@@ -70,3 +70,31 @@ Work per frame:
 - **Submission:** 11.8 queue submissions and 76 barriers.
 
 Earlier attempts failed because the window lost focus, the overlay was toggled manually, or countdown OCR failed. They are retained under `rejected-*`.
+
+### GPU-resident depth on every OS
+
+`TB_DEPTH_GPU` now defaults on everywhere; `TB_DEPTH_GPU=0` or the harness flag `--cpu-depth` selects the reference CPU conversion. The harness no longer forces the CPU path when no flag is given.
+
+Fixture results on Iris Pro 580 with driver 27.20.100.8681:
+
+- the exact `vulkan_depth16` fixture passes, with the default on;
+- `vulkan_nv3089` passes;
+- `vulkan_draw_groups` still fails its existing presented-centre assertion.
+
+The present path now copies only the centre pixel unless `PS3RECOMP_VK_DUMP` or `TB_FRAME_HISTORY` asks for whole frames. Measurement manifests record whether the NV3089 GPU-resolve self-test matched.
+
+On the Iris, 20-second pending-review Battle diagnostics:
+
+| Change | Completed FPS | Walker busy (ms/frame) |
+| --- | --- | --- |
+| Before | 20.15 | 22.3 |
+| After (`budget-step6-1`) | 28.2 | 11.2 |
+
+Other per-frame changes:
+
+- uploaded texels dropped from 4.19 M to about 150;
+- sparse hashing dropped from 11.5 MB to 3.1 MB;
+- no guest colour reads remain;
+- one synchronous submit-wait remains, the GPU depth conversion's.
+
+The limiter is now the main guest thread (21.1 ms), with the GPU at 19.7 ms. The overlay was toggled manually during the diagnostic runs, so these are not clean timings.

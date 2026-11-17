@@ -8,7 +8,7 @@ from verify_vulkan_rendering import request_close
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',required=True);p.add_argument('--content-root',required=True);p.add_argument('--minutes',type=float,default=30);a=p.parse_args();out=resolve(a.output)
  if a.minutes<30:p.error('Acceptance soak requires at least 30 minutes')
- command=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--profile',str(ROOT/'analysis/performance/profiles'/out.name),'--scene','battle','--content-root',a.content_root,'--depth-gpu','--overlay','--pin-window','--lifecycle-stats','--frame-budget','--timeout',str(int(a.minutes*60+300))]
+ command=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--profile',str(ROOT/'analysis/performance/profiles'/out.name),'--scene','battle','--content-root',a.content_root,'--overlay','--pin-window','--lifecycle-stats','--frame-budget','--timeout',str(int(a.minutes*60+300))]
  proc=subprocess.Popen(command);samples=[];start=None;window=None;pid=None
  def close_owned():
   if window is None or pid is None:return

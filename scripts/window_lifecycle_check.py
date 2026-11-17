@@ -57,7 +57,7 @@ def main():
     args = parser.parse_args()
     out = resolve(args.output)
     command = [sys.executable, str(ROOT / 'scripts/script_gameplay.py'), '--output', str(out), '--build-dir', args.build_dir,
-               '--depth-gpu', '--overlay', '--quick', '--frame-budget', '--profile-seconds', '60']
+               '--overlay', '--quick', '--frame-budget', '--profile-seconds', '60']
     route = subprocess.Popen(command)
     # Live gameplay: the route has written its marker and the interval is set.
     while route.poll() is None:

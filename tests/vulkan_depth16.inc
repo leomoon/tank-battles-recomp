@@ -45,12 +45,9 @@ int main(void) {
  assert(!vk_init_all(16,16,"exact GPU depth16 fixture"));assert(!vk_eng_init(NULL,16,16));
  u32 z=vk_eng_depth_target_create(NULL,1,1);assert(z);
  setenv("TB_DEPTH_GPU","0",1);assert(!tb_vk_depth16(NULL,z,1,1,0x92));
+ /* Unset (an empty value on Windows) is the default: on for every OS. */
  unsetenv("TB_DEPTH_GPU");
-#if defined(__linux__)
  u32 t=tb_vk_depth16(NULL,z,1,1,0x92);assert(t);vk_eng_texture_release(NULL,t);
-#else
- assert(!tb_vk_depth16(NULL,z,1,1,0x92));
-#endif
  vk_eng_depth_target_release(NULL,z);setenv("TB_DEPTH_GPU","1",1);
  check_depth16(1024,2048);check_depth16(13,7);check_depth16(1,1);
  vk_eng_shutdown(NULL);pvkDeviceWaitIdle(s_vk.device);

@@ -42,12 +42,12 @@ static vk_buffer* tb_depth16_buffer(vk_buffer* b,VkDeviceSize bytes,VkBufferUsag
  return b;
 }
 static u32 tb_vk_depth16(void* user,u32 depth,u32 w,u32 h,u32 format) {
+ /* Default on for every OS: Iris Pro 580 (Windows) and the Linux hosts pass
+  * the exact vulkan_depth16 fixture; Vulkan's correctly rounded float
+  * multiply/add keep the quantization portable. TB_DEPTH_GPU=0 selects the
+  * reference CPU conversion. */
  const char* enabled=getenv("TB_DEPTH_GPU");
-#if defined(__linux__)
- const int on=!enabled || !strcmp(enabled,"1");
-#else
- const int on=enabled && !strcmp(enabled,"1");
-#endif
+ const int on=!enabled || strcmp(enabled,"0")!=0;
  if(!on || format!=0x92 || !w || !h || w>2048 || h>2048)return 0;
  vk_eng_obj* z=vk_eng_get(depth,VK_ENG_DEPTH);
  if(!z || w>z->w || h>z->h || (s_vk.depth_format!=VK_FORMAT_D32_SFLOAT && s_vk.depth_format!=VK_FORMAT_D32_SFLOAT_S8_UINT))return 0;

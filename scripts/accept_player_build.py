@@ -33,7 +33,7 @@ def main():
         print('GPU fixture failed; inspect '+str(output/'vulkan-fixtures.log'))
         return gpu.returncode if gpu.returncode>0 else 1
     subprocess.run([sys.executable,str(ROOT/'scripts/script_gameplay.py'),'--output',str(output/'battle'),
-                    '--build-dir',str(build),'--scene','battle','--depth-gpu'],check=True)
+                    '--build-dir',str(build),'--scene','battle'],check=True)
     report=summarize(output/'battle');manifest=report['manifest'];cadence=report['cadence']['completed_frame']
     checks=dict(release=manifest['build_type']=='Release',clean_baseline=report['baseline_eligible'],
                 same_executable=manifest['executable_sha256']==identity,overlay_off=manifest['overlay'] is False,
