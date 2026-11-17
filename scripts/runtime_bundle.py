@@ -87,7 +87,7 @@ def pack(args):
     copy(args.cpu_boot,'lib/'+Path(args.cpu_boot).name)
     allowed_tools={'runtime_cpu_smoke','runtime_shader_check','vulkan_draw_groups','vulkan_depth16','vulkan_nv3089',
                    'hle_fixture','positions_fixture','hotplug_fixture','keyboard_fixture','audio_fixture',
-                   'cache_fixture','timeline_fixture','entitlement_fixture'}
+                   'cache_fixture','timeline_fixture','entitlement_fixture','audio_burst_fixture'}
     for tool in args.tool:
         name=Path(tool).name
         if (name[:-4] if name.endswith('.exe') else name) not in allowed_tools:

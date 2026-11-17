@@ -81,6 +81,12 @@ list(JOIN tb_archive_sources ",\n" tb_archive_sources_json)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/runtime-build.json" CONTENT
 "{\"schema\":1,\"compiler_id\":\"${CMAKE_CXX_COMPILER_ID}\",\"compiler_version\":\"${CMAKE_CXX_COMPILER_VERSION}\",\"compiler_frontend\":\"${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}\",\"msvc_version\":\"${MSVC_VERSION}\",\"windows_sdk\":\"${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}\",\"architecture\":\"${CMAKE_SYSTEM_PROCESSOR}\",\"system\":\"${CMAKE_SYSTEM_NAME}\",\"crt\":\"${CMAKE_MSVC_RUNTIME_LIBRARY}\",\"archive_sources\":[${tb_archive_sources_json}]}\n")
 
+set(tb_audio_burst_tools "")
+set(tb_audio_burst_dependency "")
+if(WIN32)
+    set(tb_audio_burst_tools --tool "$<TARGET_FILE:audio_burst_fixture>")
+    set(tb_audio_burst_dependency audio_burst_fixture)
+endif()
 add_custom_target(runtime_bundle
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/runtime_bundle.py" pack
       --build "${CMAKE_CURRENT_BINARY_DIR}" --configuration "$<CONFIG>" --output "${CMAKE_CURRENT_BINARY_DIR}/runtime-bundle"
@@ -92,10 +98,12 @@ add_custom_target(runtime_bundle
       --tool "$<TARGET_FILE:hle_fixture>" --tool "$<TARGET_FILE:positions_fixture>" --tool "$<TARGET_FILE:hotplug_fixture>"
       --tool "$<TARGET_FILE:keyboard_fixture>" --tool "$<TARGET_FILE:audio_fixture>" --tool "$<TARGET_FILE:cache_fixture>"
       --tool "$<TARGET_FILE:timeline_fixture>" --tool "$<TARGET_FILE:entitlement_fixture>"
+      ${tb_audio_burst_tools}
       $<$<BOOL:${WIN32}>:--dependencies> $<$<BOOL:${WIN32}>:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}>
     DEPENDS tank_battles_host_archive tank_battles_boot_archive tank_battles_cpu_boot ps3recomp_runtime
       runtime_cpu_smoke vulkan_draw_groups vulkan_depth16 vulkan_nv3089
       runtime_shader_check
+      ${tb_audio_burst_dependency}
       hle_fixture positions_fixture hotplug_fixture keyboard_fixture audio_fixture cache_fixture timeline_fixture entitlement_fixture
     COMMAND_EXPAND_LISTS VERBATIM)
 add_test(NAME runtime_bundle_integrity COMMAND "${Python3_EXECUTABLE}" -m unittest discover

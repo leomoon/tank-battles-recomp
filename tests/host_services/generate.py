@@ -52,6 +52,23 @@ extra='#ifdef _WIN32\n#include <timeapi.h>\nstatic void fixture_end_timer(void){
 extra=extra.replace(' assert(cellAudioInit()==0);','\n#ifdef _WIN32\n assert(timeBeginPeriod(1)==TIMERR_NOERROR);atexit(fixture_end_timer);\n#endif\n assert(cellAudioInit()==0);')
 (out/'audio.c').write_text(audio+extra+'\nuint32_t sys_event_queue_create_direct(uint64_t key,int32_t size){(void)key;(void)size;return 0;}\n')
 
+burst_prefix = '''#include <SDL2/SDL.h>
+static Uint32 tb_fixture_audio_size(SDL_AudioDeviceID);
+static int tb_fixture_audio_submit(SDL_AudioDeviceID, const void*, Uint32);
+static void tb_fixture_audio_observe(void);
+#define SDL_GetQueuedAudioSize tb_fixture_audio_size
+#define SDL_QueueAudio tb_fixture_audio_submit
+'''
+burst_audio = audio.replace('atomic_fetch_add(&observed_blocks,1);',
+                            'atomic_fetch_add(&observed_blocks,1);tb_fixture_audio_observe();')
+burst_extra = extra.replace(' if(max_queue>1024)return 1;',
+    ' if(tb_fixture_audio_check())return 3;\n if(max_queue>1024)return 1;')
+if burst_extra == extra:
+    raise SystemExit('Audio burst fixture return anchor changed')
+(out/'audio_burst.c').write_text(burst_prefix+burst_audio+'\n#include "'+
+    (root/'tests/host_services/audio_burst_backend.inc').as_posix()+'"\n'+burst_extra+
+    '\nuint32_t sys_event_queue_create_direct(uint64_t key,int32_t size){(void)key;(void)size;return 0;}\n')
+
 cache=literal(root/'scripts/test_edat_cache.py','original_edat_resolve')
 helper=(sdk/'libs/filesystem/tests/test_edat_guest_klicensee.c').read_text().split('\nint main(')[0]
 helper=helper.replace('#include "../edat.c"','#include "'+(sdk/'libs/filesystem/edat.c').as_posix()+'"')

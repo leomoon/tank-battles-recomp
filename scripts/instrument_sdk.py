@@ -3,6 +3,9 @@ import argparse,hashlib,json,re
 from pathlib import Path
 
 EDITS={
+ 'runtime/syscalls/sys_ppu_thread.c':[(
+  '    if (priority < 256)\n        SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);',
+  '    /* Tank Battles SurMixer producers use guest priorities 400..404.\n     * Preserve their precedence over the main thread (1001) on Windows. */\n    if (priority < 512) {\n        SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);\n        if (getenv("AUDIO_RATE")) fprintf(stderr,"[audio-priority] guest=%d host=%d name=%s\\n",\n            priority,GetThreadPriority(t->host_thread),t->name);\n    }')],
  'libs/video/rsx_texture_layout.c': [('void rsx_texture_decode(void* dst, u32 dst_pitch,', 'void tb_texture_decode_reference(void* dst, u32 dst_pitch,')],
  'runtime/syscalls/sys_fs.c':[(
   '    FILE* fp = fopen(host_path, mode);\n    const int open_errno = errno;',
@@ -220,6 +223,14 @@ def main():
    text=text.replace('#endif /* !_WIN32 */','')
    text=text.replace('#include <dlfcn.h>\n#include <pthread.h>','#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_host.h')+'"',1)
   if relative=='libs/audio/cellAudio.c':
+   before='''    return SDL_GetQueuedAudioSize(s_sdl_audio_dev) / (2 * sizeof(float)) <
+           CELL_AUDIO_BLOCK_SAMPLES * 4 ? CELL_AUDIO_BLOCK_SAMPLES : 0;'''
+   after='''    /* A device may consume partial guest blocks. Reserve room for the
+     * entire next block, so submission cannot exceed the four-block bound. */
+    return SDL_GetQueuedAudioSize(s_sdl_audio_dev) / (2 * sizeof(float)) <=
+           CELL_AUDIO_BLOCK_SAMPLES * 3 ? CELL_AUDIO_BLOCK_SAMPLES : 0;'''
+   if text.count(before)!=1:raise SystemExit('Audio queue capacity anchor mismatch')
+   text=text.replace(before,after,1)
    begin=text.index('#ifdef _WIN32\nstatic unsigned long long g_audio_underruns;')
    end=text.index('\nstatic int audio_start_mix_thread',begin)
    text=text[:begin]+'#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/audio_clock.inc')+'"\n'+text[end:]

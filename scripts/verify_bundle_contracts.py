@@ -16,6 +16,8 @@ run(binary/('runtime_shader_check'+ext))
 for name in ('hle','positions','hotplug','keyboard','audio'):
     run(binary/(name+'_fixture'+ext))
 run(binary/('audio_fixture'+ext),'no-device',extra={'SDL_AUDIODRIVER':'nonexistent-test-driver'})
+if os.name=='nt':
+    run(binary/('audio_burst_fixture'+ext),'burst')
 run(sys.executable,root/'tests/host_services/verify.py',binary/('hle_fixture'+ext))
 run(sys.executable,root/'tests/host_services/verify_timeline.py',binary/('timeline_fixture'+ext))
 for suite in ('test_edat_cache.py','test_entitlement.py','test_prepare_entitlement.py','test_frame_budget.py'):
