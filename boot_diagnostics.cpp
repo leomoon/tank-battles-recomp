@@ -14,8 +14,11 @@
 #include <unistd.h>
 #include <cerrno>
 #include <initializer_list>
+#else
+#include <windows.h>
 #endif
 #include <cerrno>
+#include <cstring>
 
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 static_assert(std::atomic<const char*>::is_always_lock_free);
@@ -78,7 +81,29 @@ static void report_signal(int number) {
 }
 #endif
 #ifdef _WIN32
-static LONG WINAPI report_exception(EXCEPTION_POINTERS*) {
+static LONG WINAPI report_exception(EXCEPTION_POINTERS* info) {
+    // Code, faulting module + offset (symbolize with the build's link map) and
+    // the access-violation target, before the usual thread report.
+    if (info && info->ExceptionRecord) {
+        const EXCEPTION_RECORD* record = info->ExceptionRecord;
+        const auto address = reinterpret_cast<uintptr_t>(record->ExceptionAddress);
+        HMODULE module = nullptr;
+        char path[MAX_PATH] = "?";
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(record->ExceptionAddress), &module))
+            GetModuleFileNameA(module, path, sizeof path);
+        const char* name = strrchr(path, '\\');
+        char line[512];
+        int n = snprintf(line, sizeof line, "[diagnostic] exception code=0x%08lX address=0x%llX module=%s+0x%llX",
+                         static_cast<unsigned long>(record->ExceptionCode), static_cast<unsigned long long>(address),
+                         name ? name + 1 : path,
+                         static_cast<unsigned long long>(module ? address - reinterpret_cast<uintptr_t>(module) : 0));
+        if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2 && n > 0 && n < (int)sizeof line)
+            n += snprintf(line + n, sizeof line - n, " access=%s target=0x%llX",
+                          record->ExceptionInformation[0] == 0 ? "read" : record->ExceptionInformation[0] == 1 ? "write" : "execute",
+                          static_cast<unsigned long long>(record->ExceptionInformation[1]));
+        if (n > 0 && n < (int)sizeof line - 1) { line[n++] = '\n'; tb_host_write(line, static_cast<size_t>(n)); }
+    }
     tank_battles_report("fatal Windows exception");
     return EXCEPTION_CONTINUE_SEARCH;
 }
