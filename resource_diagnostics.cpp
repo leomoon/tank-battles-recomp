@@ -4,7 +4,12 @@
 #include <cstring>
 #include <mutex>
 #include <set>
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
 namespace {
 struct Trace {
@@ -33,8 +38,16 @@ Trace& trace(){static Trace instance;return instance;}
 extern "C" void tb_resource_read(int host_fd, uint64_t offset, const void* data, uint64_t size, uint32_t ea)
 {
     auto& t=trace();if(!t.events || !t.payload || !size)return;
-    char proc[64],path[4096];snprintf(proc,sizeof proc,"/proc/self/fd/%d",host_fd);
+    char path[4096];
+#ifdef _WIN32
+    wchar_t wide[4096];
+    DWORD count=GetFinalPathNameByHandleW((HANDLE)_get_osfhandle(host_fd),wide,4096,FILE_NAME_NORMALIZED);
+    if(!count || count>=4096 || !WideCharToMultiByte(CP_UTF8,0,wide,-1,path,sizeof path,NULL,NULL))return;
+    for(char* p=path;*p;++p)if(*p=='\\')*p='/';
+#else
+    char proc[64];snprintf(proc,sizeof proc,"/proc/self/fd/%d",host_fd);
     auto n=readlink(proc,path,sizeof(path)-1);if(n<=0)return;path[n]=0;
+#endif
     const char* base=strrchr(path,'/');base=base?base+1:path;
     if(strcmp(base,"assets_images.edat.dec") && strcmp(base,"assets_common.edat.dec") &&
        strcmp(base,"assets_ps3.edat.dec") && strcmp(base,"assets_sound.edat.dec"))return;

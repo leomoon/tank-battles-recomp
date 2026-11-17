@@ -30,16 +30,26 @@ endif()
 #         -DPS3RECOMP_DIR=/path/to/ps3recomp \
 #         -DRECOMP_DIR=/path/to/my_game/recompiled
 #
+option(TB_BUILD_RUNTIME_BUNDLE "Build a game-free reusable runtime and synthetic smoke tools" OFF)
 set(PS3RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/ps3recomp" CACHE PATH
     "ps3recomp source directory (defaults to the vendored SDK)")
 get_filename_component(PS3RECOMP_DIR "${PS3RECOMP_DIR}" ABSOLUTE)
 if(NOT EXISTS "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp")
     message(FATAL_ERROR "Vendored ps3recomp source is missing. Restore external/ps3recomp from this repository, or set -DPS3RECOMP_DIR=/path/to/ps3recomp.")
 endif()
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    option(PS3RECOMP_RSX_VULKAN "Build the Linux Vulkan renderer" ON)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR WIN32)
+    option(PS3RECOMP_RSX_VULKAN "Build the Vulkan renderer" ON)
 endif()
 
+if(TB_BUILD_RUNTIME_BUNDLE)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_runtime_fixture.py")
+    find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
+    set(TB_SYNTHETIC_DIR "${CMAKE_CURRENT_BINARY_DIR}/synthetic")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_runtime_fixture.py"
+        --sdk "${PS3RECOMP_DIR}" --output "${TB_SYNTHETIC_DIR}" COMMAND_ERROR_IS_FATAL ANY)
+    set(RECOMP_DIR "${TB_SYNTHETIC_DIR}" CACHE PATH "Synthetic input for the game-free bundle" FORCE)
+    set(PORT_SPU_INPUTS "${TB_SYNTHETIC_DIR}/synthetic-spu.elf" CACHE STRING "Synthetic SPU only" FORCE)
+endif()
 set(RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/recompiled" CACHE PATH
     "Directory holding the lifter's output: ppu_recomp.h and the lifted sources")
 get_filename_component(RECOMP_DIR "${RECOMP_DIR}" ABSOLUTE)
@@ -78,8 +88,25 @@ message(STATUS "Lifted sources:  ${RECOMP_SOURCE_COUNT} file(s)")
 # imported one arrives without SDL2, pthreads, the Metal frameworks or the
 # Winsock/XInput imports -- the link then fails on every platform for a
 # different reason. add_subdirectory hands all of that over with the target.
-add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
-                 EXCLUDE_FROM_ALL)
+# The pinned SDK rejects Vulkan on Windows. Keep it unchanged and attach the
+# port-owned Vulkan source/dependencies to its ordinary runtime target here.
+if(WIN32 AND PS3RECOMP_RSX_VULKAN)
+    set(PS3RECOMP_RSX_VULKAN OFF)
+    add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk" EXCLUDE_FROM_ALL)
+    set(PS3RECOMP_RSX_VULKAN ON)
+    find_path(Vulkan_INCLUDE_DIRS vulkan/vulkan.h REQUIRED)
+    find_package(glslang CONFIG REQUIRED)
+    target_sources(ps3recomp_runtime PRIVATE "${PS3RECOMP_DIR}/libs/video/rsx_shader_spirv.cpp")
+    set_source_files_properties("${PS3RECOMP_DIR}/libs/video/rsx_shader_spirv.cpp" PROPERTIES COMPILE_DEFINITIONS PS3RECOMP_HAVE_SPIRV_TRANSLATION=1)
+    target_compile_definitions(ps3recomp_runtime PUBLIC PS3RECOMP_RSX_VULKAN)
+    target_include_directories(ps3recomp_runtime PRIVATE "${Vulkan_INCLUDE_DIRS}")
+    target_link_libraries(ps3recomp_runtime PRIVATE glslang::glslang glslang::SPIRV)
+    if(TARGET glslang::glslang-default-resource-limits)
+        target_link_libraries(ps3recomp_runtime PRIVATE glslang::glslang-default-resource-limits)
+    endif()
+else()
+    add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk" EXCLUDE_FROM_ALL)
+endif()
 
 # ---------------------------------------------------------------------------
 # The HLE NID table
@@ -196,6 +223,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_draw_group.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/lifecycle_stats.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/sdl_event_gate.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_host.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/player_settings_hooks.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_fence_poll.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_present_mode.inc"
@@ -223,7 +251,7 @@ if(PORT_ENABLE_SPU AND SPU_SOURCES)
     list(APPEND SPU_SOURCES "${EXECUTION_SDK}/runtime/spu/spu_dispatch_mt.c")
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
-if(PS3RECOMP_RSX_VULKAN)
+if(PS3RECOMP_RSX_VULKAN AND NOT WIN32)
     get_source_file_property(VULKAN_SHADER_DEFINITIONS "${PS3RECOMP_DIR}/libs/video/rsx_shader_spirv.cpp"
         DIRECTORY "${PS3RECOMP_DIR}" COMPILE_DEFINITIONS)
     if(NOT VULKAN_SHADER_DEFINITIONS MATCHES "PS3RECOMP_HAVE_SPIRV_TRANSLATION=1")
@@ -266,8 +294,7 @@ set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${EXECUTION_RUNTIME_SOUR
 file(GLOB_RECURSE EXECUTION_PATCHED_SOURCES "${EXECUTION_SDK}/*.cpp" "${EXECUTION_SDK}/*.c")
 set_source_files_properties(${EXECUTION_PATCHED_SOURCES} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
 
-add_executable(${PROJECT_NAME}
-    main.cpp
+set(TB_HOST_SOURCES
     stubs.cpp
     boot_diagnostics.cpp
     text_conversion.cpp
@@ -295,9 +322,11 @@ add_executable(${PROJECT_NAME}
     asset_probe.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
-    ${RECOMP_SOURCES}
-    ${SPU_SOURCES}
 )
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeTargets.cmake")
+add_executable(${PROJECT_NAME} runtime_entry.cpp ${RECOMP_SOURCES} ${SPU_SOURCES})
+target_link_libraries(${PROJECT_NAME} PRIVATE tank_battles_host tank_battles_boot)
 
 set_source_files_properties(texture_decode.cpp texture_decode_fast.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/video")
 
@@ -429,6 +458,28 @@ if(MSVC)
 else()
     set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-w;-ffp-contract=off")
+endif()
+
+# Host code sees only the title-independent lifter ABI, never a game's declarations.
+foreach(tb_host_target tank_battles_host tank_battles_boot)
+    target_include_directories(${tb_host_target} PRIVATE ${TB_ABI_DIR} ${PS3RECOMP_DIR}/include
+        ${PS3RECOMP_DIR}/runtime/ppu ${PS3RECOMP_DIR}/runtime/spu ${PS3RECOMP_DIR}/runtime/memory
+        ${PS3RECOMP_DIR}/runtime/syscalls ${PS3RECOMP_DIR}/runtime/platform ${PS3RECOMP_DIR}/libs/video
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(${tb_host_target} PRIVATE $<TARGET_PROPERTY:${PROJECT_NAME},COMPILE_OPTIONS>)
+    target_compile_definitions(${tb_host_target} PRIVATE $<TARGET_PROPERTY:${PROJECT_NAME},COMPILE_DEFINITIONS>)
+    target_link_libraries(${tb_host_target} PUBLIC ps3recomp_runtime)
+    if(WIN32)
+        target_compile_definitions(${tb_host_target} PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
+        target_compile_definitions(ps3recomp_runtime PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(${tb_host_target} PUBLIC SDL2::SDL2 dbghelp user32 gdi32 winmm)
+        find_package(Iconv REQUIRED)
+        target_link_libraries(${tb_host_target} PUBLIC Iconv::Iconv)
+    endif()
+endforeach()
+
+if(TB_BUILD_RUNTIME_BUNDLE)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeBundle.cmake")
 endif()
 
 # ---------------------------------------------------------------------------

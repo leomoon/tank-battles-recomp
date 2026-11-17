@@ -32,9 +32,7 @@ static void convert(ppu_context* c){
  static std::atomic<unsigned> calls{0};if(calls.fetch_add(1)<8)fprintf(stderr,"[l10n] %s -> %s produced=%zu status=%u\n",source,destination,produced,result);
 }
 void tank_battles_register_text_conversion(){
-#if defined(__linux__)
  tank_battles_register_override(0x931FF25A,convert);
-#endif
 }
 extern "C" void ps3_hle_call(uint32_t,ppu_context*);
 int tb_conversion_probe(){

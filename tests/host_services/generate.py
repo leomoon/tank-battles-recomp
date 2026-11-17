@@ -35,7 +35,12 @@ for name in ('positions','hotplug'):
 keyboard=(sdk/'libs/input/tests/test_pad_keyboard.c').read_text().replace('#include "../cellPad.c"','#include "cellPad_under_test.c"')
 keyboard+='\nvoid tb_input_sample(uint32_t k,uint32_t p,uint32_t b){(void)k;(void)p;(void)b;}\n'
 keyboard=keyboard.replace('    /* Several keys at once. */','    keys(0,0,0);tb_keyboard_down(SDL_SCANCODE_Z);pad_poll_backend();tb_host_sleep_us(20000);pad_poll_backend();assert(tb_keyboard_peek()==CELL_PAD_CTRL_CROSS);assert(D2()==CROSS);assert(D2()==0);tb_keyboard_down(SDL_SCANCODE_DOWN);assert(D1()==DOWN);assert(D1()==0);\n    /* Several keys at once. */')
-(out/'keyboard.c').write_text(portable(keyboard))
+# Give fixture SDL hooks private names: static SDL's dynapi object exports
+# all entry points together, so ordinary symbol interposition cannot work.
+keyboard_hooks=('SDL_NumJoysticks','SDL_PeepEvents','SDL_WasInit','SDL_InitSubSystem',
+                'SDL_GetError','SDL_GameControllerUpdate','SDL_GetKeyboardState','SDL_GetKeyboardFocus')
+private_hooks=''.join('#define '+name+' tb_fixture_'+name+'\n' for name in keyboard_hooks)
+(out/'keyboard.c').write_text(private_hooks+portable(keyboard))
 
 audio=(out/'overlay/libs/audio/cellAudio.c').read_text()
 audio='#include <stdatomic.h>\nstatic atomic_uint observed_blocks;\n'+audio

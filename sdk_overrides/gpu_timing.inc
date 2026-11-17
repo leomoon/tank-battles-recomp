@@ -1,6 +1,6 @@
 /* Sparse, opt-in GPU timestamps for the serialized general command buffer.
  * Every 256th submission is sampled; no extra GPU waits are introduced. */
-#include <time.h>
+#include "../host_services.h"
 #include <sys/stat.h>
 static VkQueryPool tb_gpu_pool;
 static FILE* tb_gpu_file;
@@ -26,7 +26,9 @@ static void tb_gpu_begin(void)
         VkQueryPoolCreateInfo info={.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,.queryType=VK_QUERY_TYPE_TIMESTAMP,.queryCount=2};
         if(pvkCreateQueryPool(s_vk.device,&info,NULL,&tb_gpu_pool)!=VK_SUCCESS)return;
         tb_gpu_file=fopen(path,"w");
+#ifndef _WIN32
         if(tb_gpu_file)fchmod(fileno(tb_gpu_file),0644);
+#endif
         fprintf(stderr,"[gpu-timing] timestamp period=%g ns valid_bits=%u; every 256th serialized command\n",tb_gpu_period,tb_gpu_bits);
     }
     if(!tb_gpu_file || ++tb_gpu_submissions%256 || tb_gpu_samples>=30000)return;
@@ -47,9 +49,9 @@ static void tb_gpu_result(void)
     }
     const uint64_t mask=tb_gpu_bits==64?UINT64_MAX:(UINT64_C(1)<<tb_gpu_bits)-1;
     const double ns=((ticks[1]-ticks[0])&mask)*tb_gpu_period;
-    struct timespec now;clock_gettime(CLOCK_MONOTONIC,&now);
+    const uint64_t now=tb_host_now();
     fprintf(tb_gpu_file,"{\"monotonic_ns\":%llu,\"submission\":%llu,\"gpu_ns\":%.3f}\n",
-            (unsigned long long)((uint64_t)now.tv_sec*1000000000u+now.tv_nsec),(unsigned long long)tb_gpu_submissions,ns);
+            (unsigned long long)now,(unsigned long long)tb_gpu_submissions,ns);
     if(++tb_gpu_samples%32==0)fflush(tb_gpu_file);
 }
 static void tb_gpu_shutdown(void)

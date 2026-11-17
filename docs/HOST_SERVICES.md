@@ -32,3 +32,5 @@ ctest --test-dir build-tests/host-services -C Release --output-on-failure
 Requires SDL2 development files. Windows CI uses clang-cl and vcpkg's `sdl2:x64-windows`; Linux uses its native compiler and SDL2 package. Fixtures compile the production HLE adapter, strict policy, diagnostics, cache resolver, input mapper, audio loop and timeline. Only fixture VM, host callbacks and artificial inputs are supplied. The ABI header is emitted by an empty lifter instance, without a game executable or functions. The suite also runs the standalone entitlement contracts. No game data, purchased license, derived sidecar or key is uploaded to CI.
 
 This step covers host-service contracts. Building and testing the complete Windows Vulkan player, physical input/audio devices and real gameplay remain separate work.
+
+The full game-free runtime split, Windows Vulkan build and downloadable artifact contract are described in [RUNTIME_BUNDLE.md](RUNTIME_BUNDLE.md). Physical Windows GPU acceptance remains separate from hosted CI.

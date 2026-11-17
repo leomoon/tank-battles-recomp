@@ -49,6 +49,7 @@
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
 #include "host_utf8_args.h"
+#include "host_services.h"
 
 #include <atomic>
 #include <chrono>
@@ -139,11 +140,37 @@ unsigned cellGcm_flip_request_count(void);
 /* ---------------------------------------------------------------------------
  * RSX present backend
  * -----------------------------------------------------------------------*/
-/* D3D12 on Windows, Metal on Apple, and the null backend's headless software
- * path anywhere else -- the same selection runtime/host/host_posix.c and the
- * toolkit's boot harness make. All three expose the same three entry points,
- * so the frame clock below is backend-agnostic. */
-#if defined(_WIN32)
+/* Vulkan on Linux and Windows; optional D3D12/Metal remain build choices.
+ * The synthetic CPU smoke explicitly selects the null backend. */
+#ifdef TB_CPU_SMOKE
+#undef PS3RECOMP_RSX_VULKAN
+#endif
+#if defined(PS3RECOMP_RSX_VULKAN) && !defined(TB_CPU_SMOKE)
+extern "C" int rsx_vulkan_backend_init(uint32_t,uint32_t,const char*);
+extern "C" void rsx_vulkan_backend_present(void);
+extern "C" int rsx_vulkan_backend_pump_messages(void);
+#define rsx_backend_init rsx_vulkan_backend_init
+#define rsx_backend_present rsx_vulkan_backend_present
+#define rsx_backend_pump rsx_vulkan_backend_pump_messages
+#define RSX_BACKEND_NAME "Vulkan"
+#elif defined(TB_CPU_SMOKE)
+extern "C" int rsx_null_backend_init(uint32_t,uint32_t,const char*);
+#ifdef _WIN32
+#include "rsx_commands.h"
+static void tb_cpu_null_present(void) {
+    rsx_backend* backend=rsx_get_backend();
+    if(backend && backend->present)backend->present(backend->userdata,0);
+}
+#else
+extern "C" void rsx_null_backend_present(void);
+#define tb_cpu_null_present rsx_null_backend_present
+#endif
+extern "C" int rsx_null_backend_pump_messages(void);
+#define rsx_backend_init rsx_null_backend_init
+#define rsx_backend_present tb_cpu_null_present
+#define rsx_backend_pump rsx_null_backend_pump_messages
+#define RSX_BACKEND_NAME "Synthetic CPU smoke"
+#elif defined(_WIN32)
 extern "C" int  rsx_d3d12_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_d3d12_backend_present(void);
 extern "C" int  rsx_d3d12_backend_pump_messages(void);
@@ -159,14 +186,6 @@ extern "C" int  rsx_metal_backend_pump_messages(void);
 #  define rsx_backend_present rsx_metal_backend_present
 #  define rsx_backend_pump    rsx_metal_backend_pump_messages
 #  define RSX_BACKEND_NAME    "Metal"
-#elif defined(PS3RECOMP_RSX_VULKAN)
-extern "C" int  rsx_vulkan_backend_init(uint32_t w, uint32_t h, const char* title);
-extern "C" void rsx_vulkan_backend_present(void);
-extern "C" int  rsx_vulkan_backend_pump_messages(void);
-#  define rsx_backend_init    rsx_vulkan_backend_init
-#  define rsx_backend_present rsx_vulkan_backend_present
-#  define rsx_backend_pump    rsx_vulkan_backend_pump_messages
-#  define RSX_BACKEND_NAME    "Vulkan"
 #else
 extern "C" int  rsx_null_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_null_backend_present(void);
@@ -637,11 +656,7 @@ static int run_guest(uint32_t entry, uint32_t stack_top)
 static int run_guest(uint32_t entry, uint32_t stack_top) { return ppu_run(entry, stack_top); }
 #endif
 
-#ifdef _WIN32
-static int tb_player_main(int argc, char** argv)
-#else
-int main(int argc, char** argv)
-#endif
+int tb_player_main(int argc, char** argv)
 {
     if (argc < 2) {
         printf("usage: %s <PPU ELF>\n", argv[0]);
@@ -719,8 +734,8 @@ int main(int argc, char** argv)
 
 #if defined(PS3RECOMP_RSX_VULKAN)
     // Normal Vulkan launches request a real window and translated guest programs.
-    if (!getenv("PS3RECOMP_VK_WINDOW")) setenv("PS3RECOMP_VK_WINDOW", "1", 0);
-    if (!getenv("PS3RECOMP_VK_GUEST_PROGRAMS")) setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 0);
+    if (!getenv("PS3RECOMP_VK_WINDOW")) tb_host_env("PS3RECOMP_VK_WINDOW", "1", 0);
+    if (!getenv("PS3RECOMP_VK_GUEST_PROGRAMS")) tb_host_env("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 0);
 #endif
 
     /* Install the guest-callback hook, then start the frame clock. It no-ops
@@ -755,7 +770,3 @@ int main(int argc, char** argv)
      * got anywhere. */
     return g_sys_process_exit_called ? (int)g_sys_process_exit_code : 0;
 }
-
-#ifdef _WIN32
-TB_UTF8_ENTRY(tb_player_main)
-#endif

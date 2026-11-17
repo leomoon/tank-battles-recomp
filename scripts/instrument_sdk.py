@@ -215,6 +215,10 @@ def main():
     pattern=r'(extern "C" void )'+name+r'(\()'
     text,count=re.subn(pattern,lambda m:m[1]+'tb_sdk_'+name+m[2],text)
     if count!=1:raise SystemExit('Portable HLE boundary anchor mismatch: '+name)
+  if relative=='libs/video/rsx_vulkan_backend.c':
+   text=text.replace('#ifndef _WIN32\n','/* Vulkan backend is compiled on Linux and Windows. */\n',1)
+   text=text.replace('#endif /* !_WIN32 */','')
+   text=text.replace('#include <dlfcn.h>\n#include <pthread.h>','#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_host.h')+'"',1)
   if relative=='libs/audio/cellAudio.c':
    begin=text.index('#ifdef _WIN32\nstatic unsigned long long g_audio_underruns;')
    end=text.index('\nstatic int audio_start_mix_thread',begin)
