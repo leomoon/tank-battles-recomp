@@ -30,8 +30,8 @@ class ContentPathsTests(unittest.TestCase):
                         "-o", str(cls.generator)], check=True, capture_output=True)
         synthetic_key = re.search(r"KLIC\[16\].*?\{(.*?)\}", source.read_text(), re.S)[1]
         cls.key = bytes(int(v, 16) for v in re.findall(r"0x([0-9A-Fa-f]{2})", synthetic_key))
-        cls.executable = ROOT / "build-smoke/TankBattlesRecomp"
-        cls.elf = ROOT / "build-smoke/synthetic/smoke.elf"
+        cls.executable = Path(os.environ.get("TB_TEST_RUNNER", str(ROOT / "build-smoke/TankBattlesRecomp")))
+        cls.elf = Path(os.environ.get("TB_TEST_ELF", str(ROOT / "build-smoke/synthetic/smoke.elf")))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
     def setUp(self):

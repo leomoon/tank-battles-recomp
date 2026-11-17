@@ -11,6 +11,7 @@ import time
 from diagnostic_logs import open_log, normalize_log_permissions
 
 def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snapshot=False, on_start=None):
+    env = dict(env, TB_SESSION_CAPTURED="1")  # This parent owns the child's stdio.
     if log_path:
         log_path = Path(log_path)
         log_path.parent.mkdir(parents=True, exist_ok=True)

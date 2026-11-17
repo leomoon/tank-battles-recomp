@@ -35,6 +35,6 @@ int main(){
  tb_fps_toggle();assert(tb_fps_overlay(pixels.data(),w,h,pitch,1));
 }
 ''')
-subprocess.run(['c++','-std=c++20','-O2','-I'+str(ROOT),str(out/'test.cpp'),str(ROOT/'fps_overlay.cpp'),str(ROOT/'rendering_profile.cpp'),'-pthread','-o',str(out/'test')],check=True)
+subprocess.run(['c++','-std=c++20','-O2','-I'+str(ROOT),str(out/'test.cpp'),str(ROOT/'fps_overlay.cpp'),str(ROOT/'player_settings.cpp'),str(ROOT/'rendering_profile.cpp'),'-pthread','-o',str(out/'test')],check=True)
 subprocess.run([str(out/'test')],env=dict(os.environ,TB_FPS_OVERLAY='1'),check=True)
 print('PASS: game and presentation cadence, frame time, sampling, clipping, padding and toggle')

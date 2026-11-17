@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import os
 from pathlib import Path
 import shlex
@@ -144,6 +145,7 @@ def launch_environment(config, paramsfo=None, mounts=None):
     env["PS3_PARAM_SFO"] = str(sfo)
     env.setdefault("TB_EXPECTED_TITLE_ID", config["game"]["title_id"])
     env.setdefault("PS3_STDIO_UNBUFFERED", "1")
+    env.setdefault("PS3_VERBOSE", "0")
     return env
 
 
@@ -155,8 +157,15 @@ def launch(args, config) -> int:
         raise ValueError(f"Port executable not found: {executable}. Run configure and build first.")
     env = launch_environment(config, args.paramsfo)
     log_path = resolve(args.log) if args.log else None
-    if log_path and not log_path.is_relative_to((ROOT / "analysis").resolve()):
+    if args.log and not log_path.is_relative_to((ROOT / "analysis").resolve()):
         raise ValueError("--log must be inside the repository's analysis/ directory")
+    if not args.console and log_path is None:
+        directory = Path(env["TB_LOG_DIR"]).expanduser() if env.get("TB_LOG_DIR") else Path(env.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "tank-battles-recomp/logs"
+        log_path = directory / (datetime.now().strftime("session-%Y%m%d-%H%M%S-%f") + f"-{os.getpid()}.log")
+    if log_path:
+        print(f"[session] log: {log_path}", flush=True)
+    if args.console:
+        env["TB_LOG_CONSOLE"] = "1"
     status, _ = run_session([str(executable), str(elf)], cwd=ROOT, env=env,
                             timeout=args.timeout, log_path=log_path, request_snapshot=True)
     return status
@@ -180,7 +189,7 @@ def main() -> int:
     install.add_argument("--cmake", default="cmake")
     install.add_argument("--ninja", default="ninja")
     install.add_argument("--backend", choices=("auto", "vulkan", "null"), default="auto")
-    install.add_argument("--build-type", default="RelWithDebInfo")
+    install.add_argument("--build-type", default="Release")
     prep = commands.add_parser("prepare", help="Analyze and translate your decrypted game executable")
     prep.add_argument("--sdk")
     prep.add_argument("--elf")
@@ -194,7 +203,7 @@ def main() -> int:
     conf.add_argument("--cmake", default="cmake")
     conf.add_argument("--ninja", default="ninja")
     conf.add_argument("--backend", choices=("auto", "vulkan", "null"), default="auto", help="Linux renderer; auto uses the CMake default or existing cache")
-    conf.add_argument("--build-type", default="RelWithDebInfo")
+    conf.add_argument("--build-type", default="Release")
     conf.add_argument("cmake_args", nargs=argparse.REMAINDER, help="Extra CMake arguments after --")
     compile_command = commands.add_parser("build", help="Compile the configured native executable")
     compile_command.add_argument("--build-dir")
@@ -205,7 +214,9 @@ def main() -> int:
     launch_command.add_argument("--paramsfo", help="Local PARAM.SFO (defaults to config.toml)")
     launch_command.add_argument("--build-dir")
     launch_command.add_argument("--timeout", type=positive_seconds, help="Maximum run time in seconds; timeout exits with status 124")
-    launch_command.add_argument("--log", help="Combined stdout/stderr file under analysis/; exit metadata is saved beside it")
+    logging = launch_command.add_mutually_exclusive_group()
+    logging.add_argument("--log", help="Diagnostic log under analysis/; default: per-user state directory")
+    logging.add_argument("--console", action="store_true", help="Print game output to the terminal instead of an automatic log")
     args = parser.parse_args()
     try:
         with resolve(args.config).open("rb") as file:

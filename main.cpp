@@ -31,6 +31,8 @@
 /* The lifter's generated header, which declares ppu_context and the function
  * table. It comes first: everything below is written against that struct. */
 #include "ppu_recomp.h"
+#include "player_settings.h"
+#include "player_session.h"
 #include "boot_diagnostics.h"
 #include "stubs.h"
 #include "hle_inventory.h"
@@ -640,6 +642,7 @@ int main(int argc, char** argv)
         printf("usage: %s <PPU ELF>\n", argv[0]);
         return 2;
     }
+    tb_player_session_begin();
 
 #ifdef _WIN32
 #pragma comment(lib, "winmm.lib")
@@ -676,6 +679,7 @@ int main(int argc, char** argv)
         return 1;
     }
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
+    tb_settings_init();
 
     tank_battles_init_offline_network();
     ppu_recomp_register();   /* lifted function table -> address map */

@@ -8,10 +8,10 @@ class ExecutionPolicyTests(unittest.TestCase):
  def run_probe(self,kind,mode='strict'):
   directory=ROOT/'build-tests/execution-policy';directory.mkdir(parents=True,exist_ok=True)
   env={k:v for k,v in os.environ.items() if not k.startswith(('PS3_','TB_'))}
-  env.update(PS3_PARAM_SFO=str(ROOT/'build-smoke/synthetic/PARAM.SFO'),PS3_VFS_ROOT=str(directory),
+  env.update(PS3_PARAM_SFO=os.environ.get('TB_TEST_SFO',str(ROOT/'build-smoke/synthetic/PARAM.SFO')),PS3_VFS_ROOT=str(directory),
    PS3_HDD0_ROOT=str(directory/'dev_hdd0'),PS3_HDD1_ROOT=str(directory/'dev_hdd1'),PS3_GAMEDATA_ROOT=str(directory),
    TB_EXECUTION_PROBE=kind,TB_EXECUTION_MODE=mode,SDL_AUDIODRIVER='dummy',SDL_VIDEODRIVER='dummy')
-  result=subprocess.run([str(ROOT/'build-smoke/TankBattlesRecomp'),str(ROOT/'build-smoke/synthetic/smoke.elf')],env=env,cwd=ROOT,capture_output=True,timeout=10)
+  result=subprocess.run([os.environ.get('TB_TEST_RUNNER',str(ROOT/'build-smoke/TankBattlesRecomp')),os.environ.get('TB_TEST_ELF',str(ROOT/'build-smoke/synthetic/smoke.elf'))],env=env,cwd=ROOT,capture_output=True,timeout=10)
   text=(result.stdout+result.stderr).decode(errors='replace');(directory/f'{kind}-{mode}.log').write_text(text)
   return result.returncode,text
  def test_missing_import_stops(self):

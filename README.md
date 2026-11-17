@@ -58,15 +58,17 @@ python scripts/port.py setup --jobs 4
 python scripts/port.py run
 ```
 
-Setup extracts the package, decrypts the executable, prepares the unlock, translates the game and builds `build/TankBattlesRecomp`. Asset caches are created at first launch, so that launch takes longer. Lower `--jobs` if compilation uses too much memory. The ps3recomp source is already included.
+Setup extracts the package, decrypts the executable, prepares the unlock, translates the game and builds a stripped Release executable at `build-player/TankBattlesRecomp`. Asset caches are created at first launch, so that launch takes longer. Lower `--jobs` if compilation uses too much memory. The ps3recomp source is already included.
 
 To keep your keys elsewhere, add `--keys /path/to/keys` to setup. To use an installed game folder instead of a PKG, pass `--game-dir /path/to/NPUB30154`. Run `python scripts/port.py setup --help` for the other options.
 
 Controllers are supported. Keyboard: **Z = Cross, X = Circle, arrows = movement, Enter = Start**. **F3** toggles the FPS overlay; **F11 / Alt+Enter** toggles fullscreen.
 
+The overlay starts hidden. Window/fullscreen and overlay preferences are saved in `game/settings.ini`. Session logs go to `~/.local/state/tank-battles-recomp/logs/` (or `$XDG_STATE_HOME`); `run --console` prints to the terminal. Developer profiles and diagnostic switches: [Runtime reference](docs/RUNTIME.md).
+
 ### Keep a finished build
 
-For your own use outside this source checkout, copy `build/TankBattlesRecomp` and `game/dev_hdd0/` into a new folder, then create an empty `game/dev_hdd1/` directory:
+For your own use outside this source checkout, copy `build-player/TankBattlesRecomp` and `game/dev_hdd0/` into a new folder, then create an empty `game/dev_hdd1/` directory:
 
 ```text
 TankBattles/

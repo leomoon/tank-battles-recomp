@@ -1,5 +1,6 @@
 #include "execution_policy_api.h"
 #include "fps_overlay.h"
+#include "player_settings.h"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -9,7 +10,7 @@
 namespace {
 std::atomic<uint64_t> flips{0},presents{0};
 std::atomic<bool>& enabled() {
-    static std::atomic<bool> value{[] {const char* e=std::getenv("TB_FPS_OVERLAY");return !e || std::atoi(e)!=0;}()};
+    static std::atomic<bool> value{[] {const char* e=std::getenv("TB_FPS_OVERLAY");return e && std::atoi(e)!=0;}()};
     return value;
 }
 // Original five-bit rows, seven rows per glyph. No font asset dependency.
@@ -34,7 +35,7 @@ const unsigned char* glyph(char ch) {
 extern "C" void tb_fps_guest_flip() {flips.fetch_add(1,std::memory_order_relaxed);tb_gameplay_event(0,0);}
 extern "C" uint64_t tb_fps_guest_serial() {return flips.load(std::memory_order_relaxed);}
 extern "C" void tb_fps_present() {presents.fetch_add(1,std::memory_order_relaxed);}
-extern "C" void tb_fps_toggle() {auto& e=enabled();e.store(!e.load(std::memory_order_relaxed),std::memory_order_relaxed);}
+extern "C" void tb_fps_toggle() {auto& e=enabled();const bool on=!e.load(std::memory_order_relaxed);e.store(on,std::memory_order_relaxed);tb_settings_note_overlay(on);}
 extern "C" int tb_fps_overlay(void* pixels,uint32_t width,uint32_t height,uint32_t pitch,uint32_t scale)
 {
     if (!enabled().load(std::memory_order_relaxed)) return 0;

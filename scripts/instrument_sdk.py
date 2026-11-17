@@ -201,6 +201,15 @@ def main():
   if relative=='libs/video/rsx_vulkan_backend.c':
    from submission_overlay import instrument
    text=instrument(text)
+   settings_edits=[
+    ('static void vk_window_open(const char* title)', '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/player_settings_hooks.inc')+'"\nstatic void vk_window_open(const char* title)'),
+    ('    s_vk.window = SDL_CreateWindow(title && title[0] ? title : "ps3recomp",', '    int tb_width=(int)s_vk.width, tb_height=(int)s_vk.height;\n    tb_settings_window_size(&tb_width,&tb_height);\n    s_vk.window = SDL_CreateWindow(title && title[0] ? title : "ps3recomp",'),
+    ('                                   (int)s_vk.width, (int)s_vk.height, flags);', '                                   tb_width, tb_height, flags);'),
+    ('            if (SDL_SetWindowFullscreen(s_vk.window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP) == 0)\n                SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);', '            if (SDL_SetWindowFullscreen(s_vk.window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP) == 0) {\n                SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);\n                tb_settings_note_fullscreen(!full);\n            }'),
+    ('                    e.window.event == SDL_WINDOWEVENT_MAXIMIZED)) {\n            s_vk_resized = 1;', '                    e.window.event == SDL_WINDOWEVENT_MAXIMIZED)) {\n            if (!(SDL_GetWindowFlags(s_vk.window) & (SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED))) {\n                int w,h; SDL_GetWindowSize(s_vk.window,&w,&h); tb_settings_note_window(w,h);\n            }\n            s_vk_resized = 1;')]
+   for before,after in settings_edits:
+    if text.count(before)!=1:raise SystemExit('Player settings anchor mismatch')
+    text=text.replace(before,after,1)
   if relative=='libs/audio/cellAudio.c':
    begin=text.index('static void* audio_mix_thread_func(void* arg)\n{')
    end=text.index('\n#endif\n\nstatic int audio_start_mix_thread',begin)
@@ -306,6 +315,7 @@ def main():
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}
   if relative=='libs/video/rsx_vulkan_backend.c':
+   record['port_inputs']['player_settings_hooks.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/player_settings_hooks.inc').read_bytes()).hexdigest()
    for name in ('depth16.comp','depth16_spirv.inc'):
     record['port_inputs']['shaders/'+name]=hashlib.sha256((Path(__file__).resolve().parent.parent/'shaders'/name).read_bytes()).hexdigest()
   if relative in ('libs/video/rsx_vulkan_backend.c','libs/video/rsx_draw_engine.c','libs/video/cellGcmSys.c'):

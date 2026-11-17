@@ -27,7 +27,7 @@ def main():
  for k in list(env):
   if k.startswith(('TB_','PAD_','PS3RECOMP_VK_','RSX_ENGINE_','VK_DRAW_','PS3_FTRACE')):env.pop(k)
  title='Tank Battles performance '+out.name+(' [VIDEO DIAGNOSTIC]' if a.correctness_video else ' [PROFILE DIAGNOSTIC]' if a.scopes or a.decode_profile else '')
- env.update(TB_EXECUTION_MODE='strict',TB_GAMEPLAY_TIMING=str(out/'gameplay.jsonl'),TB_FPS_OVERLAY='1' if a.overlay else '0',PS3_TITLE=title,SDL_VIDEODRIVER='x11',PS3RECOMP_VK_WINDOW='1',PS3RECOMP_VK_GUEST_PROGRAMS='1',VK_DRAW_BATCH='0',PS3_VERBOSE='0',TB_VK_SUBMIT_MODE=a.submit_mode,TB_TEXTURE_DECODE_MODE=a.texture_decode_mode)
+ env.update(TB_SETTINGS_FILE='',TB_EXECUTION_MODE='strict',TB_GAMEPLAY_TIMING=str(out/'gameplay.jsonl'),TB_FPS_OVERLAY='1' if a.overlay else '0',PS3_TITLE=title,SDL_VIDEODRIVER='x11',PS3RECOMP_VK_WINDOW='1',PS3RECOMP_VK_GUEST_PROGRAMS='1',VK_DRAW_BATCH='0',PS3_VERBOSE='0',TB_VK_SUBMIT_MODE=a.submit_mode,TB_TEXTURE_DECODE_MODE=a.texture_decode_mode)
  if env.get('SDL_AUDIODRIVER')=='dummy':env.pop('SDL_AUDIODRIVER')
  if a.correctness_video:env['TB_FRAME_ORDER_TRACE']=str(out/'scanout-order.jsonl')
  if a.decode_profile:env.update(TB_TEXTURE_DECODE_PROFILE=str(out/'texture-decode.jsonl'),TB_DEPTH_PATH_TRACE='1')

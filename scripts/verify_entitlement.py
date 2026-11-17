@@ -113,7 +113,7 @@ def main():
     env = launch_environment(config)
     for name in ('TB_ENTITLEMENT_PROBE', 'TB_ASSET_PROBE', 'TB_HLE_AUDIT_ONLY', 'TB_DIAGNOSTIC_STALL'):
         env.pop(name, None)
-    env.update(TB_TRACE_NID='0x2ECD48ED', SDL_AUDIODRIVER='dummy', SDL_VIDEODRIVER='dummy')
+    env.update(TB_TRACE_NID='0x2ECD48ED', TB_SESSION_CAPTURED='1', SDL_AUDIODRIVER='dummy', SDL_VIDEODRIVER='dummy')
     directory = ROOT / 'analysis/step6'
     directory.mkdir(parents=True, exist_ok=True)
     missing = ROOT / 'game/step6-missing'

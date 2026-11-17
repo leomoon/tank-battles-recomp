@@ -196,6 +196,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_draw_group.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/lifecycle_stats.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/sdl_event_gate.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/player_settings_hooks.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_fence_poll.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_present_mode.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/gcm_label_publication.inc"
@@ -272,6 +273,8 @@ add_executable(${PROJECT_NAME}
     text_conversion.cpp
     frame_history.cpp
     fps_overlay.cpp
+    player_settings.cpp
+    player_session.cpp
     vulkan_diagnostics.cpp
     input_events.cpp
     resource_diagnostics.cpp
@@ -373,6 +376,13 @@ endif()
 # Compiler-specific flags
 # ---------------------------------------------------------------------------
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    # Player Release keeps the accepted -O2 optimization, without debug data.
+    foreach(player_target ${PROJECT_NAME} ps3recomp_runtime)
+        target_compile_options(${player_target} PRIVATE "$<$<CONFIG:Release>:-O2;-g0>")
+    endforeach()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(${PROJECT_NAME} PRIVATE $<$<CONFIG:Release>:-s>)
+    endif()
     target_compile_options(${PROJECT_NAME} PRIVATE
         -Wall -Wextra -Wno-unused-parameter
         -fno-strict-aliasing

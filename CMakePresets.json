@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "configurePresets": [
+    {
+      "name": "player",
+      "displayName": "Linux player (Release, O2, stripped)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-player",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PORT_SPU_INPUTS": "${sourceDir}/game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf"
+      }
+    },
+    {
+      "name": "developer",
+      "displayName": "Linux developer (RelWithDebInfo, O2)",
+      "inherits": "player",
+      "binaryDir": "${sourceDir}/build-developer",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "player", "configurePreset": "player", "targets": ["TankBattlesRecomp"] },
+    { "name": "developer", "configurePreset": "developer", "targets": ["TankBattlesRecomp"] }
+  ]
+}
