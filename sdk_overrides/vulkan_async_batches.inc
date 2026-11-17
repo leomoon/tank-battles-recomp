@@ -31,7 +31,10 @@ static struct {
     VkFence fence;
     VkDescriptorPool pool;
     int inflight;
+    uint64_t generation;    /* tb_generation of this slot's latest submission */
 } tb_slot[TB_VK_SLOTS];
+/* Asynchronous submissions in order, and the newest known to have completed. */
+static uint64_t tb_generation, tb_completed;
 static u32 tb_cur;
 static int tb_async = -1;   /* -1 undecided, 0 serial, 1 async */
 
@@ -104,6 +107,51 @@ static void tb_slot_wait(u32 i)
     if (!tb_slot[i].inflight) return;
     tb_fence_wait(tb_slot[i].fence);
     tb_slot[i].inflight = 0;
+    /* One queue: a later submission completing implies every earlier one. */
+    if (tb_slot[i].generation > tb_completed) tb_completed = tb_slot[i].generation;
+}
+
+/* Deferred image destruction. Destroying an image used to wait for every
+ * batch in flight (tb_eng_complete), and the engine releases a few textures
+ * and snapshots every frame. With asynchronous batches the handles are
+ * queued instead, tagged with the generation of the next submission (which
+ * carries anything already recorded into the open batch), and destroyed once
+ * that generation has completed and no present copy is still running. A full
+ * queue falls back to the waited path. */
+#define TB_DEFER_MAX 256
+static struct { vk_image im; uint64_t after; } tb_defer[TB_DEFER_MAX];
+static u32 tb_defer_n;
+
+static int tb_present_idle(void)
+{
+    return !__atomic_load_n(&s_vk.present_inflight, __ATOMIC_ACQUIRE) || !s_vk.present_fence ||
+           pvkGetFenceStatus(s_vk.device, s_vk.present_fence) == VK_SUCCESS;
+}
+
+static void tb_defer_retire(void)
+{
+    if (!tb_defer_n || !tb_present_idle()) return;
+    u32 kept = 0;
+    for (u32 i = 0; i < tb_defer_n; i++) {
+        vk_image* im = &tb_defer[i].im;
+        if (tb_defer[i].after > tb_completed) { tb_defer[kept++] = tb_defer[i]; continue; }
+        if (im->view) pvkDestroyImageView(s_vk.device, im->view, NULL);
+        if (im->img)  pvkDestroyImage(s_vk.device, im->img, NULL);
+        if (im->mem)  pvkFreeMemory(s_vk.device, im->mem, NULL);
+    }
+    tb_defer_n = kept;
+}
+
+static int tb_defer_image(vk_image* im)
+{
+    if (tb_async != 1 || !(im->img || im->view || im->mem)) return 0;
+    if (tb_defer_n == TB_DEFER_MAX) tb_defer_retire();
+    if (tb_defer_n == TB_DEFER_MAX) return 0;
+    tb_defer[tb_defer_n].im = *im;
+    tb_defer[tb_defer_n].after = tb_generation + 1;
+    tb_defer_n++;
+    memset(im, 0, sizeof *im);
+    return 1;
 }
 
 /* The ring window the current slot may hand out: [lo, lo + part). */
@@ -128,6 +176,7 @@ static int tb_async_flush(void)
     pvkResetFences(s_vk.device, 1, &s_vk.fence);
     if (vk_queue_submit(&si, s_vk.fence) != VK_SUCCESS) { VK_LOG("vkQueueSubmit (batch) failed\n"); return 1; }
     tb_slot[tb_cur].inflight = 1;
+    tb_slot[tb_cur].generation = ++tb_generation;
     s_eb.flushes++;
     if (tb_frame_budget_on()) {
         const uint64_t t = tb_frame_budget_now();
@@ -138,6 +187,7 @@ static int tb_async_flush(void)
     tb_cur = (tb_cur + 1) % TB_VK_SLOTS;
     tb_wait_label = "async:slot-reuse";
     tb_slot_wait(tb_cur);
+    tb_defer_retire();
     s_vk.cmd = tb_slot[tb_cur].cmd;
     s_vk.fence = tb_slot[tb_cur].fence;
     s_eb.pool = tb_slot[tb_cur].pool;
@@ -168,4 +218,7 @@ static void tb_eng_complete(void)
     tb_wait_label = label;
     if (tb_async != 1) return;
     for (u32 i = 0; i < TB_VK_SLOTS; i++) tb_slot_wait(i);
+    /* Everything submitted has finished; nothing recorded remains open. */
+    tb_completed = tb_generation + 1;
+    if (tb_defer_n) { vk_present_wait_gpu(); tb_defer_retire(); }
 }

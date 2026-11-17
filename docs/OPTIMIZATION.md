@@ -112,3 +112,18 @@ The first sample of the semantic-flags build on the Iris attributed 2.9% of main
 - **Walker idle sleep.** The walker's 100/250 µs idle sleeps rounded up to the ~1 ms Windows timer period. They now use a reused high-resolution waitable timer (Windows 10 1803+), and the walker also waits on the guest's FIFO kick event, waking immediately when a guest fence poll finds the queue dry. Measured on the Iris together with the batched depth conversion and deferred destruction: mean put-to-drain latency fell from 4.1 to 2.2 ms.
 - **Power throttling.** The process opts out of EcoQoS power throttling and timer-resolution throttling.
 - **`usleep` left as is.** The frame-budget profile shows no guest thread polling with `sys_timer_usleep` during Battle gameplay. The sub-millisecond `usleep` busy-wait therefore affects loading only, and it is unchanged because it keeps guest polling latency.
+
+### Fewer completion waits on the walker
+
+- **Batched depth conversion.** The exact Z16 GPU conversion has no CPU reader. It now records into the open asynchronous batch instead of a waited submit, and its descriptor set is rewritten only when its buffers change.
+- **Deferred image destruction.** Destroying an image no longer waits for every batch in flight. The handles are queued with the generation of the next submission and destroyed once that generation has completed and no present copy is running. A full queue falls back to the waited path, and release/shutdown completes and retires everything.
+
+Iris pending-review Battle diagnostic of the semantic-flags build with this runtime (`budget-s457-2`):
+
+| Metric | Before | After |
+| --- | --- | --- |
+| Completed FPS | 28.24 | 29.5 |
+| Walker fence-wait time (ms/frame) | 6.96 | 1.33 |
+| Synchronous submit-waits per frame | 1 | 0 |
+
+The main guest thread (21.6 ms running) is the limiter.

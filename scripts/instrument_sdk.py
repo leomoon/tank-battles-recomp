@@ -272,7 +272,7 @@ def main():
    async_inc=str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_async_batches.inc')
    for before,after in [
     ('static void vk_destroy_image(vk_image* im)\n{\n    if (s_eb_pending) vk_eng_flush();',
-     'static int tb_async_inflight(void);\nstatic int tb_async_active(void);\nstatic int tb_async_record(void);\nstatic int tb_async_flush(void);\nstatic void tb_async_init(void);\nstatic void tb_eng_complete(void);\nstatic void tb_ring_window(VkDeviceSize cap, VkDeviceSize* lo, VkDeviceSize* hi);\nstatic void vk_destroy_image(vk_image* im)\n{\n    if (im->img || im->view) { if (s_eb_pending || tb_async_inflight()) { tb_wait_label="complete:destroy-image"; tb_eng_complete(); } }'),
+     'static int tb_async_inflight(void);\nstatic int tb_async_active(void);\nstatic int tb_async_record(void);\nstatic int tb_async_flush(void);\nstatic void tb_async_init(void);\nstatic void tb_eng_complete(void);\nstatic void tb_ring_window(VkDeviceSize cap, VkDeviceSize* lo, VkDeviceSize* hi);\nstatic int tb_defer_image(vk_image* im);\nstatic void vk_destroy_image(vk_image* im)\n{\n    if (tb_defer_image(im)) return;\n    if (im->img || im->view) { if (s_eb_pending || tb_async_inflight()) { tb_wait_label="complete:destroy-image"; tb_eng_complete(); } }'),
     ('static void vk_destroy_buffer(vk_buffer* b)\n{\n    if (s_eb_pending) vk_eng_flush();',
      'static void vk_destroy_buffer(vk_buffer* b)\n{\n    if (b->buf || b->mem) { if (s_eb_pending || tb_async_inflight()) { tb_wait_label="complete:destroy-buffer"; tb_eng_complete(); } }'),
     ('static void vk_eng_drop_framebuffers(void)\n{\n    if (s_eb_pending) vk_eng_flush();',

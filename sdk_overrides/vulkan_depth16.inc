@@ -71,12 +71,25 @@ static u32 tb_vk_depth16(void* user,u32 depth,u32 w,u32 h,u32 format) {
  /* A sampleable color object must be marked snapshot to be accepted by the
   * engine's texture_release callback. It is never an attachment. */
  t->kind=VK_ENG_COLOR;t->snapshot=1;t->fmt=VK_FORMAT_R16_UNORM;t->bpp=2;t->w=w;t->h=h;
- /* Finish older groups before changing this shared descriptor set. */
- if(vk_begin()){vk_eng_release(user,handle);return 0;}
- VkDescriptorBufferInfo bi[2]={{in->buf,0,(VkDeviceSize)pixels*4},{out->buf,0,packed}};
- VkWriteDescriptorSet writes[2];memset(writes,0,sizeof writes);
- for(unsigned i=0;i<2;i++)writes[i]=(VkWriteDescriptorSet){.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstSet=tb_d16.set,.dstBinding=i,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&bi[i]};
- pvkUpdateDescriptorSets(s_vk.device,2,writes,0,NULL);
+ /* No CPU reader consumes the converted texture, so with asynchronous
+  * batches the conversion joins the open batch in GPU order instead of a
+  * waited submit. The full ALL_COMMANDS image barriers below order reuse of
+  * the shared buffers and pooled snapshot images, and the next draw group
+  * starts behind its own full barrier. The shared descriptor set is
+  * rewritten only when its buffers change: replacing a buffer
+  * (tb_depth16_buffer -> vk_destroy_buffer) flushes and completes every
+  * recorded use first, so no pending batch sees the set change. */
+ const int batched=tb_async_record();
+ if(batched?(!s_eb_pending && vk_begin()):vk_begin()){vk_eng_release(user,handle);return 0;}
+ static VkBuffer bound_in,bound_out;
+ if(bound_in!=in->buf || bound_out!=out->buf) {
+  /* Whole buffers: the set stays valid for every later size that fits. */
+  VkDescriptorBufferInfo bi[2]={{in->buf,0,VK_WHOLE_SIZE},{out->buf,0,VK_WHOLE_SIZE}};
+  VkWriteDescriptorSet writes[2];memset(writes,0,sizeof writes);
+  for(unsigned i=0;i<2;i++)writes[i]=(VkWriteDescriptorSet){.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstSet=tb_d16.set,.dstBinding=i,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&bi[i]};
+  pvkUpdateDescriptorSets(s_vk.device,2,writes,0,NULL);
+  bound_in=in->buf;bound_out=out->buf;
+ }
  vk_barrier_image(z->im.img,s_vk.depth_aspect,VK_IMAGE_LAYOUT_GENERAL);
  vk_barrier_image(t->im.img,VK_IMAGE_ASPECT_COLOR_BIT,reused?VK_IMAGE_LAYOUT_GENERAL:VK_IMAGE_LAYOUT_UNDEFINED);
  VkBufferImageCopy region={.imageSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,0,1},.imageExtent={w,h,1}};
@@ -92,7 +105,8 @@ static u32 tb_vk_depth16(void* user,u32 depth,u32 w,u32 h,u32 format) {
  region.imageSubresource.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT;
  pvkCmdCopyBufferToImage(s_vk.cmd,out->buf,t->im.img,VK_IMAGE_LAYOUT_GENERAL,1,&region);
  vk_barrier_image(t->im.img,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_GENERAL);
- if(vk_submit_and_wait()){vk_eng_release(user,handle);return 0;}
- {static int reported;if(!reported){VK_LOG("exact Z16 GPU conversion active (waited, pooled snapshots)\n");reported=1;}}
+ if(batched)vk_eb_recorded();
+ else if(vk_submit_and_wait()){vk_eng_release(user,handle);return 0;}
+ {static int reported;if(!reported){if(batched)VK_LOG("exact Z16 GPU conversion active (batched, pooled snapshots)\n");else VK_LOG("exact Z16 GPU conversion active (waited, pooled snapshots)\n");reported=1;}}
  return handle;
 }
