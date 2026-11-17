@@ -164,3 +164,22 @@ On the Iris, with the same runtime, PGO (`budget-pgo-1`):
 The GPU becomes the limiter (19.9 ms/frame). The optimized rebuild took 296 s.
 
 Consumer builds also write `TankBattlesRecomp.map` (`/lldmap`) for the CPU sampler.
+
+### NV3089 gather reads its source image directly
+
+The 2:1 resolve gather copied the whole sampled source rectangle (about 14.7 MB of a 2560x1440 target) into a buffer before its compute pass. For RGBA8 sources, `shaders/nv3089_gather_image.comp` now uses `texelFetch` on the source image. It reads only the kept texels, with integer coordinates and exact UNORM8 packing. Its per-slot descriptor pools are recycled when the slot's batch has completed.
+
+The once-per-device exactness test checks the buffer and image paths separately and enables each only on a full match. Iris Pro 580: both exact.
+
+On the Iris, with the PGO build (`budget-gather-1`, `budget-gather-3`):
+
+| Metric | Before | After |
+| --- | --- | --- |
+| GPU busy (ms/frame) | 19.9 | 16.1–16.2 |
+| Image-to-buffer copies per frame | 8 (6.4 ms) | 2 (3.2 ms) |
+
+The remaining copies are the depth conversion's.
+
+Teardown fix: deferred image destruction now stops once the draw engine is shut down, and anything still queued is destroyed after the device is idled and before `vkDestroyDevice`. Destroying the device with live images faulted inside `igvk64.dll` (read of null+0x150) at exit.
+
+`shaders/glsl_spirv_tool.cpp` builds a minimal `glslangValidator -V` stand-in from the glslang libraries the runtime already links, for hosts without the glslang tools. It reproduces both earlier embedded shaders byte for byte, and `scripts/compile_depth_shader.py --glslang <tool>` uses it.

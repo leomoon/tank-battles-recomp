@@ -12,15 +12,18 @@ import tempfile
 from pathlib import Path
 
 root=Path(__file__).resolve().parent.parent
-SHADERS={'depth16':'tb_depth16_spirv','nv3089_gather':'tb_nv3089_gather_spirv'}
+SHADERS={'depth16':'tb_depth16_spirv','nv3089_gather':'tb_nv3089_gather_spirv','nv3089_gather_image':'tb_nv3089_gather_image_spirv'}
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--check',action='store_true')
 parser.add_argument('--shader',choices=sorted(SHADERS),action='append',help='Default: all')
+parser.add_argument('--glslang',default='glslangValidator',help='glslangValidator, or build-tools/glsl_spirv_tool.exe built from shaders/glsl_spirv_tool.cpp where the command-line tools are absent')
 args=parser.parse_args()
 for name in args.shader or sorted(SHADERS):
     with tempfile.TemporaryDirectory(prefix='tb-shader-') as temporary:
         binary=Path(temporary)/(name+'.spv')
-        subprocess.run(['glslangValidator','-V',str(root/'shaders'/(name+'.comp')),'-o',str(binary)],check=True,capture_output=True)
+        source=str(root/'shaders'/(name+'.comp'))
+        command=[args.glslang,'-V',source,'-o',str(binary)] if Path(args.glslang).stem.lower().startswith('glslangvalidator') else [args.glslang,source,str(binary)]
+        subprocess.run(command,check=True,capture_output=True)
         data=binary.read_bytes()
     words=struct.unpack('<'+'I'*(len(data)//4),data)
     target=root/'shaders'/(name+'_spirv.inc')

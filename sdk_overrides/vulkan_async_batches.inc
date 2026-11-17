@@ -36,6 +36,7 @@ static struct {
 /* Asynchronous submissions in order, and the newest known to have completed. */
 static uint64_t tb_generation, tb_completed;
 static u32 tb_cur;
+static void tb_gather_slot_reset(u32 slot);
 static int tb_async = -1;   /* -1 undecided, 0 serial, 1 async */
 
 static VkDescriptorPool tb_async_pool(void)
@@ -142,9 +143,25 @@ static void tb_defer_retire(void)
     tb_defer_n = kept;
 }
 
+/* Device teardown, after vk_device_idle: destroy whatever is still queued. */
+static void tb_defer_flush_all(void)
+{
+    tb_completed = UINT64_MAX;
+    for (u32 i = 0; i < tb_defer_n; i++) {
+        vk_image* im = &tb_defer[i].im;
+        if (im->view) pvkDestroyImageView(s_vk.device, im->view, NULL);
+        if (im->img)  pvkDestroyImage(s_vk.device, im->img, NULL);
+        if (im->mem)  pvkFreeMemory(s_vk.device, im->mem, NULL);
+    }
+    tb_defer_n = 0;
+    tb_completed = tb_generation;
+}
+
 static int tb_defer_image(vk_image* im)
 {
-    if (tb_async != 1 || !(im->img || im->view || im->mem)) return 0;
+    /* Only while the engine runs: teardown destroys immediately (the device is
+     * idled first), so nothing is left queued when the device goes away. */
+    if (tb_async != 1 || !s_vk.eng_active || !(im->img || im->view || im->mem)) return 0;
     if (tb_defer_n == TB_DEFER_MAX) tb_defer_retire();
     if (tb_defer_n == TB_DEFER_MAX) return 0;
     tb_defer[tb_defer_n].im = *im;
@@ -188,6 +205,7 @@ static int tb_async_flush(void)
     tb_wait_label = "async:slot-reuse";
     tb_slot_wait(tb_cur);
     tb_defer_retire();
+    tb_gather_slot_reset(tb_cur);   /* vulkan_surface_blit.inc: per-slot gather descriptors */
     s_vk.cmd = tb_slot[tb_cur].cmd;
     s_vk.fence = tb_slot[tb_cur].fence;
     s_eb.pool = tb_slot[tb_cur].pool;

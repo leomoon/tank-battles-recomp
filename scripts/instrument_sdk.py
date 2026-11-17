@@ -300,7 +300,7 @@ def main():
    for before,after in [
     ('VK_WSI_DEVICE_FNS(VK_DECLARE)\n','VK_WSI_DEVICE_FNS(VK_DECLARE)\n#include "'+str(overrides_dir/'vulkan_frame_counters.inc')+'"\n'),
     ('static int vk_begin(void)\n{','#include "'+str(overrides_dir/'vulkan_gpu_frame_timing.inc')+'"\nstatic int vk_begin(void)\n{'),
-    ('        tb_gpu_shutdown();\n','        tb_gpu_shutdown();\n        tb_ts_shutdown();\n'),
+    ('        tb_gpu_shutdown();\n','        tb_gpu_shutdown();\n        tb_ts_shutdown();\n        tb_defer_flush_all();\n'),
     ('static int vk_submit_and_wait(void)\n{','static int vk_submit_and_wait(void)\n{\n    tb_frame_budget_count(TB_FC_SYNC_SUBMIT_WAIT, 1);'),
    ]:
     if text.count(before)!=1:raise SystemExit('Frame counter anchor mismatch: '+before[:60])
@@ -380,7 +380,7 @@ def main():
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}
   if relative=='libs/video/rsx_vulkan_backend.c':
    record['port_inputs']['player_settings_hooks.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/player_settings_hooks.inc').read_bytes()).hexdigest()
-   for name in ('depth16.comp','depth16_spirv.inc'):
+   for name in ('depth16.comp','depth16_spirv.inc','nv3089_gather.comp','nv3089_gather_spirv.inc','nv3089_gather_image.comp','nv3089_gather_image_spirv.inc'):
     record['port_inputs']['shaders/'+name]=hashlib.sha256((Path(__file__).resolve().parent.parent/'shaders'/name).read_bytes()).hexdigest()
   if relative in ('libs/video/rsx_vulkan_backend.c','libs/video/rsx_draw_engine.c','libs/video/cellGcmSys.c'):
    record.setdefault('port_inputs',{})['depth_cost_trace.h']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h').read_bytes()).hexdigest()

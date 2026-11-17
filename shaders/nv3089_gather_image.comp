@@ -1,0 +1,22 @@
+#version 450
+// NV3089 point sampling at an integer scale, read straight from the source
+// image: destination pixel (x, y) takes source texel (ax + kx*x, ay + ky*y).
+// texelFetch uses integer coordinates, so nothing samples a texel edge, and
+// only the texels the copy keeps are read (a quarter of the source at 2:1),
+// with no intermediate copy of the whole source rectangle into a buffer.
+// For VK_FORMAT_R8G8B8A8_UNORM sources only: UNORM8 -> float -> UNORM8 is
+// exact, and packing r|g<<8|b<<16|a<<24 reproduces the texel's bytes.
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0, binding=0) uniform texture2D source_image;
+layout(set=0, binding=1) uniform sampler source_sampler;
+layout(set=1, binding=0, std430) writeonly buffer Destination { uint dst[]; };
+layout(push_constant) uniform Shape {
+    uint dst_base, dst_w, dst_h, kx, ky, ax, ay;
+} p;
+void main() {
+    uvec2 i = gl_GlobalInvocationID.xy;
+    if (i.x >= p.dst_w || i.y >= p.dst_h) return;
+    vec4 c = texelFetch(sampler2D(source_image, source_sampler), ivec2(p.ax + p.kx * i.x, p.ay + p.ky * i.y), 0);
+    uvec4 b = uvec4(round(clamp(c, 0.0, 1.0) * 255.0));
+    dst[p.dst_base + i.y * p.dst_w + i.x] = b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);
+}
