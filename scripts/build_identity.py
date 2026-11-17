@@ -25,6 +25,13 @@ def measurement_build(build, configuration='Release'):
         matches=[line for i,line in enumerate(lines) if needle in line.lower() or i and needle in lines[i-1].lower()]
         flags[kind]='\n'.join(matches[:4]) or None
     runtime=Path(cache['TB_RUNTIME_ROOT']) if cache.get('TB_RUNTIME_ROOT') else None
+    # relink_player.py replays the link against another bundle; trust that
+    # record only while it still describes the executable on disk.
+    relink=build/'runtime-relink.json'
+    if runtime and relink.is_file():
+        record=json.loads(relink.read_text())
+        if hashlib.sha256(executable(build,configuration).read_bytes()).hexdigest()==record.get('executable_sha256'):
+            runtime=Path(record['bundle'])
     manifest=runtime/'manifest.json' if runtime else build/'instrumented_sdk/manifest.json'
     if not manifest.is_file():
         raise ValueError('Missing runtime/source manifest: '+str(manifest))

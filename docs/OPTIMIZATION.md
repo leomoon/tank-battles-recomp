@@ -98,3 +98,11 @@ Other per-frame changes:
 - one synchronous submit-wait remains, the GPU depth conversion's.
 
 The limiter is now the main guest thread (21.1 ms), with the GPU at 19.7 ms. The overlay was toggled manually during the diagnostic runs, so these are not clean timings.
+
+### Windows CPU sampling and fast runtime relinks
+
+`--cpu-samples` (on `script_gameplay.py`, and `frame_budget.py run`) starts `scripts/sample_windows_cpu.py` 5 seconds after the gameplay marker. It samples the `ppu main`, `tb-rsx-walker` and `tb-present` threads by suspend-and-sample at about 1 kHz for the interval. Samples are symbolized with the `TankBattlesRecomp.map` that consumer builds now write through `/lldmap` (no runtime cost). Samples outside the executable mean kernel/driver time, mostly blocking. The render threads now carry Windows thread names. Sampling perturbs timing, so keep it out of clean runs.
+
+`scripts/relink_player.py --build-dir <consumer build> --bundle <bundle>` replays only the final link against another runtime bundle with the same ABI, reusing every title object. It records the bundle in `runtime-relink.json` so measurement manifests name the runtime that was actually linked.
+
+The first sample of the semantic-flags build on the Iris attributed 2.9% of main-thread samples to `ps3_indirect_call_impl` and 1.8% to `tb_execution_event`. The PPU/SPU indirect-call execution events now count thread-locally and publish to the shared report every 1024 events with relaxed atomics. Strict-stop kinds keep the exact global path.
