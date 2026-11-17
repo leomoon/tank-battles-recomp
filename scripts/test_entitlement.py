@@ -3,7 +3,10 @@
 import os
 from pathlib import Path
 import re
-import resource
+try:
+    import resource
+except ImportError:  # Windows has no POSIX core-dump limit.
+    resource = None
 import struct
 import subprocess
 import unittest
@@ -47,7 +50,8 @@ class EntitlementTests(unittest.TestCase):
     def setUpClass(cls):
         cls.root = ROOT / 'build-tests' / ('entitlement-' + uuid.uuid4().hex)
         cls.root.mkdir(parents=True)
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        if resource:
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
     def setUp(self):
         self.directory = self.root / self._testMethodName
@@ -161,6 +165,32 @@ class EntitlementTests(unittest.TestCase):
     def test_unrelated_argument(self):
         self.env['TB_ENTITLEMENT_CONTENT_ID'] = '../unrelated'
         self.probe(0x80029521)
+
+    def test_unicode_and_spaces_in_profile_path(self):
+        original = str(self.directory)
+        moved = self.directory.parent / (self.directory.name + '-player café 雪')
+        self.directory.rename(moved)
+        self.directory = moved
+        self.exdata = moved / 'dev_hdd0/home/00000001/exdata'
+        self.env = {key: value.replace(original, str(moved)) for key, value in self.env.items()}
+        self.probe(0)
+
+    def test_truncated_and_oversized_edat(self):
+        original = self.edat.read_bytes()
+        for data in (original[:100], original[:-1], original + b'extra'):
+            self.edat.write_bytes(data)
+            self.probe(0x80029521)
+
+    def test_no_plaintext_file_is_created(self):
+        if os.name != 'nt':
+            self.exdata.chmod(0o500)
+        try:
+            self.probe(0)
+        finally:
+            if os.name != 'nt':
+                self.exdata.chmod(0o700)
+        self.assertEqual(sorted(p.name for p in self.exdata.iterdir()),
+                         sorted([self.edat.name, self.rif.name]))
 
 if __name__ == '__main__':
     unittest.main()

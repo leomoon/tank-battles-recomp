@@ -26,7 +26,11 @@ uint32_t verify(uint64_t address) {
     }
     if (length==48) return invalid_param;
     if (strcmp(content,unlock_id)) return license_missing;
+#ifdef _WIN32
+    const wchar_t* hdd=_wgetenv(L"PS3_HDD0_ROOT");
+#else
     const char* hdd=getenv("PS3_HDD0_ROOT");
+#endif
     if (!hdd || !*hdd) return license_missing;
     // Match the port's selected local profile, without searching other accounts.
     const auto file=fs::path(hdd)/"home/00000001/exdata"/(std::string(unlock_id)+".edat");
@@ -37,7 +41,8 @@ uint32_t verify(uint64_t address) {
     }
     // The verifier requires an exact 16-byte sidecar for license 2 and
     // authenticates license 3 directly with its platform free key.
-    if (!tank_battles_validate_unlock(file.string().c_str(),unlock_id)) {
+    const auto utf8 = file.u8string();
+    if (!tank_battles_validate_unlock(reinterpret_cast<const char*>(utf8.c_str()),unlock_id)) {
         fprintf(stderr,"[entitlement] unlock verification failed; trial result\n");
         return license_missing;
     }
@@ -51,10 +56,8 @@ void purchase_handler(ppu_context* c) {
 }
 }
 void tank_battles_register_entitlement_overrides() {
-#if defined(__linux__)
     tank_battles_register_override(verify_nid,verify_handler);
     tank_battles_register_override(purchase_nid,purchase_handler);
-#endif
 }
 int tank_battles_probe_entitlement() {
     const char* requested=getenv("TB_ENTITLEMENT_CONTENT_ID");

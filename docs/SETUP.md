@@ -35,10 +35,23 @@ After a failed or interrupted command, correct the reported problem and rerun th
 
 `game/setup.json` records input hashes and the selected provider; `game/setup-state.json` records completed translation/build stages. Neither contains keys. `--restart` forces PPU translation regeneration, keeping purchased inputs; native compilation remains incremental. Changes to C++ sources or build settings are checked by CMake/Ninja on every setup run. Setup does not automatically launch the game.
 
+## Purchased unlock preparation
+
+License-2 RAP preparation uses the included public format tables in `scripts/rap_format.json`, pinned to a specific RPCS3 revision and checked by a table digest. It needs no RPCS3 installation, source checkout or network access. The optional `prepare_entitlement.py --rpcs3-source PATH` verifies a local source against that specification. These public format constants were already included in this repository; no purchaser, per-title or private SELF key is supplied by this workflow.
+
+Setup derives the sidecar from your own RAP and publishes it only after a complete flushed write. POSIX sidecars use mode 0600; Windows sidecars use a protected ACL granting access only to the current user. A matching sidecar can be reused; a differing one is refused, including concurrent creation. A failed write leaves no partial sidecar. The runtime separately authenticates the C00 structure, content ID, NPD title/developer hashes, encrypted block and `GOMA` payload. The 64-byte decrypted payload stays in memory, with no plaintext verification file or cached unlock accepted.
+
+For an already installed unlock, `python scripts/prepare_entitlement.py --exdata /path/to/exdata` runs preparation directly. It reports that a license-3 unlock needs no RAP or sidecar. Missing unlocks retain trial behavior; preparation never substitutes for a purchased license.
+
+The standalone `tests/entitlement` CMake project exercises the production validator and handlers with synthetic VM/dispatch fixtures on Linux and native Windows CI. This covers Unicode paths, private files and license decisions. Full Windows game execution still depends on the remaining host/runtime port.
+
 ## Game-free tests
 
 ```bash
 python -m unittest discover -s scripts -p 'test_*setup*.py'
+cmake -S tests/entitlement -B build-tests/entitlement
+cmake --build build-tests/entitlement --config Release
+ctest --test-dir build-tests/entitlement -C Release --output-on-failure
 ```
 
 These fixtures exercise missing files, hash mismatches, structural rejection, unknown-version warnings, manual ELF and portable decryption, the RPCS3 command contract, license rules, source preservation, rollback, translation invalidation, locking and failed-stage retries. A real purchased-dump fresh-clone build and launch are separate integration checks; no game content belongs in the test fixtures or Git.
