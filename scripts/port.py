@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import json
 
 from boot_session import run_session
 
@@ -94,8 +95,29 @@ def configure(args, config) -> None:
     sdk, elf = sdk_path(args, config), elf_path(args, config)
     build = resolve(args.build_dir or config["paths"]["build"])
     recomp = resolve(args.recomp_dir or config["paths"]["recompiled"])
-    command = [tool(args.cmake), "-S", str(ROOT), "-B", str(build), "-G", "Ninja",
-               f"-DCMAKE_MAKE_PROGRAM={tool(args.ninja)}",
+    if os.name == "nt" and getattr(args, "runtime_bundle", None):
+        bundle = resolve(args.runtime_bundle)
+        manifest = json.loads((bundle / "manifest.json").read_text())
+        checkout = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        expected = args.runtime_source or checkout
+        if manifest.get("source_commit") != expected:
+            raise ValueError(f"Runtime bundle source mismatch: selected {expected}, bundle is {manifest.get('source_commit')}")
+        if expected != checkout:
+            print(f"[runtime] Explicitly selected CI source {expected}; checkout is {checkout}.", flush=True)
+        run([sys.executable, str(bundle / "tools/runtime_bundle.py"), "verify", str(bundle), "--source", expected])
+        abi = build / "runtime-abi-check"
+        run([sys.executable, str(ROOT / "scripts/runtime_abi.py"), "--sdk", str(sdk),
+             "--output", str(abi), "--check-title-header", str(recomp / "ppu_recomp.h")])
+        if json.loads((abi / "abi.json").read_text())["header_sha256"] != manifest.get("abi_sha256"):
+            raise ValueError("Local lifter/title ABI differs from the selected runtime bundle")
+        command = [tool(args.cmake), "-S", str(ROOT / "cmake/player-consumer"), "-B", str(build),
+                   "-A", "x64", "-T", "ClangCL", f"-DTB_PORT_ROOT={ROOT}",
+                   f"-DTB_RUNTIME_ROOT={bundle}", f"-DTB_RUNTIME_EXPECTED_SOURCE={expected}",
+                   f"-DPS3RECOMP_DIR={sdk}", f"-DRECOMP_DIR={recomp}",
+                   f"-DPORT_SPU_INPUTS={elf}", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"]
+    else:
+        command = [tool(args.cmake), "-S", str(ROOT), "-B", str(build), "-G", "Ninja",
+                   f"-DCMAKE_MAKE_PROGRAM={tool(args.ninja)}",
                f"-DPS3RECOMP_DIR={sdk}", f"-DRECOMP_DIR={recomp}",
                f"-DPORT_SPU_INPUTS={elf}", f"-DCMAKE_BUILD_TYPE={args.build_type}"]
     if sys.platform.startswith("linux") and args.backend != "auto":
@@ -106,8 +128,11 @@ def configure(args, config) -> None:
 
 
 def build(args, config) -> None:
-    run([tool(args.cmake), "--build", str(resolve(args.build_dir or config["paths"]["build"])),
-         "--target", "TankBattlesRecomp", "--parallel", str(args.jobs)])
+    command = [tool(args.cmake), "--build", str(resolve(args.build_dir or config["paths"]["build"])),
+               "--target", "TankBattlesRecomp", "--parallel", str(args.jobs)]
+    if os.name == "nt" and getattr(args, "runtime_bundle", None):
+        command[3:3] = ["--config", args.build_type]
+    run(command)
 
 
 def setup(args, config) -> None:
@@ -151,9 +176,13 @@ def setup_install(args, config):
 
 def setup_tools(args):
     checks = []
-    for name, executable, action in (("CMake", args.cmake, "Install CMake and Ninja; see README Linux build dependencies."),
-                                     ("Ninja", args.ninja, "Install Ninja; see README Linux build dependencies."),
-                                     ("C++ compiler", os.environ.get("CXX", "c++"), "Install a C17/C++20 compiler and the Linux development packages listed in README.")):
+    requirements = [("CMake", args.cmake, "Install CMake; see README build dependencies.")]
+    if not (os.name == "nt" and args.runtime_bundle):
+        requirements.append(("Ninja", args.ninja, "Install Ninja; see README build dependencies."))
+    compiler = "clang-cl" if os.name == "nt" else os.environ.get("CXX", "c++")
+    requirements.append(("C++ compiler", compiler, "Install Visual Studio Build Tools with the ClangCL component." if os.name == "nt"
+                         else "Install a C17/C++20 compiler and the Linux development packages listed in README."))
+    for name, executable, action in requirements:
         found = shutil.which(executable)
         checks.append(dict(name=name, path=found or executable, status="ok" if found else "error", action="" if found else action))
     return checks
@@ -184,6 +213,8 @@ def launch(args, config) -> int:
     elf = elf_path(args, config)
     build_dir = resolve(args.build_dir or config["paths"]["build"])
     executable = build_dir / ("TankBattlesRecomp.exe" if os.name == "nt" else "TankBattlesRecomp")
+    if os.name == "nt" and not executable.is_file():
+        executable = build_dir / "Release/TankBattlesRecomp.exe"
     if not executable.is_file():
         raise ValueError(f"Port executable not found: {executable}. Run configure and build first.")
     env = launch_environment(config, args.paramsfo)
@@ -221,6 +252,8 @@ def main() -> int:
     install.add_argument("--restart", action="store_true", help="Regenerate translations before the incremental native build; keeps purchased inputs")
     install.add_argument("--import-only", action="store_true", help="Import, decrypt and prepare the unlock without translation or compilation")
     install.add_argument("--build-dir")
+    install.add_argument("--runtime-bundle", help="Verified game-free Windows runtime bundle matching this checkout")
+    install.add_argument("--runtime-source", help="Exact CI source commit recorded by the selected runtime bundle")
     install.add_argument("--jobs", type=positive_int)
     install.add_argument("--cmake", default="cmake")
     install.add_argument("--ninja", default="ninja")
@@ -235,6 +268,8 @@ def main() -> int:
     conf.add_argument("--sdk")
     conf.add_argument("--elf")
     conf.add_argument("--build-dir")
+    conf.add_argument("--runtime-bundle", help="Verified game-free Windows runtime bundle matching this checkout")
+    conf.add_argument("--runtime-source", help="Exact CI source commit recorded by the selected runtime bundle")
     conf.add_argument("--recomp-dir")
     conf.add_argument("--cmake", default="cmake")
     conf.add_argument("--ninja", default="ninja")

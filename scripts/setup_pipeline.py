@@ -49,7 +49,7 @@ def configuration_signature(args, config, resolve, generated):
                    | set(sdk.rglob("*.cmake")) | set(sdk.rglob("CMakeLists.txt")))
     recipe = dict(sources={str(path): digest(path) for path in paths}, generated=generated,
                   elf=str(Path(args.elf)), elf_sha256=digest(Path(args.elf)), sdk=str(sdk), recompiled=str(resolve(config["paths"]["recompiled"])),
-                  options={name: getattr(args, name, None) for name in ("build_type", "backend", "cmake", "ninja", "cmake_args")},
+                  options={name: getattr(args, name, None) for name in ("build_type", "backend", "cmake", "ninja", "cmake_args", "runtime_bundle", "runtime_source")},
                   environment={key: os.environ.get(key) for key in ("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS", "CMAKE_PREFIX_PATH", "CMAKE_TOOLCHAIN_FILE", "PKG_CONFIG_PATH")})
     return hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()
 
@@ -110,7 +110,8 @@ def run_pipeline(args, config, resolve, prepare, configure, build):
         if name == "configure" and artifacts and state.get("configuration") == configure_signature and state.get("configuration_outputs") == artifacts:
             print("[setup] configure: verified configuration reused; Ninja will check regeneration dependencies.", flush=True)
             continue
-        executable = build_dir / "TankBattlesRecomp"
+        executable = build_dir / ("Release/TankBattlesRecomp.exe" if os.name == "nt" and getattr(args, "runtime_bundle", None)
+                                  else "TankBattlesRecomp.exe" if os.name == "nt" else "TankBattlesRecomp")
         if name == "build" and state.get("executable_sha256") and executable.is_file() and digest(executable) != state["executable_sha256"]:
             print("[setup] build: executable changed outside setup; requesting a fresh link.", flush=True)
             executable.unlink()
@@ -133,12 +134,29 @@ def run_pipeline(args, config, resolve, prepare, configure, build):
 def setup_lock(data):
     # Lock import as well as translation/build so two commands cannot replace
     # each other's installed title. Checks remain read-only and take no lock.
-    import fcntl
     data = Path(data)
     data.mkdir(parents=True, exist_ok=True)
     with (data / "setup-state.lock").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise ValueError("Another setup is using this game. Wait for it to finish, then retry.") from None
-        yield
+        if os.name == "nt":
+            import msvcrt
+            lock.seek(0)
+            if lock.tell() == lock.seek(0, os.SEEK_END):
+                lock.write("0")
+                lock.flush()
+            lock.seek(0)
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                raise ValueError("Another setup is using this game. Wait for it to finish, then retry.") from None
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError("Another setup is using this game. Wait for it to finish, then retry.") from None
+            yield

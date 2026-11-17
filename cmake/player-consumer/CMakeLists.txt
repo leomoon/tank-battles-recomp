@@ -1,0 +1,43 @@
+cmake_minimum_required(VERSION 3.20)
+project(TankBattlesRecomp LANGUAGES C CXX)
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+
+foreach(required TB_PORT_ROOT TB_RUNTIME_ROOT TB_RUNTIME_EXPECTED_SOURCE RECOMP_DIR PS3RECOMP_DIR PORT_SPU_INPUTS)
+    if(NOT DEFINED ${required})
+        message(FATAL_ERROR "Set ${required}")
+    endif()
+endforeach()
+foreach(path_variable TB_PORT_ROOT TB_RUNTIME_ROOT RECOMP_DIR PS3RECOMP_DIR PORT_SPU_INPUTS)
+    file(TO_CMAKE_PATH "${${path_variable}}" ${path_variable})
+endforeach()
+
+include("${TB_RUNTIME_ROOT}/cmake/RuntimeConsumer.cmake")
+include("${PS3RECOMP_DIR}/cmake/PS3RecompSPU.cmake")
+ps3recomp_generate_spu("${CMAKE_CURRENT_BINARY_DIR}/generated_spu" "${PORT_SPU_INPUTS}")
+file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS "${RECOMP_DIR}/*.c" "${RECOMP_DIR}/*.cpp")
+if(NOT EXISTS "${RECOMP_DIR}/ppu_recomp.h" OR NOT RECOMP_SOURCES)
+    message(FATAL_ERROR "Missing complete locally translated PPU sources in ${RECOMP_DIR}")
+endif()
+
+add_executable(TankBattlesRecomp
+    "${TB_PORT_ROOT}/runtime_entry.cpp" ${RECOMP_SOURCES} ${SPU_GENERATED_SOURCES})
+target_include_directories(TankBattlesRecomp BEFORE PRIVATE
+    "${RECOMP_DIR}" "${TB_PORT_ROOT}" "${PS3RECOMP_DIR}/runtime/ppu")
+target_link_libraries(TankBattlesRecomp PRIVATE TankBattlesRuntime)
+set_target_properties(TankBattlesRecomp PROPERTIES LINKER_LANGUAGE CXX)
+set_source_files_properties(${SPU_GENERATED_SOURCES} PROPERTIES
+    INCLUDE_DIRECTORIES "${TB_RUNTIME_ROOT}/sdk/runtime/spu"
+    COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(TankBattlesRecomp PRIVATE "$<$<CONFIG:Release>:-O2>")
+    set_source_files_properties(${SPU_GENERATED_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
+    if(MSVC)
+        target_compile_options(TankBattlesRecomp PRIVATE /MP4)
+        set_source_files_properties(${RECOMP_SOURCES} PROPERTIES COMPILE_OPTIONS /w)
+    endif()
+endif()
+if(WIN32 AND EXISTS "${TB_PORT_ROOT}/app.rc")
+    target_sources(TankBattlesRecomp PRIVATE "${TB_PORT_ROOT}/app.rc")
+endif()
