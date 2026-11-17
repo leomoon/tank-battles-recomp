@@ -106,3 +106,9 @@ The limiter is now the main guest thread (21.1 ms), with the GPU at 19.7 ms. The
 `scripts/relink_player.py --build-dir <consumer build> --bundle <bundle>` replays only the final link against another runtime bundle with the same ABI, reusing every title object. It records the bundle in `runtime-relink.json` so measurement manifests name the runtime that was actually linked.
 
 The first sample of the semantic-flags build on the Iris attributed 2.9% of main-thread samples to `ps3_indirect_call_impl` and 1.8% to `tb_execution_event`. The PPU/SPU indirect-call execution events now count thread-locally and publish to the shared report every 1024 events with relaxed atomics. Strict-stop kinds keep the exact global path.
+
+### Host waits on Windows
+
+- **Walker idle sleep.** The walker's 100/250 µs idle sleeps rounded up to the ~1 ms Windows timer period. They now use a reused high-resolution waitable timer (Windows 10 1803+), and the walker also waits on the guest's FIFO kick event, waking immediately when a guest fence poll finds the queue dry. Measured on the Iris together with the batched depth conversion and deferred destruction: mean put-to-drain latency fell from 4.1 to 2.2 ms.
+- **Power throttling.** The process opts out of EcoQoS power throttling and timer-resolution throttling.
+- **`usleep` left as is.** The frame-budget profile shows no guest thread polling with `sys_timer_usleep` during Battle gameplay. The sub-millisecond `usleep` busy-wait therefore affects loading only, and it is unchanged because it keeps guest polling latency.

@@ -81,6 +81,9 @@
  * there is nothing to shim: the 15.6 ms default timer granularity this works
  * around is a Windows problem. */
 #include <timeapi.h>
+/* Names for the port's own render threads, so Windows samplers and debuggers
+ * can tell them from guest threads (Linux uses prctl below). */
+#include "ps3emu/thread_name.h"
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -286,6 +289,8 @@ static DWORD WINAPI present_worker(LPVOID)
 {
 #if defined(__linux__)
     prctl(PR_SET_NAME, "tb-present", 0, 0, 0);
+#elif defined(_WIN32)
+    ps3_thread_name("tb-present");
 #endif
     while (!render_stopping.load(std::memory_order_acquire)) {
         PresentQueue& q = present_queue();
@@ -367,11 +372,35 @@ static uint32_t gcm_control_word(uint32_t offset)
 static std::atomic<int> g_rsx_state{0};
 
 /* Sleep for about `us` microseconds, recorded on the frame-budget timeline. */
-static void walker_sleep_us(unsigned us)
+/* Returns 1 when the guest's FIFO kick ended the sleep early (Windows), so the
+ * walker drains at once instead of consuming the auto-reset kick unanswered.
+ * On Windows sleep_for(100 us) rounds up to the ~1 ms timer period; a reused
+ * high-resolution waitable timer (Windows 10 1803+) keeps the requested poll
+ * interval, and waiting on the kick alongside it wakes the walker as soon as a
+ * guest fence poll finds the queue dry. Older systems fall back to sleep_for. */
+static int walker_sleep_us(unsigned us, void* kick = nullptr)
 {
     const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
+    int kicked = 0;
+#if defined(_WIN32)
+    static thread_local HANDLE timer = CreateWaitableTimerExW(
+        NULL, NULL, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+    LARGE_INTEGER due;
+    due.QuadPart = -(LONGLONG)us * 10;   /* relative, 100 ns units */
+    if (timer && SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+        HANDLE handles[2] = { timer, (HANDLE)kick };
+        const DWORD r = WaitForMultipleObjects(kick ? 2 : 1, handles, FALSE, INFINITE);
+        kicked = r == WAIT_OBJECT_0 + 1;
+        if (kicked) CancelWaitableTimer(timer);
+    } else {
+        std::this_thread::sleep_for(std::chrono::microseconds(us));
+    }
+#else
+    (void)kick;
     std::this_thread::sleep_for(std::chrono::microseconds(us));
+#endif
     if (t0) tb_frame_budget_span(TB_FT_CLOCK_SLEEP, us, t0, tb_frame_budget_now());
+    return kicked;
 }
 
 /* The vblank beat: cellGcmTickVBlank/TickFlip on a steady clock, on a thread
@@ -400,6 +429,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
 #if defined(__linux__)
     prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
     prctl(PR_SET_NAME, "tb-vblank", 0, 0, 0);
+#elif defined(_WIN32)
+    ps3_thread_name("tb-vblank");
 #endif
     while (g_rsx_state.load(std::memory_order_acquire) == 0) {
 #if defined(PS3RECOMP_RSX_VULKAN)
@@ -448,6 +479,8 @@ static DWORD WINAPI rsx_walker(LPVOID)
 #if defined(__linux__)
     prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
     prctl(PR_SET_NAME, "tb-rsx-walker", 0, 0, 0);
+#elif defined(_WIN32)
+    ps3_thread_name("tb-rsx-walker");
 #endif
     const char* title = getenv("PS3_TITLE");
     if (!title || !*title) title = "Tank Battles Recomp";
@@ -516,8 +549,7 @@ static DWORD WINAPI rsx_walker(LPVOID)
 #endif
         idle++;
         if (idle < 16)       std::this_thread::yield();
-        else if (idle < 36)  walker_sleep_us(100);
-        else                 walker_sleep_us(250);
+        else if (walker_sleep_us(idle < 36 ? 100 : 250, kick)) idle = 0;   /* kicked: drain now */
     }
     return 0;
 }
@@ -671,6 +703,17 @@ int tb_player_main(int argc, char** argv)
      * thing. POSIX timers are already fine-grained. */
     if (timeBeginPeriod(1) == TIMERR_NOERROR)
         atexit([] { timeEndPeriod(1); });
+    {
+        /* Opt out of power throttling (EcoQoS): Windows 11 may otherwise run
+         * an unfocused or occluded game on efficiency settings and ignore the
+         * 1 ms timer period above. Older systems reject the class; harmless. */
+        struct { ULONG Version, ControlMask, StateMask; } throttling = {
+            1 /* PROCESS_POWER_THROTTLING_CURRENT_VERSION */,
+            0x1 | 0x4 /* EXECUTION_SPEED | IGNORE_TIMER_RESOLUTION */, 0 /* not throttled */ };
+        typedef BOOL (WINAPI *set_info_fn)(HANDLE, int, LPVOID, DWORD);
+        if (auto set_info = (set_info_fn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetProcessInformation"))
+            set_info(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &throttling, sizeof throttling);
+    }
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
 #endif
 
