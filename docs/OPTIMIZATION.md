@@ -127,3 +127,40 @@ Iris pending-review Battle diagnostic of the semantic-flags build with this runt
 | Synchronous submit-waits per frame | 1 | 0 |
 
 The main guest thread (21.6 ms running) is the limiter.
+
+### Title build: shared semantics, ISA level and PGO
+
+`cmake/TitleCompileFlags.cmake` is shared by the full-source build and the Windows CI-runtime consumer. It compiles the lifted title code with:
+
+- `-fwrapv -fno-strict-aliasing -ffp-contract=off`;
+- the SSE4.1 baseline, spelled with `/clang:` under clang-cl.
+
+The Windows consumer previously dropped all of these, including the `-fwrapv` that Linux requires for correct wrapping arithmetic.
+
+**ISA level.** `TB_TITLE_ARCH=x86-64-v3` builds, but on the Iris the game then stalls deterministically during boot, after the trophy `RegisterContext` and before the "not signed in" dialog. It stays off until that divergence is explained.
+
+**Restrict-context experiment.** `TB_TITLE_RESTRICT_CONTEXT=ON` compiles byte-identical copies of the lifted sources with a `__restrict` context parameter. It measured neutral and stays off.
+
+**PGO.** Profile-guided optimization is opt-in and local, because the profile is derived from the purchased game:
+
+```text
+python scripts/port.py configure --build-dir build-pgo-gen ... -- -DTB_TITLE_PGO=generate
+cmake --build build-pgo-gen --config Release --target TankBattlesRecomp
+set LLVM_PROFILE_FILE=analysis\pgo\battle-%p.profraw
+python scripts/script_gameplay.py --output analysis/performance/<new> --scene battle --build-dir build-pgo-gen --pending-review
+llvm-profdata merge -o analysis/pgo/battle.profdata analysis/pgo/battle-*.profraw
+python scripts/port.py configure --build-dir build-pgo ... -- -DTB_TITLE_PGO=<absolute path to battle.profdata>
+```
+
+The instrumented build runs at roughly two-thirds speed and writes its profile every 5 seconds, so it is never a benchmark. Regenerate the profile whenever the translated sources change.
+
+On the Iris, with the same runtime, PGO (`budget-pgo-1`):
+
+| Metric | Before | After |
+| --- | --- | --- |
+| Main guest thread (ms/frame) | 21.6 | 19.3 |
+| Completed FPS | 29.5 | 29.7 |
+
+The GPU becomes the limiter (19.9 ms/frame). The optimized rebuild took 296 s.
+
+Consumer builds also write `TankBattlesRecomp.map` (`/lldmap`) for the CPU sampler.

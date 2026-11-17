@@ -21,11 +21,14 @@ if(NOT EXISTS "${RECOMP_DIR}/ppu_recomp.h" OR NOT RECOMP_SOURCES)
     message(FATAL_ERROR "Missing complete locally translated PPU sources in ${RECOMP_DIR}")
 endif()
 
+include("${TB_PORT_ROOT}/cmake/TitleCompileFlags.cmake")
+tb_title_sources(RECOMP_SOURCES ${RECOMP_SOURCES})
 add_executable(TankBattlesRecomp
     "${TB_PORT_ROOT}/runtime_entry.cpp" ${RECOMP_SOURCES} ${SPU_GENERATED_SOURCES})
 target_include_directories(TankBattlesRecomp BEFORE PRIVATE
     "${RECOMP_DIR}" "${TB_PORT_ROOT}" "${PS3RECOMP_DIR}/runtime/ppu")
 target_link_libraries(TankBattlesRecomp PRIVATE TankBattlesRuntime)
+tb_title_compile_flags(TankBattlesRecomp)
 set_target_properties(TankBattlesRecomp PROPERTIES LINKER_LANGUAGE CXX)
 set_source_files_properties(${SPU_GENERATED_SOURCES} PROPERTIES
     INCLUDE_DIRECTORIES "${TB_RUNTIME_ROOT}/sdk/runtime/spu"
@@ -35,6 +38,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set_source_files_properties(${SPU_GENERATED_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
     if(MSVC)
         target_compile_options(TankBattlesRecomp PRIVATE /MP4)
+        # A link map (no runtime cost) lets scripts/sample_windows_cpu.py name sampled code.
+        target_link_options(TankBattlesRecomp PRIVATE "/lldmap:$<TARGET_FILE_DIR:TankBattlesRecomp>/TankBattlesRecomp.map")
         set_source_files_properties(${RECOMP_SOURCES} PROPERTIES COMPILE_OPTIONS /w)
     endif()
 endif()

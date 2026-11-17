@@ -433,6 +433,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         # and the optimised configurations keep their own levels.
         $<$<NOT:$<CONFIG:Debug,Release,RelWithDebInfo,MinSizeRel>>:-O1>
     )
+    # The same title-code semantics and ISA option as the Windows consumer.
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TitleCompileFlags.cmake")
+    tb_title_compile_flags(${PROJECT_NAME})
 elseif(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE
         /W3 /wd4100 /wd4244 /wd4267
