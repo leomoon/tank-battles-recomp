@@ -1,8 +1,46 @@
 """Create or reopen isolated native save/license mounts without exposing keys."""
-import fcntl
 import json
+import os
 from pathlib import Path
 import shutil
+import stat
+import subprocess
+from private_files import restrict_private
+
+
+def is_link(path):
+    """Include Windows junctions, which Python 3.11 does not call symlinks."""
+    try:
+        return path.is_symlink() or bool(getattr(path.lstat(), 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    except FileNotFoundError:
+        return False
+
+
+def content_link(path, target):
+    if os.name != 'nt':
+        path.symlink_to(target, target_is_directory=True)
+        return
+    # Junctions need no Developer Mode/admin privilege. Reject cmd metacharacters.
+    if any(c in str(path)+str(target) for c in '&|<>^%"!\r\n'):
+        raise ValueError('Unsupported shell metacharacter in content junction path')
+    subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(path), str(target)],
+                   check=True, capture_output=True)
+
+
+def lock_profile(lock):
+    if os.name == 'nt':
+        import msvcrt
+        lock.seek(0, os.SEEK_END)
+        if not lock.tell():
+            lock.write('0'); lock.flush()
+        lock.seek(0)
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as error:
+            raise BlockingIOError('Profile is already in use') from error
+    else:
+        import fcntl
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 UNLOCK = 'UP2006-NPUB30154_00-TANKBATTLES00KEY.edat'
 
@@ -19,11 +57,11 @@ def entitlement_files(directory):
 
 def validate_private_tree(directory):
     """Save/license writes must never escape through links or shared inodes."""
-    if directory.is_symlink():
+    if is_link(directory):
         raise ValueError('Private profile mount must not be a symlink')
     if directory.exists():
         for path in directory.rglob('*'):
-            if path.is_symlink() or path.is_file() and path.stat().st_nlink != 1:
+            if is_link(path) or path.is_file() and path.stat().st_nlink != 1:
                 raise ValueError('Private profile contains a linked file: '+str(path))
 
 
@@ -32,7 +70,7 @@ def open_profile(path, source_hdd, content, title_id, mode='purchased', resume=F
     path, source_hdd, content = map(Path, (path, source_hdd, content))
     if mode not in ('purchased', 'missing-unlock'):
         raise ValueError('Unsupported entitlement mode')
-    if path.is_symlink() or any(p.is_symlink() for p in path.parents):
+    if is_link(path) or any(is_link(p) for p in path.parents):
         raise ValueError('Profile path must not traverse a symlink')
     if path.resolve() == source_hdd.resolve() or path.resolve().is_relative_to(source_hdd.resolve()):
         raise ValueError('Profile must be separate from the original HDD')
@@ -42,20 +80,20 @@ def open_profile(path, source_hdd, content, title_id, mode='purchased', resume=F
     else:
         path.mkdir(parents=True, exist_ok=False)
     lock_path = path / '.session.lock'
-    if lock_path.is_symlink() or lock_path.exists() and lock_path.stat().st_nlink != 1:
+    if is_link(lock_path) or lock_path.exists() and lock_path.stat().st_nlink != 1:
         raise ValueError('Invalid profile lock')
     lock = lock_path.open('a')
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_profile(lock)
         manifest_path = path / 'profile.json'
         hdd = path / 'dev_hdd0'
         manifest = dict(version=1, title_id=title_id, entitlement=mode, content=str(content.resolve()))
         if resume:
-            if manifest_path.is_symlink() or json.loads(manifest_path.read_text()) != manifest:
+            if is_link(manifest_path) or json.loads(manifest_path.read_text()) != manifest:
                 raise ValueError('Profile title/content/entitlement mismatch')
         else:
             (hdd / 'game').mkdir(parents=True)
-            (hdd / 'game' / title_id).symlink_to(content.resolve(), target_is_directory=True)
+            content_link(hdd / 'game' / title_id, content.resolve())
             exdata = hdd / 'home/00000001/exdata'
             exdata.mkdir(parents=True)
             if mode == 'purchased':
@@ -66,13 +104,13 @@ def open_profile(path, source_hdd, content, title_id, mode='purchased', resume=F
                         raise ValueError('Purchased profile requires regular local unlock and RIF sidecar files')
                     shutil.copyfile(source, exdata / name)
                     if name.endswith('.rifkey'):
-                        (exdata / name).chmod(0o600)
+                        restrict_private(exdata / name)
             manifest_path.write_text(json.dumps(manifest, indent=2)+'\n')
         for parent in (hdd, hdd/'game'):
-            if parent.is_symlink():
+            if is_link(parent):
                 raise ValueError('HDD/game mount must not be a symlink')
         title = hdd / 'game' / title_id
-        if not title.is_symlink() or title.resolve() != content.resolve():
+        if not is_link(title) or title.resolve() != content.resolve():
             raise ValueError('Unexpected title content mount')
         for private in (hdd/'home', path/'dev_hdd1'):
             validate_private_tree(private)

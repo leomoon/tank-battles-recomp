@@ -1,9 +1,10 @@
 """Exercise real profile mounts and reopening using only synthetic files."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
-from user_profiles import UNLOCK, open_profile
+from user_profiles import UNLOCK, open_profile, content_link
 from port import launch_environment
 
 
@@ -60,9 +61,9 @@ class UserProfileTests(unittest.TestCase):
     def test_resume_rejects_external_save_and_entitlement_links(self):
         metadata,lock=self.profile('full');lock.close()
         private=Path(metadata['mounts']['PS3_HDD0_ROOT'])/'home/00000001'
-        (private/'savedata').symlink_to(self.exdata,target_is_directory=True)
+        content_link(private/'savedata', self.exdata)
         with self.assertRaises(ValueError):self.profile('full',resume=True)
-        (private/'savedata').unlink()
+        self.remove_link(private/'savedata')
         target=private/'exdata'/UNLOCK;target.unlink();target.hardlink_to(self.exdata/UNLOCK)
         with self.assertRaises(ValueError):self.profile('full',resume=True)
 
@@ -87,12 +88,17 @@ class UserProfileTests(unittest.TestCase):
     def test_resume_rejects_redirected_hdd_or_title_mount(self):
         metadata,lock=self.profile('full');lock.close()
         hdd=Path(metadata['mounts']['PS3_HDD0_ROOT'])
-        title=hdd/'game/NPUB30154';title.unlink();title.symlink_to(self.exdata,target_is_directory=True)
+        title=hdd/'game/NPUB30154';self.remove_link(title);content_link(title,self.exdata)
         with self.assertRaises(ValueError):self.profile('full',resume=True)
-        title.unlink();title.symlink_to(self.content,target_is_directory=True)
+        self.remove_link(title);content_link(title,self.content)
         original=hdd/'home';moved=hdd/'private-home';original.rename(moved)
-        original.symlink_to(self.source/'home',target_is_directory=True)
+        content_link(original,self.source/'home')
         with self.assertRaises(ValueError):self.profile('full',resume=True)
+
+    @staticmethod
+    def remove_link(path):
+        if os.name=='nt':path.rmdir()
+        else:path.unlink()
 
 
 if __name__=='__main__':unittest.main()

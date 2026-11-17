@@ -1,4 +1,4 @@
-import json,subprocess,tempfile,unittest
+import json,subprocess,tempfile,unittest,os,shutil,sys
 from pathlib import Path
 from gameplay_report import summarize,compare,COMPAT,renderer_failures
 from port import ROOT
@@ -21,7 +21,17 @@ class GameplayTimingTests(unittest.TestCase):
    path=Path(tmp);source=path/'test.cpp';source.write_text('''#include "gameplay_timing.h"
 #include <cassert>
 int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666667ull);c.present(i*16666667ull,c.guest);}assert(c.guest==20&&c.completed==20&&c.presents==60);c.present(2000000000,2);assert(c.completed==20);c.flip(2100000000);c.present(2200000000,c.guest);assert(c.completed==21);assert(c.events[1].back()==2200000000);}''')
-   subprocess.run(['c++','-std=c++20','-I'+str(ROOT),str(source),'-o',str(path/'test')],check=True);subprocess.run([str(path/'test')],check=True)
+   if os.name=='nt':
+    sys.path.insert(0,str(ROOT/'external/ps3recomp/tools'))
+    from msvc_env import environ,find_vcvars
+    env=environ();compiler=shutil.which('clang-cl',path=env['PATH'])
+    if not compiler:
+     compiler=str(Path(find_vcvars()).parents[2]/'Tools/Llvm/x64/bin/clang-cl.exe')
+    target=path/'test.exe'
+    subprocess.run([compiler,'/std:c++20','/EHsc','/I'+str(ROOT),str(source),'/Fe:'+str(target),'/Fo:'+str(path/'test.obj')],env=env,check=True,capture_output=True)
+   else:
+    target=path/'test';subprocess.run(['c++','-std=c++20','-I'+str(ROOT),str(source),'-o',str(target)],check=True)
+   subprocess.run([str(target)],check=True)
  def fixture(self,path):
   m={k:'synthetic' for k in COMPAT};m.update(strict_passed=True,live_gameplay_verified=True,phase='gameplay',interval_seconds=[1,61],visible_entire_interval=True,diagnostics={},sdk_verbose=False)
   (path/'measurement.json').write_text(json.dumps(m))
@@ -65,6 +75,12 @@ int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p);(p/'invalid-scene.json').write_text('{}')
    with self.assertRaises(ValueError):summarize(p)
+ def test_quick_run_is_never_a_baseline(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);m=self.fixture(p);m['quick_bench']=True
+   (p/'measurement.json').write_text(json.dumps(m))
+   report=summarize(p);self.assertFalse(report['baseline_eligible'])
+   with self.assertRaises(ValueError):compare([report])
  def test_verbose_or_unknown_logging_is_not_a_clean_baseline(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);m=self.fixture(p);self.assertTrue(summarize(p)['baseline_eligible'])

@@ -7,7 +7,8 @@ from port import ROOT,resolve,launch_environment
 from user_profiles import open_profile
 from diagnostic_logs import open_log
 from gameplay_report import summarize,renderer_failures
-from build_identity import source_identity
+from build_identity import source_identity, measurement_build
+from host_inventory import inventory
 
 
 def main():
@@ -26,8 +27,9 @@ def main():
  env=launch_environment(config,str(content/'PARAM.SFO'),mounts=metadata['mounts'])
  for k in list(env):
   if k.startswith(('TB_','PAD_','PS3RECOMP_VK_','RSX_ENGINE_','VK_DRAW_','PS3_FTRACE')):env.pop(k)
+ (out/'settings.ini').write_text('overlay = '+('1' if a.overlay else '0')+'\n')
  title='Tank Battles performance '+out.name+(' [VIDEO DIAGNOSTIC]' if a.correctness_video else ' [PROFILE DIAGNOSTIC]' if a.scopes or a.decode_profile else '')
- env.update(TB_SETTINGS_FILE='',TB_EXECUTION_MODE='strict',TB_GAMEPLAY_TIMING=str(out/'gameplay.jsonl'),TB_FPS_OVERLAY='1' if a.overlay else '0',PS3_TITLE=title,SDL_VIDEODRIVER='x11',PS3RECOMP_VK_WINDOW='1',PS3RECOMP_VK_GUEST_PROGRAMS='1',VK_DRAW_BATCH='0',PS3_VERBOSE='0',TB_VK_SUBMIT_MODE=a.submit_mode,TB_TEXTURE_DECODE_MODE=a.texture_decode_mode)
+ env.update(TB_SETTINGS_FILE=str(out/'settings.ini'),TB_EXECUTION_MODE='strict',TB_GAMEPLAY_TIMING=str(out/'gameplay.jsonl'),TB_FPS_OVERLAY='1' if a.overlay else '0',PS3_TITLE=title,SDL_VIDEODRIVER='windows' if os.name=='nt' else 'x11',PS3RECOMP_VK_WINDOW='1',PS3RECOMP_VK_GUEST_PROGRAMS='1',VK_DRAW_BATCH='0',PS3_VERBOSE='0',TB_VK_SUBMIT_MODE=a.submit_mode,TB_TEXTURE_DECODE_MODE=a.texture_decode_mode)
  if env.get('SDL_AUDIODRIVER')=='dummy':env.pop('SDL_AUDIODRIVER')
  if a.correctness_video:env['TB_FRAME_ORDER_TRACE']=str(out/'scanout-order.jsonl')
  if a.decode_profile:env.update(TB_TEXTURE_DECODE_PROFILE=str(out/'texture-decode.jsonl'),TB_DEPTH_PATH_TRACE='1')
@@ -43,24 +45,30 @@ def main():
  env['TB_GPU_RESOLVE']='0' if a.cpu_resolve else '1'
  env['TB_VBLANK_HZ']=a.vblank_hz
  if a.draw_verify:env['TB_DRAW_REMAP_VERIFY']='1'
- if a.frame_budget:env.update(TB_FRAME_BUDGET=str(out/'frame-budget.trace'),TB_FRAME_BUDGET_DELAY='5',TB_FRAME_BUDGET_SECONDS=str(a.profile_seconds))
- if a.scopes:env.update(TB_RENDER_PROFILE=str(out/'scopes.jsonl'),TB_RENDER_PROFILE_MAX_REPORTS='600',TB_GPU_TIMING=str(out/'gpu-timing.jsonl'))
+ if a.frame_budget:env.update(TB_FRAME_BUDGET_TRIGGER=str(out/'frame-budget.trigger'),TB_FRAME_BUDGET=str(out/'frame-budget.trace'),TB_FRAME_BUDGET_DELAY='5',TB_FRAME_BUDGET_SECONDS=str(a.profile_seconds))
+ if a.scopes:env.update(TB_RENDER_PROFILE=str(out/'scopes.jsonl'),TB_RENDER_PROFILE_MAX_REPORTS='600')
+ env['TB_DIAGNOSTIC_TRIGGER']=str(out/'diagnostic.trigger')
  if a.scripted_input:
   env.update(PAD_FILE=str(resolve(a.scripted_input)),PAD_NO_KEYBOARD='1',SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT='0x0000/0x0000')
- commands=(build/'commands.txt').read_text() if (build/'commands.txt').exists() else subprocess.check_output(['ninja','-C',str(build),'-t','commands'],text=True)
+ inspected=measurement_build(build)
  frozen=json.loads((build/'sources.json').read_text()) if (build/'sources.json').exists() else None
- flags={}
- for kind,needle in [('ppu','ppu_recomp_'),('spu','spu_recomp.c.o'),('runtime','rendering_profile.cpp.o')]:
-  matches=[l for l in commands.splitlines() if needle in l and ' -c ' in l];flags[kind]=matches[0] if matches else None
- gpu=subprocess.check_output(['nvidia-smi','--query-gpu=name,driver_version','--format=csv,noheader'],text=True).strip()
- exe=build/'TankBattlesRecomp';manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver='x11/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,submission_mode=a.submit_mode,texture_decode_mode=a.texture_decode_mode,fence_wait_mode="poll" if a.fence_poll else "blocking",label_publication="gpu-complete" if a.label_sync else "processed",batch_submission="serial" if a.vk_serial else "async",surface_blits="guest-memory" if a.cpu_resolve else "gpu",vblank_hz=a.vblank_hz,draw_remap_mode="cached" if a.draw_remap_cache else "reference",color_readback_mode="cached" if a.color_readback_cache else "reference",depth_conversion="gpu" if a.depth_gpu else "reference",build_directory=str(build),source_inputs_sha256=hashlib.sha256(json.dumps(frozen['files'],sort_keys=True).encode()).hexdigest() if frozen else source_identity(),build_type=re.search(r'^CMAKE_BUILD_TYPE:STRING=(.*)$',(build/'CMakeCache.txt').read_text(),re.M)[1],compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],effective_flags=flags,diagnostics=dict(video=a.correctness_video,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes,frame_budget=a.frame_budget,page_census=a.page_census,texture_decode_profile=a.decode_profile,draw_verify=a.draw_verify,lifecycle_stats=a.lifecycle_stats),overlay=a.overlay,quick_bench=a.quick,source_commit=frozen['commit'] if frozen else subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=hashlib.sha256((build/'instrumented_sdk/manifest.json').read_bytes()).hexdigest(),profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
+ flags=inspected['effective_flags']
+ host=inventory();(out/'host.json').write_text(json.dumps(host,indent=2)+'\n')
+ gpu=host.get('hardware',{}).get('gpu',host.get('graphics',{}))
+ exe=inspected['executable'];manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver=('win32' if os.name=='nt' else 'x11')+'/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,submission_mode=a.submit_mode,texture_decode_mode=a.texture_decode_mode,fence_wait_mode="poll" if a.fence_poll else "blocking",label_publication="gpu-complete" if a.label_sync else "processed",batch_submission="serial" if a.vk_serial else "async",surface_blits="guest-memory" if a.cpu_resolve else "gpu",vblank_hz=a.vblank_hz,draw_remap_mode="cached" if a.draw_remap_cache else "reference",color_readback_mode="cached" if a.color_readback_cache else "reference",depth_conversion="gpu" if a.depth_gpu else "reference",build_directory=str(build),source_inputs_sha256=hashlib.sha256(json.dumps(frozen['files'],sort_keys=True).encode()).hexdigest() if frozen else source_identity(),build_type=inspected['build_type'],compiler=inspected['compiler'],effective_flags=flags,diagnostics=dict(video=a.correctness_video,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes,frame_budget=a.frame_budget,page_census=a.page_census,texture_decode_profile=a.decode_profile,draw_verify=a.draw_verify,lifecycle_stats=a.lifecycle_stats),overlay=a.overlay,quick_bench=a.quick,source_commit=frozen['commit'] if frozen else subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=inspected['sdk_manifest_sha256'],runtime_source_commit=inspected['runtime_source_commit'],runtime_build=inspected['runtime_build'],profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
+ manifest['launch_environment']={k:v for k,v in env.items() if k.startswith(('TB_','PAD_','PS3RECOMP_VK_','SDL_','VK_DRAW_'))}
+ manifest['telemetry_unavailable']=['CPU stack/context-switch sampling on Windows'] if os.name=='nt' else []
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
  import threading
  stop=threading.Event();observations=[];child=None;marker=None;sampler=None;sample_streams=[]
- if a.scopes:
+ if a.scopes and os.name!='nt':
   subprocess.run(['cc','-O2',str(ROOT/'scripts/sample_gameplay_cpu.c'),'-o',str(out/'cpu-sampler')],check=True)
  def on_start(process):
   nonlocal child;child=process;(out/'pid').write_text(str(process.pid))
+ desktop=None
+ if os.name=='nt':
+  from windows_gameplay import WindowsDesktop
+  desktop=WindowsDesktop()
  def watch():
   nonlocal marker,sampler
   while not stop.wait(1):
@@ -70,34 +78,46 @@ def main():
      last=json.loads(path.read_text().splitlines()[-1]);t=(time.monotonic_ns()-(last['monotonic_ns']-last['elapsed_ns']))/1e9
     except (IndexError,json.JSONDecodeError):continue
    if t is None:continue
-   response=subprocess.run(['hyprctl','-j','clients'],capture_output=True,text=True)
-   clients=json.loads(response.stdout) if response.returncode==0 else []
-   found=[c for c in clients if c.get('title')==title]
-   c=found[0] if len(found)==1 else {}
-   if a.pin_window and c and not (out/'window-prepared.json').exists():
-    address=c['address']
-    if not re.fullmatch(r'0x[0-9a-fA-F]+',address):raise ValueError('Unexpected window address')
-    prefix='address:'+address
-    monitors=json.loads(subprocess.check_output(['hyprctl','-j','monitors'],text=True))
-    monitor=next((m for m in monitors if m['id']==c.get('monitor')),None)
-    position=None
-    if monitor:
-     scale=monitor.get('scale',1);mx,my=monitor['x'],monitor['y'];mw,mh=monitor['width']/scale,monitor['height']/scale
-     x,y=c['at'];w,h=c['size'];position=[round(min(max(x,mx+8),mx+mw-w-8)),round(min(max(y,my+8),my+mh-h-8))]
-    if c.get('grouped'):
-     operations=['hl.dsp.window.move({ window = "'+prefix+'", out_of_group = true })']
-    elif not c.get('floating'):
-     operations=['hl.dsp.window.float({ window = "'+prefix+'", action = "toggle" })']
-    elif not c.get('pinned'):
-     operations=['hl.dsp.window.pin({ window = "'+prefix+'" })']
-    elif c.get('size')!=[1280,720]:
-     operations=['hl.dsp.window.resize({ window = "'+prefix+'", x = 1280, y = 720 })']
-    elif position and position!=c['at']:
-     operations=[f'hl.dsp.window.move({{ window = "{prefix}", x = {position[0]}, y = {position[1]} }})']
-    else:
-     operations=['hl.dsp.window.alter_zorder({ window = "'+prefix+'", mode = "top" })','hl.dsp.focus({ window = "'+prefix+'" })']
-     (out/'window-prepared.json').write_text(json.dumps(dict(verified=c,operations=operations),indent=2))
-    for operation in operations:subprocess.run(['hyprctl','dispatch',operation],check=True,capture_output=True)
+   if os.name=='nt':
+    if child is None:continue
+    c=desktop.find(child.pid,title)
+    if a.pin_window and c and not (out/'window-prepared.json').exists():
+     c=desktop.prepare(c['window'],child.pid)
+     if c.get('visible') and c.get('size')==[1280,720]:
+      prepared=out/'window-prepared.tmp'
+      prepared.write_text(json.dumps(dict(verified=c,operations=['resize client to 1280x720, foreground'])))
+      prepared.replace(out/'window-prepared.json')
+     else:
+      (out/'window-pending.json').write_text(json.dumps(c))
+   else:
+    response=subprocess.run(['hyprctl','-j','clients'],capture_output=True,text=True)
+    clients=json.loads(response.stdout) if response.returncode==0 else []
+    found=[c for c in clients if c.get('title')==title]
+    c=found[0] if len(found)==1 else {}
+    if a.pin_window and c and not (out/'window-prepared.json').exists():
+     address=c['address']
+     if not re.fullmatch(r'0x[0-9a-fA-F]+',address):raise ValueError('Unexpected window address')
+     prefix='address:'+address
+     monitors=json.loads(subprocess.check_output(['hyprctl','-j','monitors'],text=True))
+     monitor=next((m for m in monitors if m['id']==c.get('monitor')),None)
+     position=None
+     if monitor:
+      scale=monitor.get('scale',1);mx,my=monitor['x'],monitor['y'];mw,mh=monitor['width']/scale,monitor['height']/scale
+      x,y=c['at'];w,h=c['size'];position=[round(min(max(x,mx+8),mx+mw-w-8)),round(min(max(y,my+8),my+mh-h-8))]
+     if c.get('grouped'):
+      operations=['hl.dsp.window.move({ window = "'+prefix+'", out_of_group = true })']
+     elif not c.get('floating'):
+      operations=['hl.dsp.window.float({ window = "'+prefix+'", action = "toggle" })']
+     elif not c.get('pinned'):
+      operations=['hl.dsp.window.pin({ window = "'+prefix+'" })']
+     elif c.get('size')!=[1280,720]:
+      operations=['hl.dsp.window.resize({ window = "'+prefix+'", x = 1280, y = 720 })']
+     elif position and position!=c['at']:
+      operations=[f'hl.dsp.window.move({{ window = "{prefix}", x = {position[0]}, y = {position[1]} }})']
+     else:
+      operations=['hl.dsp.window.alter_zorder({ window = "'+prefix+'", mode = "top" })','hl.dsp.focus({ window = "'+prefix+'" })']
+      (out/'window-prepared.json').write_text(json.dumps(dict(verified=c,operations=operations),indent=2))
+     for operation in operations:subprocess.run(['hyprctl','dispatch',operation],check=True,capture_output=True)
    threads=[]
    if child:
     for task in Path('/proc',str(child.pid),'task').glob('*'):
@@ -109,15 +129,19 @@ def main():
    control=out/'start.json'
    if marker is None and control.exists():
     marker=json.loads(control.read_text())
-    if a.frame_budget and child:os.kill(child.pid,__import__('signal').SIGUSR2)
+    if a.frame_budget and child:(out/'frame-budget.trigger').write_text('arm')
     manifest.update(phase='gameplay',live_gameplay_verified=bool(marker.get('live_gameplay_verified')),interval_seconds=[t+5,t+5+a.profile_seconds],scene_evidence=marker,window_size=c.get('size'));(out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    if a.scopes and child:
+    if a.scopes and child and os.name!='nt':
      try:(out/'cpu-sample-maps.txt').write_text(Path('/proc',str(child.pid),'maps').read_text())
      except FileNotFoundError:pass
      sample_streams.extend([open_log(out/'cpu-samples.csv','w'),open_log(out/'cpu-samples.log','w')])
      sampler=subprocess.Popen([str(out/'cpu-sampler'),str(child.pid),str(5+a.profile_seconds)],stdout=sample_streams[0],stderr=sample_streams[1])
 
- worker=threading.Thread(target=watch,daemon=True);worker.start()
+ def guarded_watch():
+  try:watch()
+  except Exception as error:
+   (out/'observer-error.json').write_text(json.dumps(dict(error=str(error))))
+ worker=threading.Thread(target=guarded_watch,daemon=True);worker.start()
  try:status,session=run_session([str(exe),str(content/'USRDIR/EBOOT.elf')],cwd=ROOT,env=env,timeout=a.timeout,log_path=out/'startup.log',request_snapshot=True,on_start=on_start)
  finally:
   stop.set();worker.join(timeout=5);lock.close()
@@ -127,7 +151,10 @@ def main():
   for stream in sample_streams:stream.close()
  log=(out/'startup.log').read_text(errors='replace');counts={k:int(v,16) for k,v in re.findall(r'\[execution-count\] ([a-z-]+)=0x([0-9a-fA-F]+)',log)}
  manifest.update(actual_audio=re.findall(r'\[gameplay-audio\] (.*)',log),swapchain_sizes=sorted(set(re.findall(r'window swapchain (\d+x\d+)',log))),session=session,renderer_failures=renderer_failures(log),strict_counts=counts,strict_passed=all(counts.get(k)==0 for k in ['ppu-miss','hle-missing','spu-interpreter','spu-untranslated','ppu-recovery']),internal_surfaces=sorted(set(re.findall(r'\[gameplay-surface\] (.*)',log))))
- if (out/'invalid-scene.json').exists():manifest['live_gameplay_verified']=False
+ if (out/'invalid-scene.json').exists() or (out/'observer-error.json').exists():manifest['live_gameplay_verified']=False
+ manifest['effective_runtime']=dict(device=re.findall(r'using device \d+: (.*)',log),present_mode=re.findall(r'window present mode (.*)',log),batch_submission=re.findall(r'draw batches: (.*)',log),depth_gpu_active='exact Z16 GPU conversion active' in log)
+ actual=manifest['effective_runtime']['batch_submission']
+ if actual:manifest['batch_submission']='async' if 'asynchronous' in actual[-1] else 'serial'
  if marker:
   begin,end=manifest['interval_seconds'];rows=[r for r in observations if begin<=r['seconds']<=end];manifest['visible_entire_interval']=bool(rows) and rows[-1]['seconds']>=end-1.5 and all(r['visible'] and r['window_size']==manifest['window_size'] for r in rows)
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')

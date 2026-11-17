@@ -44,7 +44,7 @@ def summarize(directory, minimum_seconds=60):
         if len(selected)<2:raise ValueError('Insufficient '+name)
         times=[(b-a)/1e6 for a,b in zip(selected,selected[1:])]
         out[name]=dict(frames=len(selected),fps=len(selected)/duration,mean_ms=sum(times)/len(times),p50_ms=percentile(times,.5),p95_ms=percentile(times,.95),p99_ms=percentile(times,.99),max_ms=max(times))
-    return dict(manifest=m,cadence=out,baseline_eligible=not any(m['diagnostics'].values()) and m.get('sdk_verbose') is False,scope='Timing measures selected completed guest serials, not pixel uniqueness or simulation speed. Confirm scene and wall-clock progression separately.')
+    return dict(manifest=m,cadence=out,baseline_eligible=not m.get('quick_bench',False) and not any(m['diagnostics'].values()) and m.get('sdk_verbose') is False,scope='Timing measures selected completed guest serials, not pixel uniqueness or simulation speed. Confirm scene and wall-clock progression separately.')
 
 def compare(reports,allowed_variants=(),candidate_plan=None):
     if set(allowed_variants)-{'overlay','texture_decode_mode','depth_conversion','color_readback_mode','draw_remap_mode','fence_wait_mode'}:raise ValueError('Unsupported comparison variant')

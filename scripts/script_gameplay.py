@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Drive a labeled benchmark route; capture scene proof only outside steady timing."""
-import argparse,json,re,subprocess,time,sys
+import argparse,json,re,subprocess,time,sys,os
+import hashlib
 from pathlib import Path
 from port import ROOT,resolve
-from verify_vulkan_rendering import request_close
+if os.name!='nt':
+ from verify_vulkan_rendering import request_close
 
 
 def invalid_ending_scene(text):
@@ -21,8 +23,28 @@ def default_battle_map(text):
  return bool(re.search(r'FIELD [O0]F WAR [I1]',normalized) and 'CONFIRM' in normalized and 'BACK' in normalized)
 
 
+def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=False):
+ if not allow_manual:return text
+ image=out/(label+'.png');digest=hashlib.sha256(image.read_bytes()).hexdigest()
+ request=out/(label+'-review-request.json')
+ request.write_text(json.dumps(dict(image=image.name,image_sha256=digest,required='Review live HUD and countdown, then write <label>-review.json with image_sha256, live_gameplay=true, countdown (0..120), reviewer and overlay_visible.')))
+ review=out/(label+'-review.json');deadline=time.monotonic()+120
+ while process.poll() is None and time.monotonic()<deadline:
+  if review.exists():
+   try:answer=json.loads(review.read_text())
+   except (PermissionError,json.JSONDecodeError):
+    # A Windows writer can briefly hold an exclusive handle or publish a partial JSON.
+    time.sleep(.2);continue
+   if answer.get('image_sha256')!=digest or answer.get('live_gameplay') is not True or not answer.get('reviewer') or type(answer.get('countdown')) is not int or not 0<=answer['countdown']<=120 or type(answer.get('overlay_visible')) is not bool or answer['overlay_visible']!=expected_overlay:
+    raise ValueError('Invalid/stale manual boundary review')
+   return str(answer['countdown'])
+  time.sleep(.2)
+ raise RuntimeError('Boundary review not supplied: '+str(request))
+
+
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");parser.add_argument("--label-sync",action="store_true");parser.add_argument("--vk-serial",action="store_true");parser.add_argument("--page-census",action="store_true");parser.add_argument("--cpu-resolve",action="store_true");parser.add_argument("--vblank-hz",default="60");parser.add_argument("--soak-minutes",type=float,default=0,help="Keep the session running after live gameplay, cycling rounds and sampling resources; then close normally");a=parser.parse_args()
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");parser.add_argument("--label-sync",action="store_true");parser.add_argument("--vk-serial",action="store_true");parser.add_argument("--page-census",action="store_true");parser.add_argument("--cpu-resolve",action="store_true");parser.add_argument("--vblank-hz",default="60");parser.add_argument("--soak-minutes",type=float,default=0,help="Keep the session running after live gameplay, cycling rounds and sampling resources; then close normally");parser.add_argument('--manual-boundaries',action='store_true',help='Allow explicit image-hash-bound review when countdown OCR fails');a=parser.parse_args()
+ if os.name=='nt' and (a.reference_template or a.correctness_video or a.soak_minutes):parser.error('Windows reference/video/soak adapters are not implemented yet; no fallback evidence is recorded')
  if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and (not (a.scopes or a.quick) or a.reference_template):parser.error('Shorter intervals require a native --scopes or --quick run and 10..60 seconds')
  out=resolve(a.output)
  if not out.is_relative_to(ROOT/'analysis/performance') or out.exists():parser.error('Use a new output inside analysis/performance/')
@@ -34,6 +56,7 @@ def main():
   for index in range(a.repeat):
    command=[sys.executable,__file__,'--output',str(out/f'run-{index+1}'),'--scene',a.scene,'--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
+   if a.manual_boundaries:command+=['--manual-boundaries']
    if a.depth_gpu:command+=['--depth-gpu']
    if a.color_readback_cache:command+=['--color-readback-cache']
    if a.fence_poll:command+=['--fence-poll']
@@ -58,7 +81,7 @@ def main():
   if not a.appimage:parser.error('--reference-template requires --appimage')
   cmd=[sys.executable,str(ROOT/'scripts/measure_reference.py'),'--output',str(out),'--scene',a.scene,'--template',a.reference_template,'--appimage',a.appimage,'--timeout','260']
  else:
-  cmd=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--scene',a.scene,'--profile',str(ROOT/'analysis/performance/profiles'/str(out.relative_to(ROOT/'analysis/performance')).replace('/','-')),'--pin-window','--scripted-input',str(pad),'--timeout',str(int(260+60*a.soak_minutes))]
+  cmd=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--scene',a.scene,'--profile',str(ROOT/'analysis/performance/profiles'/out.relative_to(ROOT/'analysis/performance').as_posix().replace('/','-')),'--pin-window','--scripted-input',str(pad),'--timeout',str(int(260+60*a.soak_minutes+(240 if a.manual_boundaries else 0)))]
   cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
   if a.depth_gpu:cmd+=['--depth-gpu']
   if a.soak_minutes:cmd+=['--lifecycle-stats']
@@ -78,6 +101,10 @@ def main():
   if a.frame_budget:cmd+=['--frame-budget']
   cmd+=['--profile-seconds',str(a.profile_seconds)]
   if a.overlay:cmd+=['--overlay']
+ desktop=None
+ if os.name=='nt':
+  from windows_gameplay import WindowsDesktop
+  desktop=WindowsDesktop()
  process=subprocess.Popen(cmd);start=time.monotonic();events=[];window=None;video=None;video_log=None
  def event(label,**fields):
   if not out.is_dir():return
@@ -92,6 +119,16 @@ def main():
   event(label,mask=mask,reports=reports);time.sleep(3)
  def capture(label):
   path=out/(label+'.png')
+  if desktop:
+   pid=int((out/'pid').read_text());captured=desktop.capture(int(window),pid,path,out/(label+'-timer.png'))
+   (out/(label+'-capture.json')).write_text(json.dumps(captured))
+   result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(ROOT/'scripts/windows_ocr.ps1'),'-ImagePath',str(path)],capture_output=True,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW,check=True,timeout=25)
+   ocr=json.loads(result.stdout);(out/(label+'-ocr.json')).write_text(json.dumps(ocr,indent=2))
+   timer_result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(ROOT/'scripts/windows_ocr.ps1'),'-ImagePath',str(out/(label+'-timer.png'))],capture_output=True,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW,check=True,timeout=25)
+   timer=json.loads(timer_result.stdout)['text']
+   if label.startswith('gameplay-'):timer=boundary_countdown(out,label,timer,a.manual_boundaries,process,a.overlay)
+   (out/(label+'-timer.txt')).write_text(timer)
+   return ocr['text'].upper()
   subprocess.run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-f','x11grab','-window_id',window,'-i',__import__('os').environ['DISPLAY'],'-frames:v','1','-y',str(path)],check=True,timeout=10)
   normalized=out/'ocr.png';subprocess.run(['magick',str(path),'-resize','1280x720!','-resize','300%','-colorspace','gray','-negate','-threshold','40%','-morphology','Erode','Disk:2',str(normalized)],check=True,capture_output=True)
   text=subprocess.run(['tesseract',str(normalized),'stdout','--psm','11'],capture_output=True,text=True).stdout.upper()
@@ -108,6 +145,8 @@ def main():
   # newer session's window from an older route's exception cleanup.
   try:
    expected=int((out/'pid').read_text())
+   if desktop:
+    desktop.close(int(window),expected);return
    owner=int(subprocess.check_output(['xdotool','getwindowpid',window],text=True,stderr=subprocess.DEVNULL))
    if owner==expected:request_close(window)
   except (FileNotFoundError,ValueError,subprocess.CalledProcessError):pass
@@ -117,14 +156,16 @@ def main():
    text=capture('navigation')
    if a.reference_template and ('AUTO LOAD' in text or 'HDD ACCESS' in text):press(0x4000,'autosave notice');continue
    if a.reference_template and 'NOT SIGNED' in text:press(0x2000,'offline notice');continue
-   if all(w in ' '.join(text.split()) for w in words) or label=='map' and default_battle_map(text):
+   if all(w in ' '.join(text.split()) for w in words) or label=='title' and desktop and 'BUTTON' in text or label=='map' and default_battle_map(text):
     (out/(label+'.png')).write_bytes((out/'navigation.png').read_bytes());event(label,ocr=text);return
    time.sleep(2)
   raise RuntimeError('Did not reach '+label+': '+text)
  try:
   while process.poll() is None and not (out/'window-prepared.json').exists():time.sleep(.5)
   if process.poll() is not None:raise RuntimeError('Measurement failed before window ready')
-  if a.reference_template:
+  if desktop:
+   found=[str(json.loads((out/'window-prepared.json').read_text())['verified']['window'])]
+  elif a.reference_template:
    pid=json.loads((out/'window-prepared.json').read_text())['verified']['pid']
    found=subprocess.check_output(['xdotool','search','--pid',str(pid),'--name','Tank Battles'],text=True).split()
   else:found=subprocess.check_output(['xdotool','search','--name','^'+re.escape('Tank Battles performance '+out.name+(' [VIDEO DIAGNOSTIC]' if a.correctness_video else ' [PROFILE DIAGNOSTIC]' if a.scopes or a.decode_profile else ''))+'$'],text=True).split()
@@ -141,6 +182,7 @@ def main():
   press(0x4000,'continue briefing');time.sleep(7)
   before=capture('gameplay-before')
   if any(w in before for w in ['BRIEFING','RRIEFING','CONTROLS:','RULES:','SELECT MAP','MISSION FAILED','VICTORY','DEFEAT','GAME OVER','WINS','DEBRIEF']):raise RuntimeError('Still not live gameplay')
+  if a.scene=='battle' and not live_battle_timer((out/'gameplay-before-timer.txt').read_text()):raise RuntimeError('No readable live Battle countdown at start')
   event('live-gameplay-boundary',ocr=before)
   (out/'start.json').write_text(json.dumps(dict(live_gameplay_verified=True,source='scripted route plus retained live HUD boundary screenshot',scene=a.scene,input='scripted navigation; player one neutral during timed interval',boundary_image='gameplay-before.png')))
   while process.poll() is None:
@@ -154,6 +196,15 @@ def main():
   if invalid_ending_scene(after) or a.scene=='battle' and not live_battle_timer((out/'gameplay-after-timer.txt').read_text()):
    event('invalid-ending-scene',reason='gameplay did not span full requested interval');(out/'invalid-scene.json').write_text(json.dumps(dict(reason='ending scene was not live gameplay')))
   (out/'scene-evidence.json').write_text(json.dumps(dict(before=before,after=after,scripted=True,frames_outside_interval=True),indent=2)+'\n')
+  if desktop:
+   countdown={}
+   for label in ('gameplay-before','gameplay-after'):
+    digits=re.findall(r'^\s*(\d{1,3})\s*$',(out/(label+'-timer.txt')).read_text(),re.M)
+    countdown[label]=dict(value=int(digits[0]) if len(digits)==1 else None,capture=json.loads((out/(label+'-capture.json')).read_text())['capture_monotonic_ns'])
+   first,last=countdown['gameplay-before'],countdown['gameplay-after']
+   elapsed=(last['capture']-first['capture'])/1e9
+   progression=(first['value']-last['value'])/elapsed if first['value'] is not None and last['value'] is not None and elapsed>0 else None
+   (out/'countdown.json').write_text(json.dumps(dict(boundaries=countdown,wall_seconds=elapsed,game_seconds_per_wall_second=progression,method='image-hash-bound visual review' if a.manual_boundaries else 'Windows OCR',limitations='Integer boundary samples; no RPCS3 reference captured on this host.'),indent=2))
   if a.soak_minutes:
    # Long session: Confirm every 20 s cycles rounds/results; resources sampled every 10 s.
    pid=int((out/'pid').read_text());soak_begin=time.monotonic();soak_end=soak_begin+60*a.soak_minutes;last_press=0;samples=[]
@@ -177,10 +228,16 @@ def main():
     time.sleep(10)
    event('soak-end',samples=len(samples),elapsed_seconds=time.monotonic()-soak_begin,duration_passed=time.monotonic()>=soak_end)
    capture('soak-final')
-  import os,signal
-  guest_alive=Path('/proc', (out/'pid').read_text().strip()).exists() if not a.reference_template else True
+  import signal
+  guest_alive=desktop.owner(int(window))==int((out/'pid').read_text()) if desktop else Path('/proc', (out/'pid').read_text().strip()).exists() if not a.reference_template else True
   if not a.reference_template and guest_alive:
-   try:os.kill(int((out/'pid').read_text()),signal.SIGUSR1);time.sleep(.3)
+   try:
+    (out/'diagnostic.trigger').write_text('snapshot')
+    deadline=time.monotonic()+5
+    while process.poll() is None and time.monotonic()<deadline:
+     if '[execution-count] ppu-recovery=' in (out/'startup.log').read_text(errors='replace'):break
+     time.sleep(.1)
+    else:raise RuntimeError('Final strict-execution snapshot was not recorded')
    except ProcessLookupError:guest_alive=False
   if a.reference_template:(out/'stop.json').write_text('{}')
   elif guest_alive:close_owned_window()
