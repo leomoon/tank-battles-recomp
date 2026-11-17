@@ -34,6 +34,9 @@ COUNTER_NAMES = ('queue_submit', 'alloc_memory', 'create_image', 'create_buffer'
                  'create_framebuffer', 'create_shader', 'sync_submit_wait', 'texture_hash_bytes',
                  'texture_upload_texels', 'guest_color_read_bytes', 'guest_depth_read', 'sparse_hash_bytes')
 BUDGET_MS = 1000.0 / 60.0
+# vulkan_frame_counters.inc TB_TS_TIMED kinds, timed outside render passes.
+GPU_COMMAND_NAMES = {1: 'clear-color', 2: 'clear-depth', 3: 'copy-image-to-buffer', 4: 'copy-buffer-to-image',
+                     5: 'copy-image', 6: 'blit-image', 7: 'dispatch'}
 SYSCALL_NAMES = {43: 'thread_yield', 44: 'thread_join', 85: 'event_flag_wait', 92: 'semaphore_wait',
                  97: 'lwmutex_lock', 102: 'mutex_lock', 107: 'cond_wait', 113: 'lwcond_wait',
                  130: 'event_queue_receive', 141: 'usleep', 142: 'sleep'}
@@ -220,7 +223,8 @@ def gpu_per_frame(spans, frames):
     passes = {}
     for k, _, extent, ns, t0, _ in spans:
         if k == GPU_PASS and first <= t0 < last:
-            key = '%dx%d' % (extent >> 16, extent & 0xFFFF)
+            key = (GPU_COMMAND_NAMES.get((extent >> 16) & 0x7FFF, 'command-%d' % ((extent >> 16) & 0x7FFF))
+                   if extent & 0x80000000 else '%dx%d' % (extent >> 16, extent & 0xFFFF))
             n, total = passes.get(key, (0, 0))
             passes[key] = (n + 1, total + ns)
     count = len(frames)
@@ -269,8 +273,8 @@ def render(result):
             lines.append(f"  {label:44s} {n:6.2f} {ms:7.3f}")
     if result.get('gpu'):
         g = result['gpu']
-        lines.append(f"GPU busy {g['busy_ms']:.2f} ms/frame over {g['command_buffers']:.1f} command buffers; render passes by target:")
-        for key, n, ms in g['passes_by_extent'][:6]:
+        lines.append(f"GPU busy {g['busy_ms']:.2f} ms/frame over {g['command_buffers']:.1f} command buffers; render passes by target and timed commands:")
+        for key, n, ms in g['passes_by_extent'][:12]:
             lines.append(f"  {key:>10s} {n:6.1f} passes {ms:7.3f} ms")
     if result.get('counters'):
         lines.append('work per frame: ' + ', '.join(f"{k} {v:.1f}" for k, v in sorted(result['counters'].items())))

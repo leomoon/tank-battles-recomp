@@ -19,13 +19,14 @@
 #define pvkCmdPipelineBarrier(...)           TB_FC(TB_FC_BARRIER, 1, (pvkCmdPipelineBarrier)(__VA_ARGS__))
 #define pvkAllocateDescriptorSets(d, i, s)   TB_FC(TB_FC_DESC_ALLOC, 1, (pvkAllocateDescriptorSets)(d, i, s))
 #define pvkUpdateDescriptorSets(d, n, w, c, p) TB_FC(TB_FC_DESC_WRITE, n, (pvkUpdateDescriptorSets)(d, n, w, c, p))
-#define pvkCmdClearColorImage(...)           TB_FC(TB_FC_CLEAR_IMAGE, 1, (pvkCmdClearColorImage)(__VA_ARGS__))
-#define pvkCmdClearDepthStencilImage(...)    TB_FC(TB_FC_CLEAR_IMAGE, 1, (pvkCmdClearDepthStencilImage)(__VA_ARGS__))
-#define pvkCmdCopyImageToBuffer(...)         TB_FC(TB_FC_COPY_IMAGE_TO_BUFFER, 1, (pvkCmdCopyImageToBuffer)(__VA_ARGS__))
-#define pvkCmdCopyBufferToImage(...)         TB_FC(TB_FC_COPY_BUFFER_TO_IMAGE, 1, (pvkCmdCopyBufferToImage)(__VA_ARGS__))
-#define pvkCmdCopyImage(...)                 TB_FC(TB_FC_COPY_IMAGE, 1, (pvkCmdCopyImage)(__VA_ARGS__))
-#define pvkCmdBlitImage(...)                 TB_FC(TB_FC_BLIT_IMAGE, 1, (pvkCmdBlitImage)(__VA_ARGS__))
+#define pvkCmdClearColorImage(c, ...)        TB_TS_TIMED(c, 1, TB_FC(TB_FC_CLEAR_IMAGE, 1, (pvkCmdClearColorImage)(c, __VA_ARGS__)))
+#define pvkCmdClearDepthStencilImage(c, ...) TB_TS_TIMED(c, 2, TB_FC(TB_FC_CLEAR_IMAGE, 1, (pvkCmdClearDepthStencilImage)(c, __VA_ARGS__)))
+#define pvkCmdCopyImageToBuffer(c, ...)      TB_TS_TIMED(c, 3, TB_FC(TB_FC_COPY_IMAGE_TO_BUFFER, 1, (pvkCmdCopyImageToBuffer)(c, __VA_ARGS__)))
+#define pvkCmdCopyBufferToImage(c, ...)      TB_TS_TIMED(c, 4, TB_FC(TB_FC_COPY_BUFFER_TO_IMAGE, 1, (pvkCmdCopyBufferToImage)(c, __VA_ARGS__)))
+#define pvkCmdCopyImage(c, ...)              TB_TS_TIMED(c, 5, TB_FC(TB_FC_COPY_IMAGE, 1, (pvkCmdCopyImage)(c, __VA_ARGS__)))
+#define pvkCmdBlitImage(c, ...)              TB_TS_TIMED(c, 6, TB_FC(TB_FC_BLIT_IMAGE, 1, (pvkCmdBlitImage)(c, __VA_ARGS__)))
 #define pvkCreateGraphicsPipelines(...)      TB_FC(TB_FC_CREATE_PIPELINE, 1, (pvkCreateGraphicsPipelines)(__VA_ARGS__))
+#define pvkCmdDispatch(c, ...)               TB_TS_TIMED(c, 7, TB_FC(TB_FC_DISPATCH, 1, (pvkCmdDispatch)(c, __VA_ARGS__)))
 #define pvkCmdDraw(...)                      TB_FC(TB_FC_DRAW, 1, (pvkCmdDraw)(__VA_ARGS__))
 #define pvkCmdDrawIndexed(...)               TB_FC(TB_FC_DRAW, 1, (pvkCmdDrawIndexed)(__VA_ARGS__))
 #define pvkCreateFramebuffer(d, i, a, f)     TB_FC(TB_FC_CREATE_FRAMEBUFFER, 1, (pvkCreateFramebuffer)(d, i, a, f))
@@ -39,6 +40,11 @@ static VkResult tb_ts_begin_cmd(VkCommandBuffer cmd, const VkCommandBufferBeginI
 static VkResult tb_ts_end_cmd(VkCommandBuffer cmd);
 static void tb_ts_begin_pass(VkCommandBuffer cmd, const VkRenderPassBeginInfo* info, VkSubpassContents contents);
 static void tb_ts_end_pass(VkCommandBuffer cmd);
+/* Transfer, clear, blit and dispatch commands (never inside a render pass) are
+ * timed individually as kind codes 0x8000|kind in the pass extent field. */
+static int tb_ts_command_begin(VkCommandBuffer cmd, u32 kind);
+static void tb_ts_command_end(VkCommandBuffer cmd, int query);
+#define TB_TS_TIMED(c, kind, call) do { const int tb_q_ = tb_ts_command_begin((c), (kind)); (void)(call); tb_ts_command_end((c), tb_q_); } while (0)
 #define pvkBeginCommandBuffer(c, i)  tb_ts_begin_cmd(c, i)
 #define pvkEndCommandBuffer(c)       tb_ts_end_cmd(c)
 #define pvkCmdBeginRenderPass(c, i, s) tb_ts_begin_pass(c, i, s)

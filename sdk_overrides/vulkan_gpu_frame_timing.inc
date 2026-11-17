@@ -133,6 +133,23 @@ static void tb_ts_end_pass(VkCommandBuffer cmd)
     }
 }
 
+static int tb_ts_command_begin(VkCommandBuffer cmd, u32 kind)
+{
+    const int i = tb_ts_slot(cmd, 0);
+    if (i < 0 || !tb_ts[i].recording || tb_ts[i].open_pass || tb_ts[i].used + 2 > TB_TS_QUERIES) return -1;
+    const u32 q = tb_ts[i].used;
+    tb_ts[i].extent[q / 2] = 0x80000000u | (kind << 16);
+    pvkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, tb_ts[i].pool, q);
+    tb_ts[i].used = q + 2;
+    return (int)q;
+}
+
+static void tb_ts_command_end(VkCommandBuffer cmd, int query)
+{
+    const int i = query < 0 ? -1 : tb_ts_slot(cmd, 0);
+    if (i >= 0) pvkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, tb_ts[i].pool, (u32)query + 1);
+}
+
 static void tb_ts_shutdown(void)
 {
     for (int i = 0; i < TB_TS_CMDS; i++) {

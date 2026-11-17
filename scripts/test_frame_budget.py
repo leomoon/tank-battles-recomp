@@ -108,12 +108,14 @@ class FrameWorkTests(unittest.TestCase):
         frames = [(0.0, 30.0), (30.0, 60.0)]
         spans = [(GPU_CMD, 0, 0, 8_000_000, 5.0, 5.0), (GPU_CMD, 0, 0, 4_000_000, 35.0, 35.0),
                  (GPU_PASS, 0, 2560 << 16 | 1440, 6_000_000, 5.0, 5.0), (GPU_PASS, 0, 1280 << 16 | 720, 1_000_000, 35.0, 35.0),
+                 (GPU_PASS, 0, 0x80000000 | 7 << 16, 2_000_000, 36.0, 36.0),
                  (GPU_CMD, 0, 0, 99_000_000, 70.0, 70.0)]
         gpu = gpu_per_frame(spans, frames)
         self.assertAlmostEqual(gpu['busy_ms'], 6.0)
         self.assertAlmostEqual(gpu['command_buffers'], 1.0)
         self.assertEqual(gpu['passes_by_extent'][0][0], '2560x1440')
         self.assertAlmostEqual(gpu['passes_by_extent'][0][2], 3.0)
+        self.assertIn(('dispatch', 0.5, 1.0), gpu['passes_by_extent'])
 
     def test_headroom_names_the_busiest_resource(self):
         result = dict(guest_threads=[dict(running_ms=21.0)], walker_ms_per_frame=dict(drain_cpu=9.0, present=1.0),
