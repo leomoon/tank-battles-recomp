@@ -60,7 +60,7 @@ python scripts/port.py run
 
 Setup extracts the package, decrypts the executable, prepares the unlock, translates the game and builds a stripped Release executable at `build-player/TankBattlesRecomp`. Asset caches are created at first launch, so that launch takes longer. Lower `--jobs` if compilation uses too much memory. The ps3recomp source is already included.
 
-To keep your keys elsewhere, add `--keys /path/to/keys` to setup. To use an installed game folder instead of a PKG, pass `--game-dir /path/to/NPUB30154`. Run `python scripts/port.py setup --help` for the other options.
+Use `setup --check` to report missing files before building. Setup resumes verified work after an interruption. A manually decrypted executable can be supplied with `--elf /path/to/EBOOT.elf`, or use your RPCS3 executable with `--rpcs3 /path/to/rpcs3`. Installed-dump and other options: [Setup reference](docs/SETUP.md).
 
 Controllers are supported. Keyboard: **Z = Cross, X = Circle, arrows = movement, Enter = Start**. **F3** toggles the FPS overlay; **F11 / Alt+Enter** toggles fullscreen.
 

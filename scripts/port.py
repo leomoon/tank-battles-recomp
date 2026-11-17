@@ -111,7 +111,29 @@ def build(args, config) -> None:
 
 
 def setup(args, config) -> None:
+    from setup_game import check_game
+    from setup_inputs import print_checks, require_valid
+    if args.check:
+        checks = check_game(args, config, ROOT, resolve)
+        if not args.import_only:
+            tools = setup_tools(args)
+            print_checks(tools)
+            checks.extend(tools)
+        require_valid(checks)
+        print("[setup] Check passed. Purchased inputs were not modified.")
+        return
+    from setup_pipeline import setup_lock
+    with setup_lock(resolve(config["paths"]["gamedata_root"])):
+        setup_install(args, config)
+
+
+def setup_install(args, config):
     from setup_game import install_game
+    from setup_inputs import print_checks, require_valid
+    if not args.import_only:
+        tools = setup_tools(args)
+        print_checks(tools)
+        require_valid(tools)
     args.elf = str(install_game(args, config, ROOT, resolve))
     if args.import_only:
         return
@@ -121,11 +143,20 @@ def setup(args, config) -> None:
     args.recomp_dir = None
     args.cmake_args = []
     args.jobs = args.jobs or config["recompiler"]["jobs"]
-    prepare(args, config)
-    configure(args, config)
-    build(args, config)
+    from setup_pipeline import run_pipeline
+    run_pipeline(args, config, resolve, prepare, configure, build)
     suffix = " --build-dir " + shlex.quote(args.build_dir) if args.build_dir else ""
     print("[setup] Ready. Launch with: python scripts/port.py run" + suffix)
+
+
+def setup_tools(args):
+    checks = []
+    for name, executable, action in (("CMake", args.cmake, "Install CMake and Ninja; see README Linux build dependencies."),
+                                     ("Ninja", args.ninja, "Install Ninja; see README Linux build dependencies."),
+                                     ("C++ compiler", os.environ.get("CXX", "c++"), "Install a C17/C++20 compiler and the Linux development packages listed in README.")):
+        found = shutil.which(executable)
+        checks.append(dict(name=name, path=found or executable, status="ok" if found else "error", action="" if found else action))
+    return checks
 
 
 def launch_environment(config, paramsfo=None, mounts=None):
@@ -183,6 +214,11 @@ def main() -> int:
     install.add_argument("--rap", help="Your purchased unlock's 16-byte RAP (license-2 EDAT only)")
     install.add_argument("--keys", default=os.environ.get("PS3_KEYS"), help="Your scetool-format SELF keys; defaults to PS3_KEYS or game/keys")
     install.add_argument("--rpcs3-source", help="Optional existing local RPCS3 source as the SELF key provider")
+    install.add_argument("--rpcs3", help="Your RPCS3 executable/AppImage; decrypts only a temporary copy of EBOOT.BIN")
+    install.add_argument("--elf", help="Manually decrypted EBOOT.elf, validated and copied into the installed game")
+    install.add_argument("--check", action="store_true", help="Report all missing/mismatched inputs and actions without installing or building")
+    install.add_argument("--allow-unknown-version", action="store_true", help="Explicitly accept untested hashes with warnings; never bypass file/title/ELF structure checks")
+    install.add_argument("--restart", action="store_true", help="Regenerate translations before the incremental native build; keeps purchased inputs")
     install.add_argument("--import-only", action="store_true", help="Import, decrypt and prepare the unlock without translation or compilation")
     install.add_argument("--build-dir")
     install.add_argument("--jobs", type=positive_int)
@@ -225,6 +261,8 @@ def main() -> int:
         return result if isinstance(result, int) else 0
     except (OSError, ValueError, KeyError) as error:
         parser.exit(2, f"error: {error}\n")
+    except ModuleNotFoundError as error:
+        parser.exit(2, f"error: Missing Python dependency {error.name}. Activate your venv and run: python -m pip install -r external/ps3recomp/requirements.txt cmake ninja\n")
     except subprocess.CalledProcessError as error:
         return error.returncode if error.returncode > 0 else 1
     return 0
