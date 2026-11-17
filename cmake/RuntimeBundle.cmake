@@ -16,6 +16,13 @@ if(WIN32)
     target_compile_definitions(runtime_cpu_smoke PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
 endif()
 enable_testing()
+add_executable(runtime_shader_check "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/shader_translation.c")
+target_include_directories(runtime_shader_check PRIVATE "${PS3RECOMP_DIR}/include" "${PS3RECOMP_DIR}/libs/video")
+# Link the production archive: compiling a second translator in this fixture
+# would conceal a disabled translator in the distributed runtime.
+target_link_libraries(runtime_shader_check PRIVATE ps3recomp_runtime)
+set_target_properties(runtime_shader_check PROPERTIES LINKER_LANGUAGE CXX)
+add_test(NAME runtime_shader_translation COMMAND runtime_shader_check)
 add_test(NAME runtime_cpu_smoke COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_runtime_smoke.py"
     --runner "$<TARGET_FILE:runtime_cpu_smoke>" --data "${TB_SYNTHETIC_DIR}")
 add_subdirectory(tests/host_services "bundle-contracts")
@@ -80,6 +87,7 @@ add_custom_target(runtime_bundle
       --host "$<TARGET_FILE:tank_battles_host_archive>" --runtime "$<TARGET_FILE:ps3recomp_runtime>"
       --boot "$<TARGET_FILE:tank_battles_boot_archive>" --cpu-boot "$<TARGET_FILE:tank_battles_cpu_boot>"
       --tool "$<TARGET_FILE:runtime_cpu_smoke>" --tool "$<TARGET_FILE:vulkan_draw_groups>"
+      --tool "$<TARGET_FILE:runtime_shader_check>"
       --tool "$<TARGET_FILE:vulkan_depth16>" --tool "$<TARGET_FILE:vulkan_nv3089>"
       --tool "$<TARGET_FILE:hle_fixture>" --tool "$<TARGET_FILE:positions_fixture>" --tool "$<TARGET_FILE:hotplug_fixture>"
       --tool "$<TARGET_FILE:keyboard_fixture>" --tool "$<TARGET_FILE:audio_fixture>" --tool "$<TARGET_FILE:cache_fixture>"
@@ -87,6 +95,7 @@ add_custom_target(runtime_bundle
       $<$<BOOL:${WIN32}>:--dependencies> $<$<BOOL:${WIN32}>:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}>
     DEPENDS tank_battles_host_archive tank_battles_boot_archive tank_battles_cpu_boot ps3recomp_runtime
       runtime_cpu_smoke vulkan_draw_groups vulkan_depth16 vulkan_nv3089
+      runtime_shader_check
       hle_fixture positions_fixture hotplug_fixture keyboard_fixture audio_fixture cache_fixture timeline_fixture entitlement_fixture
     COMMAND_EXPAND_LISTS VERBATIM)
 add_test(NAME runtime_bundle_integrity COMMAND "${Python3_EXECUTABLE}" -m unittest discover

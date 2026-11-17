@@ -26,7 +26,8 @@ def normalize_log_permissions(directory):
 
 def open_log(path, mode='wb'):
     stream=Path(path).open(mode)
-    os.fchmod(stream.fileno(),0o644)
+    if os.name == 'posix':
+        os.fchmod(stream.fileno(),0o644)
     return stream
 
 

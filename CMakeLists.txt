@@ -97,7 +97,11 @@ if(WIN32 AND PS3RECOMP_RSX_VULKAN)
     find_path(Vulkan_INCLUDE_DIRS vulkan/vulkan.h REQUIRED)
     find_package(glslang CONFIG REQUIRED)
     target_sources(ps3recomp_runtime PRIVATE "${PS3RECOMP_DIR}/libs/video/rsx_shader_spirv.cpp")
-    set_source_files_properties("${PS3RECOMP_DIR}/libs/video/rsx_shader_spirv.cpp" PROPERTIES COMPILE_DEFINITIONS PS3RECOMP_HAVE_SPIRV_TRANSLATION=1)
+    # Source properties belong to the directory that created the target. Setting
+    # this only in the port's directory leaves the SDK target compiling its stub.
+    set_source_files_properties("${PS3RECOMP_DIR}/libs/video/rsx_shader_spirv.cpp"
+        TARGET_DIRECTORY ps3recomp_runtime
+        PROPERTIES COMPILE_DEFINITIONS PS3RECOMP_HAVE_SPIRV_TRANSLATION=1)
     target_compile_definitions(ps3recomp_runtime PUBLIC PS3RECOMP_RSX_VULKAN)
     target_include_directories(ps3recomp_runtime PRIVATE "${Vulkan_INCLUDE_DIRS}")
     target_link_libraries(ps3recomp_runtime PRIVATE glslang::glslang glslang::SPIRV)
@@ -251,7 +255,7 @@ if(PORT_ENABLE_SPU AND SPU_SOURCES)
     list(APPEND SPU_SOURCES "${EXECUTION_SDK}/runtime/spu/spu_dispatch_mt.c")
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
-if(PS3RECOMP_RSX_VULKAN AND NOT WIN32)
+if(PS3RECOMP_RSX_VULKAN)
     get_source_file_property(VULKAN_SHADER_DEFINITIONS "${PS3RECOMP_DIR}/libs/video/rsx_shader_spirv.cpp"
         DIRECTORY "${PS3RECOMP_DIR}" COMPILE_DEFINITIONS)
     if(NOT VULKAN_SHADER_DEFINITIONS MATCHES "PS3RECOMP_HAVE_SPIRV_TRANSLATION=1")

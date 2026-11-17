@@ -40,6 +40,8 @@ python scripts/verify_bundle_contracts.py --bundle "path to extracted bundle"
 
 The synthetic smoke verifies loader segments/BSS/TLS, HLE dispatch, guest thread creation/join, three FIFO flips, vblank delivery, exit status and a statically translated SPU result. Its vblank thread assertion follows the port's dedicated interrupt ticker, rather than the SDK smoke boot's main-thread callback queue. This test explicitly uses the null graphics backend (software rendering with GDI on Windows) and does not validate a Windows GPU.
 
+`runtime_shader_check` links the production SDK archive and translates vertex and fragment HLSL to SPIR-V without a GPU. CI runs it before packaging and again from the downloaded bundle. This catches an inactive shader compiler even when the synthetic CPU smoke passes.
+
 ## GPU and real-game validation
 
 Hosted CI compiles `vulkan_draw_groups`, `vulkan_depth16` and `vulkan_nv3089`; it does not execute them without a suitable physical GPU. They use the production instrumented Vulkan backend and existing exact ordering, depth and gather assertions. Run them on the Windows NUC before claiming renderer support. Physical controllers/audio, real-game rendering, resize/focus/fullscreen, driver limits and NUC performance remain separate hardware acceptance tasks.
@@ -49,3 +51,7 @@ Linux retains its existing GPU regressions and unchanged strict real-game Battle
 ## Verified CI
 
 [The complete Windows validation run](https://github.com/leomoon/tank-battles-recomp/actions/runs/44024961021) passed on source snapshot `551696b3c178a7ba001048ee1ff5807b97b472e4`: all 15 build-job CTest groups, exact embedded shaders, archive/content audit, artifact publication and the separate fresh-runner synthetic link/boot and downloaded contract suites. GPU test tools were compiled in Windows CI and executed on the Linux NVIDIA host; Windows hardware execution remains pending. Detailed local evidence is in `analysis/runtime-bundle/verification.json`.
+
+Physical Windows testing subsequently found that snapshot's SDK archive contained the disabled shader-translation stub. The Windows port had set the enabling source property outside the directory that owns the SDK target. The corrected configuration applies the property with `TARGET_DIRECTORY ps3recomp_runtime` and validates it on Windows as well as Linux. Old bundles require replacement; a newer GPU cannot enable a compiler omitted from the binary.
+
+The corrected local Windows build passes all 16 CPU test groups and boots the private player on Iris Pro 580 with `backend-ready a=1 b=1 c=1`, verified purchased unlock, translated guest draws and 1280x720 window presentations. The 30-second boot check ends by timeout and does not establish gameplay or clean shutdown acceptance. The draw-groups GPU fixture passes its former pipeline-creation failure but still fails its later presented-center pixel assertion; physical rendering acceptance remains pending.

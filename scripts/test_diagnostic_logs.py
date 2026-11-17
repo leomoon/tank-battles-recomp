@@ -3,6 +3,12 @@ from pathlib import Path
 from diagnostic_logs import open_log,normalize_log_permissions
 
 class DiagnosticLogTests(unittest.TestCase):
+ def test_log_can_be_written_and_read(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   path=Path(tmp)/'startup.log'
+   with open_log(path) as stream:stream.write(b'fixture')
+   self.assertEqual(path.read_bytes(),b'fixture')
+ @unittest.skipUnless(os.name=='posix','POSIX permission bits and umask')
  def test_restrictive_umask_still_creates_readable_log(self):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp)/'startup.log';previous=os.umask(0o777)
@@ -10,6 +16,7 @@ class DiagnosticLogTests(unittest.TestCase):
     with open_log(path) as stream:stream.write(b'fixture')
    finally:os.umask(previous)
    self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o644)
+ @unittest.skipUnless(os.name=='posix','POSIX permission bits and symbolic links')
  def test_repairs_vendor_logs_without_touching_keys_or_links(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp);log=root/'RPCS3.log.gz';log.write_bytes(b'synthetic');log.chmod(0)

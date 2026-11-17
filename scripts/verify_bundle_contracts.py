@@ -12,6 +12,7 @@ ext='.exe' if os.name=='nt' else ''
 env=dict(os.environ,SDL_VIDEODRIVER='dummy',SDL_AUDIODRIVER='dummy',SDL_JOYSTICK_HIDAPI='0',SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT='0x0000/0x0000')
 def run(*command,extra=None):
     subprocess.run([str(value) for value in command],env=dict(env,**(extra or {})),check=True,timeout=120)
+run(binary/('runtime_shader_check'+ext))
 for name in ('hle','positions','hotplug','keyboard','audio'):
     run(binary/(name+'_fixture'+ext))
 run(binary/('audio_fixture'+ext),'no-device',extra={'SDL_AUDIODRIVER':'nonexistent-test-driver'})
