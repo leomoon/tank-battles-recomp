@@ -48,7 +48,7 @@ EDITS={
  ('    fclose(in);\n    fclose(out);\n\n    if (rc == 0)',
   '    fclose(in);\n    if (fclose(out) != 0 && rc == 0) rc = -12;\n\n    if (rc == 0)'),
  ('const char* edat_resolve(const char* host_path, char* buf, size_t cap)',
-  '#if defined(__linux__)\n#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/edat_cache.inc')+'"\n#else\nconst char* edat_resolve(const char* host_path, char* buf, size_t cap)')],
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/edat_cache.inc')+'"\nstatic const char* tb_original_edat_resolve(const char* host_path, char* buf, size_t cap)')],
  'libs/video/rsx_draw_engine.c':[
  ('static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)',
   '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/index_remap_cache.inc')+'"\nstatic void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)'),
@@ -210,14 +210,26 @@ def main():
    for before,after in settings_edits:
     if text.count(before)!=1:raise SystemExit('Player settings anchor mismatch')
     text=text.replace(before,after,1)
+  if relative=='runtime/ppu/ppu_hle.cpp':
+   for name in ('ps3_hle_call','ps3_hle_register','ps3_hle_register_ctx','ps3_hle_register_fast'):
+    pattern=r'(extern "C" void )'+name+r'(\()'
+    text,count=re.subn(pattern,lambda m:m[1]+'tb_sdk_'+name+m[2],text)
+    if count!=1:raise SystemExit('Portable HLE boundary anchor mismatch: '+name)
   if relative=='libs/audio/cellAudio.c':
-   begin=text.index('static void* audio_mix_thread_func(void* arg)\n{')
-   end=text.index('\n#endif\n\nstatic int audio_start_mix_thread',begin)
+   begin=text.index('#ifdef _WIN32\nstatic unsigned long long g_audio_underruns;')
+   end=text.index('\nstatic int audio_start_mix_thread',begin)
    text=text[:begin]+'#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/audio_clock.inc')+'"\n'+text[end:]
+   text='#define PS3RECOMP_AUDIO_USE_SDL2 1\n'+text
+  if relative=='libs/input/cellPad.c':
+   before='    return (unsigned long long)GetTickCount64();'
+   if text.count(before)!=1:raise SystemExit('Pad monotonic-clock anchor mismatch')
+   text=text.replace(before,'    return tb_host_now()/1000000ull;',1)
+   text='#define PS3RECOMP_PAD_USE_SDL2 1\n#include "'+str(Path(__file__).resolve().parent.parent/'host_services.h')+'"\n'+text
+  if relative=='libs/filesystem/edat.c':
+   text='#ifdef _WIN32\n#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/cache_windows.inc')+'"\n#endif\n'+text
   def include(match):
    path=original.parent/match[1]
    return '#include "'+str(path.resolve())+'"' if path.is_file() else match[0]
-  if relative == 'libs/filesystem/edat.c': text += '\n#endif /* Linux cache override */\n'
   text=re.sub(r'#include "([^"\n]+)"',include,text)
   text='#include "'+str(Path(__file__).resolve().parent.parent/'execution_policy_api.h')+'"\n'+text
   if relative in ('libs/video/rsx_vulkan_backend.c','libs/input/cellPad.c'):

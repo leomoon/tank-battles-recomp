@@ -14,19 +14,13 @@ extern "C" void ps3_load_prx_modules(void) {}
 
 extern "C" int ps3_hle_has(uint32_t);
 extern "C" void ps3_hle_register_ctx(uint32_t, const char*, tank_battles_override_fn);
-#if defined(__linux__)
-extern "C" void __real_ps3_hle_call(uint32_t, ppu_context*);
-#endif
+extern "C" void tb_sdk_ps3_hle_call(uint32_t, ppu_context*);
 struct Override { uint32_t nid; uint32_t alias; };
 static Override overrides[128];
 static unsigned count;
 
 void tank_battles_register_override(uint32_t nid, tank_battles_override_fn handler)
 {
-#if !defined(__linux__)
-    fprintf(stderr, "Port overrides currently require the Linux HLE dispatch bridge.\n");
-    std::abort();
-#endif
     if (!handler) std::abort();
     static uint32_t next_alias = 0x54420000u;
     while (ps3_hle_has(next_alias)) ++next_alias;
@@ -45,10 +39,8 @@ bool tank_battles_dispatch_override(uint32_t nid, ppu_context* context)
 {
     for (unsigned i = 0; i < count; ++i)
         if (overrides[i].nid == nid) {
-#if defined(__linux__)
-            __real_ps3_hle_call(overrides[i].alias, context);
+            tb_sdk_ps3_hle_call(overrides[i].alias, context);
             return true;
-#endif
         }
     return false;
 }

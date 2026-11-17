@@ -1,7 +1,7 @@
 #include "execution_policy_api.h"
 #include <atomic>
 #include <cstdio>
-#include <unistd.h>
+#include "host_services.h"
 
 namespace {
 constexpr const char* names[] = {
@@ -26,15 +26,15 @@ void tank_battles_vulkan_report()
     // Called by the signal diagnostic handler. Avoid stdio and allocations.
     for (unsigned k = 0; k < count; ++k) {
         constexpr char prefix[] = "[vulkan-count] ";
-        write(2, prefix, sizeof(prefix) - 1);
+        tb_host_write( prefix, sizeof(prefix) - 1);
         size_t length = 0;
         while (names[k][length]) ++length;
-        write(2, names[k], length);
+        tb_host_write( names[k], length);
         char value[] = "=0x00000000\n";
         constexpr char digits[] = "0123456789ABCDEF";
         const auto n = counts[k].load(std::memory_order_relaxed);
         for (unsigned j = 0; j < 8; ++j)
             value[10 - j] = digits[(n >> (4 * j)) & 15];
-        write(2, value, sizeof(value) - 1);
+        tb_host_write( value, sizeof(value) - 1);
     }
 }

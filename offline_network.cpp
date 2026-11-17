@@ -14,9 +14,7 @@ extern "C" {
 int np_is_initialized();
 int32_t cellSysutilQueueGuestCallbackArgs(uint32_t, const uint64_t*);
 void cellSysutilQueueEvent(int, uint32_t, uint32_t);
-#if defined(__linux__)
-void __real_ps3_hle_call(uint32_t, ppu_context*);
-#endif
+void tb_sdk_ps3_hle_call(uint32_t, ppu_context*);
 }
 namespace {
 constexpr uint32_t np_not_init=0x8002aa01, np_already=0x8002aa02, np_argument=0x8002aa03;
@@ -53,11 +51,7 @@ MatchingContext* context(uint32_t id) { for (auto& c:contexts) if(c.id && c.id==
 void clear_matching() { matching=false; for(auto& c:contexts)c={}; std::erase_if(completions,[](const auto& e){return e.owner==Owner::matching;}); }
 void reset_np_services() { score.clear();tus.clear();np2=false;clear_matching();voice_pending=false;++voice_generation;signaling.fill(0);std::erase_if(completions,[](const auto& e){return e.owner!=Owner::net;}); }
 void delegate(const char* name, ppu_context* c) {
-#if defined(__linux__)
-    __real_ps3_hle_call(ps3_compute_nid(name),c);
-#else
-    (void)name;c->gpr[3]=np_not_init;
-#endif
+    tb_sdk_ps3_hle_call(ps3_compute_nid(name),c);
 }
 uint32_t title_create(TitlePool& pool, ppu_context* c) {
     if(!pool.initialized)return community_not_init;
@@ -340,7 +334,5 @@ void tank_battles_init_offline_network(){
     fprintf(stderr,"[offline] Tank Battles profile: PSN and host matchmaking disabled\n");
 }
 void tank_battles_register_offline_network(){
-#if defined(__linux__)
     for(const auto& binding:bindings)tank_battles_register_override(ps3_compute_nid(binding.name),binding.fn);
-#endif
 }

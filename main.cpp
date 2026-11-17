@@ -48,6 +48,7 @@
  * passthrough to <windows.h>; off Windows the toolkit's shim supplies the same
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
+#include "host_utf8_args.h"
 
 #include <atomic>
 #include <chrono>
@@ -636,7 +637,11 @@ static int run_guest(uint32_t entry, uint32_t stack_top)
 static int run_guest(uint32_t entry, uint32_t stack_top) { return ppu_run(entry, stack_top); }
 #endif
 
+#ifdef _WIN32
+static int tb_player_main(int argc, char** argv)
+#else
 int main(int argc, char** argv)
+#endif
 {
     if (argc < 2) {
         printf("usage: %s <PPU ELF>\n", argv[0]);
@@ -649,7 +654,8 @@ int main(int argc, char** argv)
     /* 1 ms timer resolution. The default granularity is about 15.6 ms, which
      * inflates every shorter wait the title makes and throttles the whole
      * thing. POSIX timers are already fine-grained. */
-    timeBeginPeriod(1);
+    if (timeBeginPeriod(1) == TIMERR_NOERROR)
+        atexit([] { timeEndPeriod(1); });
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
 #endif
 
@@ -749,3 +755,7 @@ int main(int argc, char** argv)
      * got anywhere. */
     return g_sys_process_exit_called ? (int)g_sys_process_exit_code : 0;
 }
+
+#ifdef _WIN32
+TB_UTF8_ENTRY(tb_player_main)
+#endif

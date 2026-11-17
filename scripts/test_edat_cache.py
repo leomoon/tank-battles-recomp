@@ -13,6 +13,11 @@ from port import ROOT
 class EdatCacheTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if os.environ.get('TB_CACHE_TEST_RUNNER'):
+            cls.root = ROOT / 'build-tests' / ('edat-cache-' + uuid.uuid4().hex)
+            cls.root.mkdir(parents=True)
+            cls.binary = Path(os.environ['TB_CACHE_TEST_RUNNER'])
+            return
         cls.root = ROOT / 'build-tests' / ('edat-cache-' + uuid.uuid4().hex)
         cls.root.mkdir(parents=True)
         fixture = cls.root / 'fixture.c'
@@ -146,6 +151,18 @@ int main(int argc,char** argv) {
         children=[subprocess.Popen([str(self.binary),'resolve',str(self.source)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) for _ in range(2)]
         for child in children:self.assertEqual(child.wait(timeout=5),0)
         self.invoke()
+
+    def test_unicode_and_spaces_in_cache_path(self):
+        source=self.directory/'player café 雪.edat'
+        self.source.rename(source)
+        self.source=source
+        self.cache=Path(str(source)+'.dec')
+        self.marker=Path(str(self.cache)+'.complete')
+        self.invoke()
+        before=self.cache.read_bytes()
+        self.cache.write_bytes(b'corrupt')
+        self.invoke()
+        self.assertEqual(self.cache.read_bytes(),before)
 
 
 if __name__=='__main__':unittest.main()

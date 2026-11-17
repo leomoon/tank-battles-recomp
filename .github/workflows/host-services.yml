@@ -1,0 +1,55 @@
+name: Portable host services
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '*.cpp'
+      - '*.h'
+      - 'sdk_overrides/**'
+      - 'scripts/instrument_sdk.py'
+      - 'scripts/test_edat_cache.py'
+      - 'tests/host_services/**'
+      - '.github/workflows/host-services.yml'
+  pull_request:
+    paths:
+      - '*.cpp'
+      - '*.h'
+      - 'sdk_overrides/**'
+      - 'scripts/instrument_sdk.py'
+      - 'scripts/test_edat_cache.py'
+      - 'tests/host_services/**'
+      - '.github/workflows/host-services.yml'
+permissions:
+  contents: read
+jobs:
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install Python fixture dependencies
+        run: python -m pip install -r external/ps3recomp/requirements.txt
+      - name: Install Linux SDL development files
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Install Windows SDL development files
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: vcpkg install sdl2:x64-windows
+      - name: Configure Linux fixture
+        if: runner.os == 'Linux'
+        run: cmake -S tests/host_services -B build-host -DCMAKE_BUILD_TYPE=Release
+      - name: Configure Windows clang-cl fixture
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -S tests/host_services -B build-host -A x64 -T ClangCL "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+      - name: Compile production host paths with game-free fixtures
+        run: cmake --build build-host --config Release --parallel 4
+      - name: Exercise HLE, strict policy, cache, input, audio and timeline
+        run: ctest --test-dir build-host -C Release --output-on-failure

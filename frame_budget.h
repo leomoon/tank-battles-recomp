@@ -3,7 +3,8 @@
  *
  * TB_FRAME_BUDGET=<path> records the toolkit's PS3_FTRACE timeline into <path>,
  * but only for TB_FRAME_BUDGET_SECONDS (default 20) starting
- * TB_FRAME_BUDGET_DELAY seconds (default 5) after the process receives SIGUSR2,
+ * TB_FRAME_BUDGET_DELAY seconds (default 5) after the process receives SIGUSR2
+ * on POSIX or consumes the file named by TB_FRAME_BUDGET_TRIGGER on either OS,
  * so a measurement helper can place the window inside verified live gameplay.
  * The port adds its own span kinds beside the toolkit's (ps3_ftrace.h 1..15). */
 #include <stdint.h>

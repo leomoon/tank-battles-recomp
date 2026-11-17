@@ -1,5 +1,6 @@
 // Opt-in frame-budget timeline: see frame_budget.h and scripts/frame_budget.py.
 #include "frame_budget.h"
+#include "host_services.h"
 #include "ps3emu/ps3_ftrace.h"
 
 #include <atomic>
@@ -10,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <filesystem>
 #if defined(__linux__)
 #include <sys/prctl.h>
 #include <time.h>
@@ -21,6 +23,9 @@ extern "C" uint32_t ppu_hle_inject_base;
 namespace {
 std::atomic<int> g_enabled{0};
 std::atomic<int> g_arm_requested{0};
+std::atomic<bool> g_stop{false};
+std::thread g_watcher;
+void stop_watcher() {g_stop.store(true);if(g_watcher.joinable())g_watcher.join();}
 double g_delay = 5.0, g_seconds = 20.0;
 
 void request_arm(int) { g_arm_requested.store(1, std::memory_order_relaxed); }
@@ -46,7 +51,12 @@ void watcher() {
     prctl(PR_SET_NAME, "tb-frame-budget", 0, 0, 0);
 #endif
     uint32_t last = 0;
-    for (;;) {
+    const char* trigger = getenv("TB_FRAME_BUDGET_TRIGGER");
+    while (!g_stop.load(std::memory_order_relaxed)) {
+        if (trigger && *trigger) {
+            std::error_code error;
+            if (std::filesystem::remove(std::filesystem::u8path(trigger), error)) request_arm(0);
+        }
         ps3_ft_state* s = &g_ps3_ft;
         if (g_arm_requested.exchange(0, std::memory_order_relaxed) && ps3_ft_on()) {
             const uint64_t start = ps3_ft_now() + (uint64_t)(g_delay * 1e9);
@@ -80,16 +90,19 @@ extern "C" void tb_frame_budget_init(void) {
     g_seconds = env_seconds("TB_FRAME_BUDGET_SECONDS", 20.0, 1.0, 120.0);
     // Far-future window: hooks stay a cheap rejected compare until SIGUSR2.
     const std::string spec = "1000000:" + std::to_string(g_seconds) + ":" + path;
-    setenv("PS3_FTRACE", spec.c_str(), 1);
-    setenv("PS3_FTRACE_MIN_US", "5", 0);
+    tb_host_env("PS3_FTRACE", spec.c_str(), 1);
+    tb_host_env("PS3_FTRACE_MIN_US", "5", 0);
+#ifndef _WIN32
     struct sigaction action {};
     action.sa_handler = request_arm;
     sigemptyset(&action.sa_mask);
     action.sa_flags = SA_RESTART;
     sigaction(SIGUSR2, &action, nullptr);
+#endif
     g_enabled.store(1, std::memory_order_release);
     ps3_ft_on();
-    std::thread(watcher).detach();
+    g_watcher=std::thread(watcher);
+    atexit(stop_watcher);
 }
 
 extern "C" int tb_frame_budget_on(void) {

@@ -46,14 +46,15 @@ class OfflineNetworkTests(unittest.TestCase):
 
     def run_profile(self,hostile=False):
         env={k:v for k,v in os.environ.items() if not k.startswith(('PS3_','TB_'))}
-        generated=ROOT/'build-smoke/synthetic'
-        env.update(PS3_PARAM_SFO=str(generated/'PARAM.SFO'),PS3_VFS_ROOT=str(generated),
+        image=Path(os.environ.get('TB_TEST_ELF',str(ROOT/'build-smoke/synthetic/smoke.elf')))
+        generated=image.parent
+        env.update(PS3_PARAM_SFO=os.environ.get('TB_TEST_SFO',str(generated/'PARAM.SFO')),PS3_VFS_ROOT=str(generated),
                    PS3_HDD0_ROOT=str(self.directory/'dev_hdd0'),PS3_HDD1_ROOT=str(self.directory/'dev_hdd1'),
                    PS3_GAMEDATA_ROOT=str(self.directory),PS3_DEV_FLASH=str(self.directory/'dev_flash'),
                    TB_OFFLINE_PROBE='1',TB_OFFLINE_TRACE='1',SDL_AUDIODRIVER='dummy',SDL_VIDEODRIVER='dummy')
         if hostile:
             env.update(PS3_NET_ONLINE='1',PSNR_SERVER='unreachable.invalid:31313')
-        command=[str(self.guard),str(ROOT/'build-smoke/TankBattlesRecomp'),str(generated/'smoke.elf')]
+        command=[str(self.guard),os.environ.get('TB_TEST_RUNNER',str(ROOT/'build-smoke/TankBattlesRecomp')),str(image)]
         result=subprocess.run(command,cwd=ROOT,env=env,capture_output=True,timeout=15)
         log=(result.stdout+result.stderr).decode(errors='replace')
         label='hostile-env' if hostile else 'default'

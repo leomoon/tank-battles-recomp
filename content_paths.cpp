@@ -74,11 +74,10 @@ bool tank_battles_init_content(const char* elf) {
             cellGame_get_hdd_title_id() != nullptr, getenv("PS3_BOOT_PATH"));
     return true;
 }
-#if defined(__linux__)
-extern "C" void __real_ps3_hle_call(uint32_t, ppu_context*);
+extern "C" void tb_sdk_ps3_hle_call(uint32_t, ppu_context*);
 static void asset_available(uint32_t nid, ppu_context* context) {
     const auto path_ea = static_cast<uint32_t>(context->gpr[4]);
-    __real_ps3_hle_call(nid, context);
+    tb_sdk_ps3_hle_call(nid, context);
     if (static_cast<uint32_t>(context->gpr[3]) != 0 || !path_ea) return;
     char path[1024]; size_t length = 0;
     for (; length + 1 < sizeof path; ++length) {
@@ -101,10 +100,7 @@ static void asset_available(uint32_t nid, ppu_context* context) {
 }
 static void available1(ppu_context* context) { asset_available(0xAD218FAFu, context); }
 static void available2(ppu_context* context) { asset_available(0xF042B14Fu, context); }
-#endif
 void tank_battles_register_asset_overrides() {
-#if defined(__linux__)
     tank_battles_register_override(0xAD218FAFu, available1);
     tank_battles_register_override(0xF042B14Fu, available2);
-#endif
 }

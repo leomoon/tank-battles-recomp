@@ -308,11 +308,7 @@ option(TANK_BATTLES_DIAGNOSTIC_TESTS "Compile synthetic-only override and stall 
 if(TANK_BATTLES_DIAGNOSTIC_TESTS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE TB_DIAGNOSTIC_TESTS)
 endif()
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--wrap=ps3_hle_call"
-        "-Wl,--wrap=ps3_hle_register" "-Wl,--wrap=ps3_hle_register_ctx"
-        "-Wl,--wrap=ps3_hle_register_fast")
-endif()
+
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include
 # directory (and their flags) to those TUs alone: adding it to the whole target
@@ -364,6 +360,10 @@ set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
 # anything a POSIX linker can find; the D3D12 backend's own imports come in
 # through the #pragma comment(lib) in libs/video/rsx_d3d12_backend.c.
 if(WIN32)
+    # Port-owned input/audio source copies select SDL on Windows as on Linux.
+    find_package(SDL2 CONFIG REQUIRED)
+    target_link_libraries(ps3recomp_runtime PRIVATE SDL2::SDL2)
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 winmm)
     target_link_libraries(${PROJECT_NAME} PRIVATE
         dbghelp
         user32

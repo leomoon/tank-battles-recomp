@@ -1,7 +1,6 @@
 #include "hle_inventory.h"
 #include <cstdio>
 #include <cstdlib>
-#if defined(__linux__)
 #include <atomic>
 #include <string>
 #include <vector>
@@ -18,20 +17,20 @@ static std::vector<Registration>& registrations() {
     static std::vector<Registration> records;
     return records;
 }
-extern "C" void __real_ps3_hle_register(uint32_t, const char*, void*);
-extern "C" void __real_ps3_hle_register_ctx(uint32_t, const char*, ContextFn);
-extern "C" void __real_ps3_hle_register_fast(uint32_t, FastFn);
+extern "C" void tb_sdk_ps3_hle_register(uint32_t, const char*, void*);
+extern "C" void tb_sdk_ps3_hle_register_ctx(uint32_t, const char*, ContextFn);
+extern "C" void tb_sdk_ps3_hle_register_fast(uint32_t, FastFn);
 extern "C" int ps3_hle_has(uint32_t);
-extern "C" void __wrap_ps3_hle_register(uint32_t nid, const char* name, void* handler) {
-    __real_ps3_hle_register(nid, name, handler);
+extern "C" void ps3_hle_register(uint32_t nid, const char* name, void* handler) {
+    tb_sdk_ps3_hle_register(nid, name, handler);
     if (handler && capture_enabled()) registrations().push_back({"generic", nid, name ? name : "?"});
 }
-extern "C" void __wrap_ps3_hle_register_ctx(uint32_t nid, const char* name, ContextFn handler) {
-    __real_ps3_hle_register_ctx(nid, name, handler);
+extern "C" void ps3_hle_register_ctx(uint32_t nid, const char* name, ContextFn handler) {
+    tb_sdk_ps3_hle_register_ctx(nid, name, handler);
     if (handler && capture_enabled()) registrations().push_back({"context", nid, name ? name : "?"});
 }
-extern "C" void __wrap_ps3_hle_register_fast(uint32_t nid, FastFn handler) {
-    __real_ps3_hle_register_fast(nid, handler);
+extern "C" void ps3_hle_register_fast(uint32_t nid, FastFn handler) {
+    tb_sdk_ps3_hle_register_fast(nid, handler);
     if (handler && capture_enabled()) registrations().push_back({"fast", nid, "fast handler"});
 }
 void tank_battles_record_override(uint32_t nid, uint32_t alias) {
@@ -61,7 +60,3 @@ bool tank_battles_write_hle_inventory() {
     }
     return fclose(stream) == 0;
 }
-#else
-void tank_battles_record_override(uint32_t, uint32_t) {}
-bool tank_battles_write_hle_inventory() { return getenv("TB_HLE_INVENTORY") == nullptr; }
-#endif

@@ -1,9 +1,13 @@
-/* Linux cache publication for the pinned EDAT resolver. SHA-1 here detects
+/* Host cache publication for the pinned EDAT resolver. SHA-1 here detects
  * accidental stale/corrupt cache contents; EDAT authentication remains in the
  * original decryptor. No key material is written to the completion record. */
+#ifdef _WIN32
+#include "cache_windows.inc"
+#else
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/file.h>
+#endif
 
 static int tb_cache_digest(const char* path, uint8_t digest[20], uint64_t* size)
 {
@@ -71,7 +75,7 @@ const char* edat_resolve(const char* host_path, char* buf, size_t cap)
              tb_cache_record(host_path,temp,record) &&
              tb_cache_digest(host_path,after,&b) && a == b && !memcmp(before,after,20);
         if (ok) {
-            fd = open(temp,O_RDONLY | O_CLOEXEC);
+            fd = open(temp,O_RDWR | O_CLOEXEC);
             ok = fd >= 0 && fsync(fd) == 0;
             if (fd >= 0) close(fd);
         }

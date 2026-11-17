@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <unistd.h>
+#include "host_services.h"
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
 static std::atomic<uint32_t> counts[8];
@@ -36,18 +36,18 @@ extern "C" void tb_execution_event(unsigned kind,uint32_t address,uint32_t image
 static void hex_line(uint64_t value){
  char text[20]="0x0000000000000000\n";const char* digits="0123456789ABCDEF";
  for(unsigned i=0;i<16;++i)text[17-i]=digits[(value>>(4*i))&15];
- write(2,text,19);
+ tb_host_write(text,19);
 }
 void tank_battles_execution_report(){
  for(unsigned k=0;k<8;++k){
-  const char* prefix="[execution-count] ";write(2,prefix,18);size_t length=0;while(labels[k][length])++length;write(2,labels[k],length);
+  const char* prefix="[execution-count] ";tb_host_write(prefix,18);size_t length=0;while(labels[k][length])++length;tb_host_write(labels[k],length);
   char number[13]="=0x00000000\n";const char* digits="0123456789ABCDEF";auto value=counts[k].load();
   for(unsigned i=0;i<8;++i)number[10-i]=digits[(value>>(4*i))&15];
-  write(2,number,12);
-  const char* last="[execution-last image:address] ";size_t size=0;while(last[size])++size;write(2,last,size);
-  write(2,labels[k],length);write(2,"=",1);hex_line(last_target[k].load());
+  tb_host_write(number,12);
+  const char* last="[execution-last image:address] ";size_t size=0;while(last[size])++size;tb_host_write(last,size);
+  tb_host_write(labels[k],length);tb_host_write("=",1);hex_line(last_target[k].load());
  }
- for(auto& slot:images)if(auto value=slot.load()){write(2,"[execution-image-pair] ",23);hex_line(value);}
+ for(auto& slot:images)if(auto value=slot.load()){tb_host_write("[execution-image-pair] ",23);hex_line(value);}
 }
 extern "C" void ps3_hle_call(uint32_t,ppu_context*);
 extern "C" void ps3_indirect_call(ppu_context*);
