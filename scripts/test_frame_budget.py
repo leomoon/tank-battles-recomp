@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from frame_budget import (BATCH_SUBMIT, PUBLISH, CLOCK_SLEEP, DRAIN_CALL, FENCE_WAIT, FLIP_FIFO, HLE, PRESENT, PUT_ADVANCE, SYSCALL,
+from frame_budget import (COUNT, GPU_CMD, GPU_PASS, counters_per_frame, gpu_per_frame, headroom, BATCH_SUBMIT, PUBLISH, CLOCK_SLEEP, DRAIN_CALL, FENCE_WAIT, FLIP_FIFO, HLE, PRESENT, PUT_ADVANCE, SYSCALL,
                           USLEEP, VBLANK, Union, analyze, load)
 
 
@@ -90,6 +90,38 @@ class FrameBudgetTests(unittest.TestCase):
         self.assertIn('spans=2', header)
         self.assertEqual(names, {1: 'main'})
         self.assertEqual(spans[1], (DRAIN_CALL, 0, 0x2A, 0, 1.0005, 1.003))
+
+
+class FrameWorkTests(unittest.TestCase):
+    def test_cumulative_counters_become_per_frame_deltas(self):
+        frames = [(0.0, 30.0), (30.0, 60.0)]
+        # Counter 1 (queue_submit): totals 5 by t=10, 12 by t=29, 20 by t=50.
+        spans = [(COUNT, 0, 1, 5, 10.0, 10.0), (COUNT, 0, 1, 12, 29.0, 29.0), (COUNT, 0, 1, 20, 50.0, 50.0),
+                 # Counter 20 (texture_hash_bytes) wraps past 2**32 between frames.
+                 (COUNT, 0, 20, 0xFFFFFFF0, 1.0, 1.0), (COUNT, 0, 20, 0x10, 40.0, 40.0)]
+        counters = counters_per_frame(spans, frames)
+        # The first frame has no earlier total, so only frame 2 contributes (20 - 12 = 8).
+        self.assertAlmostEqual(counters['queue_submit'], 4)
+        self.assertAlmostEqual(counters['texture_hash_bytes'], 0x20 / 2)
+
+    def test_gpu_time_is_summed_per_frame_and_by_target(self):
+        frames = [(0.0, 30.0), (30.0, 60.0)]
+        spans = [(GPU_CMD, 0, 0, 8_000_000, 5.0, 5.0), (GPU_CMD, 0, 0, 4_000_000, 35.0, 35.0),
+                 (GPU_PASS, 0, 2560 << 16 | 1440, 6_000_000, 5.0, 5.0), (GPU_PASS, 0, 1280 << 16 | 720, 1_000_000, 35.0, 35.0),
+                 (GPU_CMD, 0, 0, 99_000_000, 70.0, 70.0)]
+        gpu = gpu_per_frame(spans, frames)
+        self.assertAlmostEqual(gpu['busy_ms'], 6.0)
+        self.assertAlmostEqual(gpu['command_buffers'], 1.0)
+        self.assertEqual(gpu['passes_by_extent'][0][0], '2560x1440')
+        self.assertAlmostEqual(gpu['passes_by_extent'][0][2], 3.0)
+
+    def test_headroom_names_the_busiest_resource(self):
+        result = dict(guest_threads=[dict(running_ms=21.0)], walker_ms_per_frame=dict(drain_cpu=9.0, present=1.0),
+                      present_thread_ms_per_frame=2.0, gpu=dict(busy_ms=12.0))
+        h = headroom(result)
+        self.assertEqual(h['limiter'], 'main_guest_thread')
+        self.assertAlmostEqual(h['headroom_ms'], 1000 / 60 - 21.0)
+        self.assertNotIn('gpu_busy', headroom(dict(result, gpu=None))['busy_ms'])
 
 
 if __name__ == '__main__':

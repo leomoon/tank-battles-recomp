@@ -23,7 +23,10 @@ def summarize(directory, minimum_seconds=60):
     if (directory/'invalid-scene.json').exists():raise ValueError('Ending scene was not live gameplay')
     session=m.get('session',{})
     if session.get('interrupted') or session.get('launcher_exit_status',0) not in (0,124):raise ValueError('Failed or interrupted session')
-    if not m['strict_passed'] or not m['live_gameplay_verified'] or m['phase']!='gameplay':raise ValueError('Need strict-clean verified live gameplay')
+    # A route run with --pending-review keeps its boundary images for later
+    # human review when countdown OCR fails; it is timing-diagnostic only.
+    pending=bool((m.get('scene_evidence') or {}).get('pending_review'))
+    if not m['strict_passed'] or not (m['live_gameplay_verified'] or pending) or m['phase']!='gameplay':raise ValueError('Need strict-clean verified live gameplay')
     begin,end=m['interval_seconds'];begin_ns,end_ns=round(begin*1e9),round(end*1e9);duration=(end_ns-begin_ns)/1e9
     if minimum_seconds != 60 and (not (m['diagnostics'].get('scopes') or m.get('quick_bench')) or not 10<=minimum_seconds<=60):raise ValueError('Short intervals require an explicit CPU/GPU profile or quick bench')
     if duration<minimum_seconds:raise ValueError('Need complete requested steady interval')
@@ -44,7 +47,7 @@ def summarize(directory, minimum_seconds=60):
         if len(selected)<2:raise ValueError('Insufficient '+name)
         times=[(b-a)/1e6 for a,b in zip(selected,selected[1:])]
         out[name]=dict(frames=len(selected),fps=len(selected)/duration,mean_ms=sum(times)/len(times),p50_ms=percentile(times,.5),p95_ms=percentile(times,.95),p99_ms=percentile(times,.99),max_ms=max(times))
-    return dict(manifest=m,cadence=out,baseline_eligible=not m.get('quick_bench',False) and not any(m['diagnostics'].values()) and m.get('sdk_verbose') is False,scope='Timing measures selected completed guest serials, not pixel uniqueness or simulation speed. Confirm scene and wall-clock progression separately.')
+    return dict(manifest=m,cadence=out,scene_verification='pending human review of retained boundary images' if pending else 'verified',baseline_eligible=not pending and m['live_gameplay_verified'] and not m.get('quick_bench',False) and not any(m['diagnostics'].values()) and m.get('sdk_verbose') is False,scope='Timing measures selected completed guest serials, not pixel uniqueness or simulation speed. Confirm scene and wall-clock progression separately.')
 
 def compare(reports,allowed_variants=(),candidate_plan=None):
     if set(allowed_variants)-{'overlay','texture_decode_mode','depth_conversion','color_readback_mode','draw_remap_mode','fence_wait_mode'}:raise ValueError('Unsupported comparison variant')

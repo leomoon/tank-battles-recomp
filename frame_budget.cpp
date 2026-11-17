@@ -131,3 +131,24 @@ extern "C" uint32_t tb_frame_budget_site(const char* label) {
 extern "C" void tb_frame_budget_span(unsigned kind, uint32_t a, uint64_t t0, uint64_t t1) {
     ps3_ft_span((int)kind, 0, a, 0, t0, t1);
 }
+
+extern "C" void tb_frame_budget_mark(unsigned kind, uint32_t a, uint32_t b) {
+    if (!g_enabled.load(std::memory_order_relaxed) || __atomic_load_n(&g_ps3_ft.on, __ATOMIC_RELAXED) != 2) return;
+    const uint64_t t = ps3_ft_now();
+    ps3_ft_span((int)kind, 0, a, b, t, t);
+}
+
+// Counters are cumulative: a record carries the running total (mod 2^32) and
+// is written at most every 0.5 ms per counter, so a busy counter cannot fill
+// the trace. The report differences the last total before each flip.
+extern "C" void tb_frame_budget_count(uint32_t id, uint32_t amount) {
+    static std::atomic<uint32_t> totals[64];
+    static std::atomic<uint64_t> written[64];
+    if (id >= 64 || !g_enabled.load(std::memory_order_relaxed) ||
+        __atomic_load_n(&g_ps3_ft.on, __ATOMIC_RELAXED) != 2) return;
+    const uint32_t total = totals[id].fetch_add(amount, std::memory_order_relaxed) + amount;
+    const uint64_t t = ps3_ft_now();
+    uint64_t last = written[id].load(std::memory_order_relaxed);
+    if (t - last < 500000 || !written[id].compare_exchange_strong(last, t, std::memory_order_relaxed)) return;
+    ps3_ft_span(TB_FT_COUNT, 0, id, total, t, t);
+}

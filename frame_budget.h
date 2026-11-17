@@ -17,6 +17,21 @@
 #define TB_FT_PRESENT_FINISH 21 /* present thread: wait, swapchain blit, present  */
 #define TB_FT_BATCH_SUBMIT 22 /* instant: a draw batch was submitted, a = 1 idle */
 #define TB_FT_PUBLISH      23 /* instant: a label/reference/report was published, a = method */
+#define TB_FT_COUNT        24 /* instant: work counter, a = TB_FC_* id, b = amount           */
+#define TB_FT_GPU_CMD      25 /* instant: one command buffer's GPU execution, b = ns         */
+#define TB_FT_GPU_PASS     26 /* instant: one render pass's GPU time, a = w<<16|h, b = ns     */
+
+/* Per-frame work counters (TB_FT_COUNT). Ids are part of the trace format:
+ * append only, and keep scripts/frame_budget.py COUNTER_NAMES in step. */
+enum {
+    TB_FC_QUEUE_SUBMIT = 1, TB_FC_ALLOC_MEMORY, TB_FC_CREATE_IMAGE, TB_FC_CREATE_BUFFER,
+    TB_FC_RENDER_PASS, TB_FC_BARRIER, TB_FC_DESC_ALLOC, TB_FC_DESC_WRITE,
+    TB_FC_CLEAR_IMAGE, TB_FC_COPY_IMAGE_TO_BUFFER, TB_FC_COPY_BUFFER_TO_IMAGE, TB_FC_COPY_IMAGE,
+    TB_FC_BLIT_IMAGE, TB_FC_CREATE_PIPELINE, TB_FC_DRAW, TB_FC_DISPATCH,
+    TB_FC_CREATE_FRAMEBUFFER, TB_FC_CREATE_SHADER, TB_FC_SYNC_SUBMIT_WAIT,
+    TB_FC_TEXTURE_HASH_BYTES, TB_FC_TEXTURE_UPLOAD_TEXELS, TB_FC_GUEST_COLOR_READ_BYTES,
+    TB_FC_GUEST_DEPTH_READ, TB_FC_SPARSE_HASH_BYTES,
+};
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,6 +50,10 @@ extern __thread const char* tb_wait_label;
 #endif
 uint32_t tb_frame_budget_site(const char* label);
 void tb_frame_budget_span(unsigned kind, uint32_t a, uint64_t t0, uint64_t t1);
+/* An instant record carrying two payload words; a no-op unless recording. */
+void tb_frame_budget_mark(unsigned kind, uint32_t a, uint32_t b);
+/* Adds amount to counter id for the current frame; a cheap branch when off. */
+void tb_frame_budget_count(uint32_t id, uint32_t amount);
 #ifdef __cplusplus
 }
 #endif

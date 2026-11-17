@@ -26,6 +26,14 @@ from pathlib import Path
 
 SYSCALL, USLEEP, DRAIN, FLIP_FIFO, FLIP_REQ, PRESENT, HLE = 1, 2, 7, 8, 9, 10, 15
 CLOCK_SLEEP, PUT_ADVANCE, FENCE_WAIT, DRAIN_CALL, VBLANK, PRESENT_FINISH, BATCH_SUBMIT, PUBLISH = 16, 17, 18, 19, 20, 21, 22, 23
+COUNT, GPU_CMD, GPU_PASS = 24, 25, 26
+# frame_budget.h TB_FC_* ids, in order from 1.
+COUNTER_NAMES = ('queue_submit', 'alloc_memory', 'create_image', 'create_buffer', 'render_pass', 'barrier',
+                 'descriptor_set_alloc', 'descriptor_write', 'clear_image', 'copy_image_to_buffer',
+                 'copy_buffer_to_image', 'copy_image', 'blit_image', 'create_pipeline', 'draw', 'dispatch',
+                 'create_framebuffer', 'create_shader', 'sync_submit_wait', 'texture_hash_bytes',
+                 'texture_upload_texels', 'guest_color_read_bytes', 'guest_depth_read', 'sparse_hash_bytes')
+BUDGET_MS = 1000.0 / 60.0
 SYSCALL_NAMES = {43: 'thread_yield', 44: 'thread_join', 85: 'event_flag_wait', 92: 'semaphore_wait',
                  97: 'lwmutex_lock', 102: 'mutex_lock', 107: 'cond_wait', 113: 'lwcond_wait',
                  130: 'event_queue_receive', 141: 'usleep', 142: 'sleep'}
@@ -177,6 +185,63 @@ def analyze(spans, names=None, nids=None):
                 drains_per_frame=sum(1 for t in drain_starts if first <= t < last) / count)
 
 
+def counters_per_frame(spans, frames):
+    """Mean per-frame value of each cumulative TB_FT_COUNT counter."""
+    series = {}
+    for k, _, cid, total, t0, _ in spans:
+        if k == COUNT:
+            series.setdefault(cid, []).append((t0, total))
+    out = {}
+    for cid, points in series.items():
+        times = [p[0] for p in points]
+
+        def at(t):
+            i = bisect.bisect_right(times, t) - 1
+            return points[i][1] if i >= 0 else None
+        deltas = []
+        for a, b in frames:
+            x, y = at(a), at(b)
+            if y is None:
+                deltas.append(0)
+            else:
+                deltas.append((y - (x if x is not None else 0)) % (1 << 32) if x is not None else 0)
+        name = COUNTER_NAMES[cid - 1] if 0 < cid <= len(COUNTER_NAMES) else 'counter_%d' % cid
+        out[name] = sum(deltas) / len(frames)
+    return out
+
+
+def gpu_per_frame(spans, frames):
+    """GPU execution from TB_FT_GPU_CMD/PASS, attributed to the frame in which
+    the CPU collected it (one recording later; a per-frame mean, not a phase)."""
+    first, last = frames[0][0], frames[-1][1]
+    cmd = [s for s in spans if s[0] == GPU_CMD and first <= s[4] < last]
+    if not cmd:
+        return None
+    passes = {}
+    for k, _, extent, ns, t0, _ in spans:
+        if k == GPU_PASS and first <= t0 < last:
+            key = '%dx%d' % (extent >> 16, extent & 0xFFFF)
+            n, total = passes.get(key, (0, 0))
+            passes[key] = (n + 1, total + ns)
+    count = len(frames)
+    return dict(busy_ms=sum(s[3] for s in cmd) / 1e6 / count, command_buffers=len(cmd) / count,
+                passes_by_extent=sorted(((key, n / count, total / 1e6 / count) for key, (n, total) in passes.items()),
+                                        key=lambda r: -r[2]))
+
+
+def headroom(result):
+    """Busy time of each candidate critical resource per frame against 60 Hz."""
+    guests = result['guest_threads']
+    walker = result['walker_ms_per_frame']
+    parts = dict(main_guest_thread=guests[0]['running_ms'] if guests else 0.0,
+                 walker_busy=walker['drain_cpu'] + walker['present'],
+                 present_thread=result.get('present_thread_ms_per_frame') or 0.0)
+    if result.get('gpu'):
+        parts['gpu_busy'] = result['gpu']['busy_ms']
+    limiter = max(parts, key=parts.get)
+    return dict(budget_ms=BUDGET_MS, busy_ms=parts, limiter=limiter, headroom_ms=BUDGET_MS - parts[limiter])
+
+
 def render(result):
     lines = [f"{result['frames']} walker frames, {result['fps']:.2f} FPS; frame ms mean {result['frame_ms']['mean']:.2f} "
              f"p50 {result['frame_ms']['p50']:.2f} p95 {result['frame_ms']['p95']:.2f} max {result['frame_ms']['max']:.2f}",
@@ -202,6 +267,18 @@ def render(result):
         lines.append('fence waits per frame by site (count, ms):')
         for label, n, ms in result['fence_waits_by_site'][:8]:
             lines.append(f"  {label:44s} {n:6.2f} {ms:7.3f}")
+    if result.get('gpu'):
+        g = result['gpu']
+        lines.append(f"GPU busy {g['busy_ms']:.2f} ms/frame over {g['command_buffers']:.1f} command buffers; render passes by target:")
+        for key, n, ms in g['passes_by_extent'][:6]:
+            lines.append(f"  {key:>10s} {n:6.1f} passes {ms:7.3f} ms")
+    if result.get('counters'):
+        lines.append('work per frame: ' + ', '.join(f"{k} {v:.1f}" for k, v in sorted(result['counters'].items())))
+    if result.get('headroom'):
+        h = result['headroom']
+        lines.append('busy ms/frame vs %.2f budget: ' % h['budget_ms'] +
+                     '  '.join(f"{k} {v:.2f}" for k, v in h['busy_ms'].items()) +
+                     f"; limiter {h['limiter']}, headroom {h['headroom_ms']:+.2f} ms")
     lines.append('guest threads (ms/frame):')
     for g in result['guest_threads'][:8]:
         top = ', '.join(f"{label} {ms:.2f}" for label, ms in g['top_blocking_ms_per_frame'])
@@ -238,6 +315,10 @@ def report(trace, build_dir='build-vulkan', json_path=None):
     if result['fence_waits_by_site']:
         result['gpu_submissions_per_frame'] = result['async_submits_per_frame'] + serial
         result['publications_per_gpu_submission'] = result['publications_per_frame'] / max(result['gpu_submissions_per_frame'], 1e-9)
+    frames = [(a, b) for a, b in zip(flips, flips[1:]) if b > a]
+    result['counters'] = counters_per_frame(spans, frames)
+    result['gpu'] = gpu_per_frame(spans, frames)
+    result['headroom'] = headroom(result)
     result['trace_header'] = header
     if json_path:
         Path(json_path).write_text(json.dumps(result, indent=2) + '\n')

@@ -294,6 +294,17 @@ def main():
    ]:
     if text.count(before)!=1:raise SystemExit('Async batch anchor mismatch: '+before[:80])
     text=text.replace(before,after)
+   # Per-frame work counters and GPU timestamps for the frame-budget timeline
+   # (vulkan_frame_counters.inc, vulkan_gpu_frame_timing.inc).
+   overrides_dir=Path(__file__).resolve().parent.parent/'sdk_overrides'
+   for before,after in [
+    ('VK_WSI_DEVICE_FNS(VK_DECLARE)\n','VK_WSI_DEVICE_FNS(VK_DECLARE)\n#include "'+str(overrides_dir/'vulkan_frame_counters.inc')+'"\n'),
+    ('static int vk_begin(void)\n{','#include "'+str(overrides_dir/'vulkan_gpu_frame_timing.inc')+'"\nstatic int vk_begin(void)\n{'),
+    ('        tb_gpu_shutdown();\n','        tb_gpu_shutdown();\n        tb_ts_shutdown();\n'),
+    ('static int vk_submit_and_wait(void)\n{','static int vk_submit_and_wait(void)\n{\n    tb_frame_budget_count(TB_FC_SYNC_SUBMIT_WAIT, 1);'),
+   ]:
+    if text.count(before)!=1:raise SystemExit('Frame counter anchor mismatch: '+before[:60])
+    text=text.replace(before,after)
    # Clears join the open batch too when submission is asynchronous.
    if text.count('    const int batched = vk_eb_active();\n')!=2:raise SystemExit('Async clear anchor mismatch')
    text=text.replace('    const int batched = vk_eb_active();\n','    const int batched = vk_eb_active() || tb_async_record();\n')
@@ -310,7 +321,7 @@ def main():
    consumer='\n#if defined(__linux__)\n    static tb_depth_cost_totals totals[4];\n    static const char* names[]={"consumer:vertex-ring","consumer:guest-reference","consumer:shutdown","consumer:unknown"};\n    unsigned slot=reason<3?reason:3;\n    tb_depth_cost_scope consumer_scope __attribute__((cleanup(tb_depth_cost_end))) =\n        {&totals[slot],names[slot],tb_depth_cost_enabled()?tb_depth_cost_now():0,0,0};\n#endif\n'
    if text.count(anchor)!=1:raise SystemExit('Consumer scope anchor mismatch')
    text=text.replace(anchor,anchor+consumer)
-   macro='#if defined(__linux__)\n#define TB_WAIT_SITE(label,fn) ({ TB_DEPTH_COST(label,0,0); tb_wait_label=label; fn(); })\n#else\n#define TB_WAIT_SITE(label,fn) fn()\n#endif\n'
+   macro='#if defined(__linux__)\n#define TB_WAIT_SITE(label,fn) ({ TB_DEPTH_COST(label,0,0); tb_wait_label=label; fn(); })\n#else\n#define TB_WAIT_SITE(label,fn) (tb_wait_label=label, fn())\n#endif\n'
    text='#include "'+str(header)+'"\n#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n'+macro+text
   if relative=='libs/video/cellGcmSys.c':
    gpu_inc=str(Path(__file__).resolve().parent.parent/'sdk_overrides/nv3089_gpu.inc')
@@ -334,10 +345,21 @@ def main():
    text=text.replace(anchor0,anchor0+'#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/gpu_blit_engine.inc')+'"\n')
    anchor='    if(tb_depth_guest_read(location,offset,pitch,w,h))return;'
    text=text.replace(anchor,'    TB_DEPTH_COST("surface-guest-read",(uint64_t)w*h*4,g.frames);\n'+anchor)
+   # Frame-budget work counters at the texture and guest-readback entry points.
+   text='#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n'+text
+   for signature,count in [
+    (r'static u64 eng_texture_content_hash\(u32 location, u32 offset, u32 span,','TB_FC_TEXTURE_HASH_BYTES, span'),
+    (r'static u64 eng_texture_sparse_hash\(u32 location, u32 offset, u32 span,','TB_FC_SPARSE_HASH_BYTES, span'),
+    (r'static u32 eng_texture_upload\(u32 location, u32 offset, u32 fmt, u32 w, u32 h,','TB_FC_TEXTURE_UPLOAD_TEXELS, w*h'),
+    (r'void rsx_draw_engine_guest_read\(u32 location, u32 offset, u32 pitch, u32 w, u32 h\)','TB_FC_GUEST_COLOR_READ_BYTES, w*h*4'),
+    (r'static int eng_zdepth_to_guest\(u32 slot\)','TB_FC_GUEST_DEPTH_READ, 1'),
+   ]:
+    text,n=re.subn('(^'+signature+r'[^{]*\{)',lambda m:m[0]+'\n    tb_frame_budget_count('+count+');',text,count=1,flags=re.M)
+    if n!=1:raise SystemExit('Frame counter draw-engine anchor mismatch: '+signature)
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}

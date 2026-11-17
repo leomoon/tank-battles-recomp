@@ -46,6 +46,15 @@ int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666
    for field,value in [('session',dict(launcher_exit_status=86)),('session',dict(launcher_exit_status=0,interrupted=True)),('strict_passed',False),('live_gameplay_verified',False),('phase','briefing'),('interval_seconds',[1,30]),('visible_entire_interval',False),('diagnostics',dict(video=True)),('interval_seconds',[1,70])]:
     m=dict(base);m[field]=value;(p/'measurement.json').write_text(json.dumps(m))
     with self.assertRaises(ValueError):summarize(p)
+ def test_pending_review_runs_report_timing_but_are_never_eligible(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);m=self.fixture(p);m.update(live_gameplay_verified=False,scene_evidence=dict(pending_review=True))
+   (p/'measurement.json').write_text(json.dumps(m))
+   r=summarize(p);self.assertFalse(r['baseline_eligible']);self.assertIn('pending',r['scene_verification'])
+   self.assertEqual(r['cadence']['completed_frame']['fps'],60)
+   with self.assertRaises(ValueError):compare([r,r])
+   m['scene_evidence']=dict(pending_review=False);(p/'measurement.json').write_text(json.dumps(m))
+   with self.assertRaises(ValueError):summarize(p)
  def test_short_profiles_cannot_become_clean_baselines(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);m=self.fixture(p);m['interval_seconds']=[1,21]

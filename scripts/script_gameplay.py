@@ -43,7 +43,8 @@ def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=Fals
 
 
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");parser.add_argument("--label-sync",action="store_true");parser.add_argument("--vk-serial",action="store_true");parser.add_argument("--page-census",action="store_true");parser.add_argument("--cpu-resolve",action="store_true");parser.add_argument("--vblank-hz",default="60");parser.add_argument("--soak-minutes",type=float,default=0,help="Keep the session running after live gameplay, cycling rounds and sampling resources; then close normally");parser.add_argument('--manual-boundaries',action='store_true',help='Allow explicit image-hash-bound review when countdown OCR fails');a=parser.parse_args()
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds; shorter diagnostic intervals require --scopes');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--depth-gpu',action='store_true',help='Experimental depth conversion diagnostic');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");parser.add_argument("--label-sync",action="store_true");parser.add_argument("--vk-serial",action="store_true");parser.add_argument("--page-census",action="store_true");parser.add_argument("--cpu-resolve",action="store_true");parser.add_argument("--vblank-hz",default="60");parser.add_argument("--soak-minutes",type=float,default=0,help="Keep the session running after live gameplay, cycling rounds and sampling resources; then close normally");parser.add_argument('--manual-boundaries',action='store_true',help='Allow explicit image-hash-bound review when countdown OCR fails');parser.add_argument('--pending-review',action='store_true',help='Timing diagnostic only: when countdown OCR fails, continue and retain the boundary images for later human review; never baseline-eligible');a=parser.parse_args()
+ if a.pending_review and a.manual_boundaries:parser.error('--pending-review and --manual-boundaries are exclusive')
  if os.name=='nt' and (a.reference_template or a.correctness_video or a.soak_minutes):parser.error('Windows reference/video/soak adapters are not implemented yet; no fallback evidence is recorded')
  if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and (not (a.scopes or a.quick) or a.reference_template):parser.error('Shorter intervals require a native --scopes or --quick run and 10..60 seconds')
  out=resolve(a.output)
@@ -57,6 +58,7 @@ def main():
    command=[sys.executable,__file__,'--output',str(out/f'run-{index+1}'),'--scene',a.scene,'--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
    if a.manual_boundaries:command+=['--manual-boundaries']
+   if a.pending_review:command+=['--pending-review']
    if a.depth_gpu:command+=['--depth-gpu']
    if a.color_readback_cache:command+=['--color-readback-cache']
    if a.fence_poll:command+=['--fence-poll']
@@ -182,9 +184,10 @@ def main():
   press(0x4000,'continue briefing');time.sleep(7)
   before=capture('gameplay-before')
   if any(w in before for w in ['BRIEFING','RRIEFING','CONTROLS:','RULES:','SELECT MAP','MISSION FAILED','VICTORY','DEFEAT','GAME OVER','WINS','DEBRIEF']):raise RuntimeError('Still not live gameplay')
-  if a.scene=='battle' and not live_battle_timer((out/'gameplay-before-timer.txt').read_text()):raise RuntimeError('No readable live Battle countdown at start')
-  event('live-gameplay-boundary',ocr=before)
-  (out/'start.json').write_text(json.dumps(dict(live_gameplay_verified=True,source='scripted route plus retained live HUD boundary screenshot',scene=a.scene,input='scripted navigation; player one neutral during timed interval',boundary_image='gameplay-before.png')))
+  unread=a.scene=='battle' and not live_battle_timer((out/'gameplay-before-timer.txt').read_text())
+  if unread and not a.pending_review:raise RuntimeError('No readable live Battle countdown at start')
+  event('live-gameplay-boundary',ocr=before,pending_review=unread)
+  (out/'start.json').write_text(json.dumps(dict(live_gameplay_verified=not unread,pending_review=unread,source='scripted route plus retained live HUD boundary screenshot',scene=a.scene,input='scripted navigation; player one neutral during timed interval',boundary_image='gameplay-before.png')))
   while process.poll() is None:
    m=json.loads((out/'measurement.json').read_text())
    if m['interval_seconds']:break
@@ -193,7 +196,7 @@ def main():
   origin=time.monotonic()
   while time.monotonic()-origin<a.profile_seconds+9 and process.poll() is None:time.sleep(.5)
   pad.write_text('');after=capture('gameplay-after');event('end-gameplay-boundary',ocr=after)
-  if invalid_ending_scene(after) or a.scene=='battle' and not live_battle_timer((out/'gameplay-after-timer.txt').read_text()):
+  if invalid_ending_scene(after) or a.scene=='battle' and not a.pending_review and not live_battle_timer((out/'gameplay-after-timer.txt').read_text()):
    event('invalid-ending-scene',reason='gameplay did not span full requested interval');(out/'invalid-scene.json').write_text(json.dumps(dict(reason='ending scene was not live gameplay')))
   (out/'scene-evidence.json').write_text(json.dumps(dict(before=before,after=after,scripted=True,frames_outside_interval=True),indent=2)+'\n')
   if desktop:

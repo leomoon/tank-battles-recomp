@@ -34,3 +34,39 @@ Use `--quick --profile-seconds 10` only for harness diagnostics; quick runs are 
 Local Windows validation on 2026-11-17 produced a valid 60-second Battle sample at 20.0 completed GAME FPS (50.00 ms mean, 52.93 ms p95, 65.20 ms p99). Short Battle and first-campaign diagnostics passed at 20.2 and 25.5 FPS respectively. These are baseline observations, not optimization gains. Retained evidence is under `analysis/performance/windows-intel-baseline/run-2`, `windows-reviewed-probe`, and `windows-campaign-probe`. Other attempts were rejected for a review-file race, unavailable foreground, or access violations. The review race and premature window-ready publication were repaired. Two fault records identify Intel `igvk64.dll` 26.20.100.8141 at offset `0x50f18a`; this locates the failure but does not establish its cause. Three valid Battle minutes, a full campaign sample, renewed Linux validation, and investigation of the Intel crash remain open before accepting the baseline cohort.
 
 The audio fix in `2584b04` is part of the baseline. Preserve paced guest-ring consumption, bounded whole-block queueing, MMCSS and producer scheduling. User confirmation establishes that audible crackling was fixed on the Intel host; startup/menu silence statistics alone are neither underrun counts nor gameplay/soak acceptance. The outstanding Intel pending-present center-pixel fixture failure remains a separate rendering gate.
+
+## Per-frame cost breakdown
+
+`python scripts/frame_budget.py run --output analysis/performance/<new> --build-dir build-player --seconds 20` arms the timeline inside live Battle gameplay. The report covers more than walker/guest thread time:
+
+- **Busy time against the 16.67 ms budget.** Reported for the main guest thread, the walker's CPU work (drain minus fence waits, plus presents), the present thread and the GPU. The largest of these is named as the limiter. Fixed 60 Hz vblank flips quantize frame intervals to whole vblanks, so headroom shows how far the limiting resource actually is from 60 FPS. A 20 FPS frame interval says nothing about whether the work takes 34 or 49 ms.
+- **GPU execution.** Timestamps around every command buffer and render pass. They are read when the same command buffer is next begun, so no wait is added and asynchronous submission stays enabled, unlike `TB_GPU_TIMING`. Render-pass time is grouped by target extent. Command-buffer time also includes copies, clears, compute gathers and uploads outside render passes. Set `TB_FRAME_GPU_TIMESTAMPS=0` to keep only the CPU counters.
+- **Work counters per frame.** Covers submissions, synchronous submit-waits, memory/image/buffer creations, render passes, barriers, descriptor allocations and writes, clears, transfers, draws, pipeline/shader creation, texture hash and upload volume, and guest colour/depth reads. Counters are cumulative and are written at most every 0.5 ms each, so a busy counter cannot fill the trace.
+- **Fence-wait labels on Windows as well as Linux.**
+
+These are diagnostics, not clean timing.
+
+### Pending-review diagnostic runs
+
+Windows OCR does not reliably read the stylized Battle countdown on every host. `--pending-review` lets a timing diagnostic continue when the countdown is unreadable. The run keeps the boundary images and records `pending_review`, and its report says `scene_verification: pending human review` and is never baseline-eligible, so `compare_rendering_runs.py` refuses it. Use it only to iterate on implementations. Acceptance and baseline cohorts still need OCR or the reviewed `--manual-boundaries` path.
+
+### First Intel Iris Pro 580 breakdown (driver 27.20.100.8681)
+
+A 20-second pending-review Battle diagnostic of the frozen baseline source relinked with these counters (`analysis/performance/windows-intel-driver8681/budget-3`) ran at 20.15 FPS (median 49.9 ms, i.e. three vblanks).
+
+Busy time per frame:
+
+| Resource | ms per frame | Notes |
+| --- | --- | --- |
+| Walker CPU work | 22.3 | The limiter: headroom -5.6 ms. Of this, 21.5 ms is FIFO drain, plus 5.5 ms of fence waits. |
+| Main guest thread | 20.1 | Blocked 29.2 ms in `sys_semaphore_wait` |
+| GPU | 18.2 | 2560x1440 passes 6.6 ms, 2048x2048 passes 0.5 ms; the rest is transfers, clears, gathers and uploads |
+
+Work per frame:
+
+- **Depth readback round trip:** a synchronous `vk_eng_depth_readback` (3.7 ms wait), then about 4.19 M texels of texture upload. The 2048x2048 depth surface is read back and re-uploaded every frame because `TB_DEPTH_GPU` defaults off on Windows.
+- **Hashing:** 11.5 MB of sparse texture hashing.
+- **Draws:** 361 draws, 361 descriptor-set allocations and 1,443 descriptor writes.
+- **Submission:** 11.8 queue submissions and 76 barriers.
+
+Earlier attempts failed because the window lost focus, the overlay was toggled manually, or countdown OCR failed. They are retained under `rejected-*`.
