@@ -87,6 +87,20 @@ if(WIN32)
     set(tb_audio_burst_tools --tool "$<TARGET_FILE:audio_burst_fixture>")
     set(tb_audio_burst_dependency audio_burst_fixture)
 endif()
+# Windows bundles carry the release static dependency libraries/headers and the
+# vcpkg status of the tree they came from. The vcpkg toolchain (as in CI, with
+# VCPKG_MANIFEST_DIR=ci/windows-runtime) provides both; any other prepared tree
+# needs the same layout: <triplet dir>/{include,lib,share} beside vcpkg/status.
+set(tb_bundle_dependency_default "")
+if(VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
+    set(tb_bundle_dependency_default "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+endif()
+set(TB_BUNDLE_DEPENDENCIES "${tb_bundle_dependency_default}" CACHE PATH
+    "Windows: installed dependency tree packed into the runtime bundle (default: the vcpkg triplet directory)")
+if(WIN32 AND NOT EXISTS "${TB_BUNDLE_DEPENDENCIES}/../vcpkg/status")
+    message(WARNING "runtime_bundle needs TB_BUNDLE_DEPENDENCIES (a vcpkg triplet directory with ../vcpkg/status); "
+                    "configure with the vcpkg toolchain and VCPKG_MANIFEST_DIR=ci/windows-runtime as README describes.")
+endif()
 add_custom_target(runtime_bundle
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/runtime_bundle.py" pack
       --build "${CMAKE_CURRENT_BINARY_DIR}" --configuration "$<CONFIG>" --output "${CMAKE_CURRENT_BINARY_DIR}/runtime-bundle"
@@ -99,7 +113,7 @@ add_custom_target(runtime_bundle
       --tool "$<TARGET_FILE:keyboard_fixture>" --tool "$<TARGET_FILE:audio_fixture>" --tool "$<TARGET_FILE:cache_fixture>"
       --tool "$<TARGET_FILE:timeline_fixture>" --tool "$<TARGET_FILE:entitlement_fixture>"
       ${tb_audio_burst_tools}
-      $<$<BOOL:${WIN32}>:--dependencies> $<$<BOOL:${WIN32}>:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}>
+      $<$<BOOL:${WIN32}>:--dependencies> $<$<BOOL:${WIN32}>:${TB_BUNDLE_DEPENDENCIES}>
     DEPENDS tank_battles_host_archive tank_battles_boot_archive tank_battles_cpu_boot ps3recomp_runtime
       runtime_cpu_smoke vulkan_draw_groups vulkan_depth16 vulkan_nv3089
       runtime_shader_check

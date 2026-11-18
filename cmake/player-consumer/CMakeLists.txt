@@ -38,8 +38,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set_source_files_properties(${SPU_GENERATED_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
     if(MSVC)
         target_compile_options(TankBattlesRecomp PRIVATE /MP4)
-        # A link map (no runtime cost) lets scripts/sample_windows_cpu.py name sampled code.
-        target_link_options(TankBattlesRecomp PRIVATE "/lldmap:$<TARGET_FILE_DIR:TankBattlesRecomp>/TankBattlesRecomp.map")
+        # Optional link map for scripts/sample_windows_cpu.py (profiling only;
+        # it names the translated game's functions, so keep it local).
+        option(TB_LINK_MAP "Write TankBattlesRecomp.map next to the player for CPU sampling" OFF)
+        if(TB_LINK_MAP)
+            target_link_options(TankBattlesRecomp PRIVATE "/lldmap:$<TARGET_FILE_DIR:TankBattlesRecomp>/TankBattlesRecomp.map")
+        endif()
         set_source_files_properties(${RECOMP_SOURCES} PROPERTIES COMPILE_OPTIONS /w)
     endif()
 endif()

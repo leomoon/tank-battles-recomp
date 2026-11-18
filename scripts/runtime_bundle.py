@@ -115,6 +115,8 @@ def pack(args):
     # No vcpkg download/build caches, executables, debug libraries or DLLs.
     if args.dependencies:
         deps=Path(args.dependencies)
+        if not (deps/'lib').is_dir() or not (deps.parent/'vcpkg/status').is_file():
+            raise ValueError('Dependency tree must be a vcpkg triplet directory (include, lib, share) beside vcpkg/status: '+str(deps)+'; set TB_BUNDLE_DEPENDENCIES or use the vcpkg toolchain')
         copy(deps.parent/'vcpkg/status','provenance/vcpkg-status.txt')
         for folder in ('include','lib','share'):
             for path in (deps/folder).rglob('*'):
