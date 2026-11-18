@@ -1,6 +1,6 @@
 # Tank Battles Recomp
 
-A native Linux port of **Tank Battles for PS3 (NPUB30154)** using static recompilation. The game's PPU/SPU code is translated locally into C/C++ and compiled with a PS3 runtime and Vulkan renderer. Battle and Campaign are playable; Windows support is planned.
+A native Linux and Windows port of **Tank Battles for PS3 (NPUB30154)** using static recompilation. The game's PPU/SPU code is translated locally into C/C++ and compiled with a PS3 runtime and Vulkan renderer. Battle and Campaign are playable.
 
 **This repository does not contain the game, its assets, purchased licenses, private keys or generated game code. You must provide your own legitimately purchased copy.**
 
@@ -91,7 +91,91 @@ This finished folder contains game code, assets and your license material. Keep 
 
 ## Windows
 
-Planned. Build and packaging instructions will be added when Windows is supported.
+Windows 10 or 11 (x64) with a Vulkan GPU driver. Tested on an Intel Iris Pro 580 NUC, which reaches about 30 FPS; it is CPU-limited, see [performance notes](docs/OPTIMIZATION.md). Install the newest GPU driver available for your hardware.
+
+### Build dependencies
+
+- [Visual Studio Build Tools 2026](https://visualstudio.microsoft.com/downloads/) with **Desktop development with C++** and **C++ Clang Compiler for Windows** (clang-cl). CMake comes with it.
+- [Python](https://www.python.org/downloads/) 3.11 or newer, and Git.
+
+Run every command below in **Developer PowerShell for VS 2026**. If `clang-cl --version` is not found there, add the bundled LLVM tools for the session:
+
+```powershell
+$env:PATH = "$env:VCINSTALLDIR\Tools\Llvm\x64\bin;$env:PATH"
+```
+
+Then:
+
+```powershell
+git clone https://github.com/leomoon/tank-battles-recomp.git
+cd tank-battles-recomp
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r external/ps3recomp/requirements.txt
+```
+
+### Runtime bundle
+
+The player links a prebuilt, game-free *runtime bundle*: the PS3 runtime, Vulkan renderer and host services. It must come from the same commit as your checkout. Either:
+
+- **Download it** from the repository's **Game-free Windows Vulkan runtime** GitHub Actions run for your commit, and extract it to a folder such as `build-runtime\runtime-bundle`. Your clang-cl version must then match the one that built it (currently Clang 22.1.3); setup refuses a mismatch.
+- **Or build it** with the same pinned [vcpkg](https://github.com/microsoft/vcpkg) dependencies as CI:
+
+  ```powershell
+  git clone https://github.com/microsoft/vcpkg C:\vcpkg
+  git -C C:\vcpkg checkout 0df93a05b9de080129e653ec4776d7e14a1b2e4f
+  C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+  cmake -S . -B build-runtime -A x64 -T ClangCL -DTB_BUILD_RUNTIME_BUNDLE=ON -DPS3RECOMP_RSX_VULKAN=ON `
+    -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+    -DVCPKG_MANIFEST_DIR=ci/windows-runtime -DVCPKG_TARGET_TRIPLET=x64-windows-static
+  cmake --build build-runtime --config Release --parallel 4
+  cmake --build build-runtime --config Release --target runtime_bundle
+  ```
+
+  The bundle is written to `build-runtime\runtime-bundle`. Delete that folder before packing again.
+
+Details: [Runtime bundle reference](docs/RUNTIME_BUNDLE.md).
+
+### Build and run
+
+Add your files as shown in [What you need](#what-you-need), then:
+
+```powershell
+python scripts/port.py setup --runtime-bundle build-runtime\runtime-bundle --jobs 4
+python scripts/port.py run
+```
+
+Setup extracts the package, decrypts the executable, prepares the unlock, translates the game and compiles it locally against the bundle. The result is `build-player\Release\TankBattlesRecomp.exe`. The full compile takes about 10 minutes on a 4-core CPU; lower `--jobs` if it uses too much memory. The first launch creates asset caches and takes longer. `setup --check` reports missing files without building.
+
+Controls and saved preferences are the same as on Linux. Session logs go to `%LOCALAPPDATA%\tank-battles-recomp\logs\`; `run --console` prints to the terminal. Saves are under `game\dev_hdd0\home\00000001\savedata\`.
+
+To play without Python, put this in a `.bat` file in the repository folder:
+
+```bat
+@echo off
+cd /d "%~dp0"
+build-player\Release\TankBattlesRecomp.exe "game\dev_hdd0\game\NPUB30154\USRDIR\EBOOT.elf"
+```
+
+The build folder and `game\` contain game code, assets and your license material. Keep them private.
+
+### Optional: a faster, profile-guided build
+
+Profile-guided optimization lowers the main thread's CPU time by about 10% on the tested NUC. It compiles an instrumented player, records one Battle round with it and recompiles. The profile comes from your game, so it stays local:
+
+```powershell
+python scripts/port.py configure --build-dir build-pgo-gen --runtime-bundle build-runtime\runtime-bundle -- -DTB_TITLE_PGO=generate
+cmake --build build-pgo-gen --config Release --target TankBattlesRecomp
+New-Item -ItemType Directory -Force analysis\pgo | Out-Null
+$env:LLVM_PROFILE_FILE = "$PWD\analysis\pgo\battle-%p.profraw"
+python scripts/port.py run --build-dir build-pgo-gen   # play a Battle round for a minute, then close the window
+Remove-Item Env:LLVM_PROFILE_FILE
+llvm-profdata merge -o analysis\pgo\battle.profdata analysis\pgo\battle-*.profraw
+python scripts/port.py configure --build-dir build-player --runtime-bundle build-runtime\runtime-bundle -- "-DTB_TITLE_PGO=$PWD\analysis\pgo\battle.profdata"
+cmake --build build-player --config Release --target TankBattlesRecomp
+```
+
+The instrumented build runs noticeably slower; only the final build is for playing. Repeat the profile after the translated game sources change.
 
 ## Built with
 
