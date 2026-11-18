@@ -63,6 +63,12 @@ def main():
         count += n
     if not count:
         raise SystemExit('The recorded link command does not reference ' + str(configured))
+    # MSBuild's command logs store paths upper-cased; replaying /OUT verbatim
+    # would rename the executable to TANKBATTLESRECOMP.EXE. Use the real path.
+    exe = build / args.configuration / 'TankBattlesRecomp.exe'
+    command, n = re.subn(r'/OUT:("[^"]*"|\S+)', lambda _: '/OUT:"' + str(exe) + '"', command, count=1, flags=re.IGNORECASE)
+    if n != 1:
+        raise SystemExit('The recorded link command has no /OUT')
     sys.path.insert(0, str(ROOT / 'external/ps3recomp/tools'))
     from msvc_env import environ, find_vcvars
     linker = Path(find_vcvars()).parents[2] / 'Tools/Llvm/x64/bin/lld-link.exe'
@@ -70,7 +76,6 @@ def main():
     subprocess.run('"' + str(linker) + '" ' + command, cwd=build, env=environ(), check=True)
     if any(p.stat().st_mtime_ns != stamp for p, stamp in objects.items()):
         raise SystemExit('Title objects changed during the relink')
-    exe = build / args.configuration / 'TankBattlesRecomp.exe'
     record = dict(bundle=str(bundle), source_commit=new_manifest['source_commit'],
                   manifest_sha256=hashlib.sha256((bundle / 'manifest.json').read_bytes()).hexdigest(),
                   executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(), reused_objects=len(objects))
