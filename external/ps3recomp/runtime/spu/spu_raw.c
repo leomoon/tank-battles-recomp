@@ -105,6 +105,46 @@ static int dbg(void)
     return v;
 }
 
+#ifdef __linux__
+/* Opt-in Tank Battles diagnostic. The caller checks the inbound free-slot
+ * byte, then sleeps for 10 us between reads if it found no free slot. Count
+ * the actual result returned to the caller. Publish buckets on the next
+ * read, with no extra synchronization on the mailbox. */
+static void raw_spu_profile_mbox(raw_spu* s, uint32_t status)
+{
+    static PPU_THREAD_LOCAL int enabled = -1;
+    static PPU_THREAD_LOCAL struct {
+        unsigned long long bucket;
+        unsigned immediate, full, recovered;
+        int waiting;
+    } stats[SPU_RAW_COUNT];
+    if (enabled < 0) enabled = getenv("SPU_RAW_MBOX_PROFILE") != NULL;
+    if (!enabled || !g_active_ctx || g_active_ctx->lr != 0x001EE7BC) return;
+
+    const unsigned index = (unsigned)(s - s_spu);
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return;
+    const unsigned long long bucket = (unsigned long long)now.tv_sec * 10 + now.tv_nsec / 100000000L;
+    if (stats[index].bucket != bucket) {
+        if (stats[index].bucket)
+            fprintf(stderr, "[mbox-profile] bucket=%llu guest_tid=%u spu=%u immediate=%u full=%u recovered=%u\n",
+                    stats[index].bucket, (unsigned)g_active_ctx->thread_id, index,
+                    stats[index].immediate, stats[index].full, stats[index].recovered);
+        stats[index].bucket = bucket;
+        stats[index].immediate = stats[index].full = stats[index].recovered = 0;
+    }
+    if (!(status & 0xff00u)) {
+        ++stats[index].full;
+        stats[index].waiting = 1;
+    } else if (stats[index].waiting) {
+        ++stats[index].recovered;
+        stats[index].waiting = 0;
+    } else {
+        ++stats[index].immediate;
+    }
+}
+#endif
+
 /* ---------------------------------------------------------------------------
  * Register access.
  *
@@ -623,6 +663,9 @@ int spu_raw_reg_load(uint32_t ea, uint32_t* out)
         *out = MBOX_STATUS(s->ctx->ch_out_mbox.count,
                            SPU_IN_MBOX_FREE(s->ctx->ch_in_mbox.count),
                            s->ctx->ch_out_intr_mbox.count);
+#ifdef __linux__
+        raw_spu_profile_mbox(s, *out);
+#endif
         return 1;
     }
     if (off == SPU_RAW_STATUS) { *out = s->ctx->status; return 1; }

@@ -45,7 +45,11 @@ def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=Fals
 def main():
  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,help='Gameplay interval in seconds (default 60, or 25 for host resources)');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--cpu-depth',action='store_true',help='Reference CPU depth conversion (TB_DEPTH_GPU=0); GPU conversion is the default');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");parser.add_argument("--label-sync",action="store_true");parser.add_argument("--vk-serial",action="store_true");parser.add_argument("--page-census",action="store_true");parser.add_argument("--cpu-resolve",action="store_true");parser.add_argument("--vblank-hz",default="60");parser.add_argument("--soak-minutes",type=float,default=0,help="Keep the session running after live gameplay, cycling rounds and sampling resources; then close normally");parser.add_argument('--manual-boundaries',action='store_true',help='Allow explicit image-hash-bound review when countdown OCR fails');parser.add_argument('--cpu-samples',action='store_true',help='Windows diagnostic thread sampling during the interval');parser.add_argument('--pending-review',action='store_true',help='Timing diagnostic only: when countdown OCR fails, continue and retain the boundary images for later human review; never baseline-eligible')
  parser.add_argument('--host-resources',action='store_true',help='Sample Linux CPU and sensors across Battle and its menus')
+ parser.add_argument('--mailbox-profile',action='store_true',help='Record Linux raw SPU mailbox status counters by scene')
+ parser.add_argument('--linux-symbols',action='store_true',help='Diagnostic user-space CPU samples across the Linux resource route')
  a=parser.parse_args()
+ if (a.linux_symbols or a.mailbox_profile) and (not a.host_resources or a.reference_template):
+  parser.error('CPU attribution requires the native --host-resources route')
  if a.host_resources and (sys.platform!='linux' or a.scene!='battle' or a.vblank_hz!='60' or
     any((a.scopes,a.correctness_video,a.decode_profile,a.cpu_samples,a.frame_budget,a.page_census,a.soak_minutes,
          a.pending_review,a.manual_boundaries))):
@@ -87,6 +91,8 @@ def main():
    if a.frame_budget:command+=['--frame-budget']
    command+=['--profile-seconds',str(a.profile_seconds)]
    if a.host_resources:command+=['--host-resources']
+   if a.linux_symbols:command+=['--linux-symbols']
+   if a.mailbox_profile:command+=['--mailbox-profile']
    if a.overlay:command+=['--overlay']
    result=subprocess.run(command);outcomes.append(result.returncode);(out/'outcomes.json').write_text(json.dumps(outcomes))
   raise SystemExit(0 if not any(outcomes) else 1)
@@ -117,11 +123,12 @@ def main():
   if a.frame_budget:cmd+=['--frame-budget']
   cmd+=['--profile-seconds',str(a.profile_seconds)]
   if a.overlay:cmd+=['--overlay']
+  if a.mailbox_profile:cmd+=['--mailbox-profile']
  desktop=None
  if os.name=='nt':
   from windows_gameplay import WindowsDesktop
   desktop=WindowsDesktop()
- process=subprocess.Popen(cmd);start=time.monotonic();events=[];window=None;video=None;video_log=None;resources=None;capture_ns=None
+ process=subprocess.Popen(cmd);start=time.monotonic();events=[];window=None;video=None;video_log=None;resources=None;capture_ns=None;cpu_sampler=None
  def event(label,**fields):
   if not out.is_dir():return
   stamp=time.monotonic_ns()
@@ -164,6 +171,11 @@ def main():
    text+='\n'+subprocess.run(['tesseract',str(crop),'stdout','--psm','7'],capture_output=True,text=True).stdout.upper()
   if a.host_resources and label not in ('navigation','round-watch'):
    check_overlay(path)
+  if a.host_resources and label.startswith('level-select-'):
+   heading=subprocess.check_output(['magick',str(path),'-resize','1280x720!','-crop',
+       '180x26+250+100','+repage','-resize','400%','-colorspace','gray','-negate','-threshold','40%','png:-'])
+   text+='\n'+subprocess.run(['tesseract','stdin','stdout','--psm','7'],
+       input=heading,capture_output=True,check=True).stdout.decode().upper()
   timer=out/(label+'-timer.png')
   subprocess.run(['magick',str(path),'-resize','1280x720!','-crop','60x34+610+72','+repage','-fx','(r>0.65 && g>0.35 && b<0.4)?0:1','-resize','400%',str(timer)],check=True,capture_output=True)
   timer_text=subprocess.run(['tesseract',str(timer),'stdout','--psm','7','-c','tessedit_char_whitelist=0123456789'],capture_output=True,text=True).stdout
@@ -231,6 +243,15 @@ def main():
    from measure_host_resources import ResourceRecorder
    pid=int(subprocess.check_output(['xdotool','getwindowpid',window],text=True))
    resources=ResourceRecorder(out,pid)
+   if a.linux_symbols:
+    from diagnostic_logs import open_log
+
+    sampler=out/'cpu-sampler'
+    subprocess.run(['cc','-O2',str(ROOT/'scripts/sample_gameplay_cpu.c'),'-o',str(sampler)],check=True)
+    (out/'cpu-sample-maps.txt').write_text(Path('/proc',str(pid),'maps').read_text())
+    with open_log(out/'cpu-samples.csv','w') as samples, open_log(out/'cpu-samples.log','w') as sampler_log:
+     cpu_sampler=subprocess.Popen([str(sampler),str(pid),'480'],stdout=samples,stderr=sampler_log)
+
   if a.correctness_video:
    video_log=(out/'video.log').open('w')
    video=subprocess.Popen(['ffmpeg','-nostdin','-hide_banner','-loglevel','warning','-f','x11grab','-framerate','60','-draw_mouse','0','-window_id',window,'-i',__import__('os').environ['DISPLAY'],'-an','-c:v','libx264','-preset','ultrafast','-crf','18','-threads','2','-fps_mode','passthrough',str(out/'window.mkv')],stdout=video_log,stderr=subprocess.STDOUT)
@@ -344,6 +365,9 @@ def main():
   raise
  finally:
   pad.write_text('')
+  if cpu_sampler and cpu_sampler.poll() is None:
+   cpu_sampler.terminate()
+   cpu_sampler.wait(timeout=5)
   if resources:resources.close()
   if video is not None:
    import signal
@@ -352,7 +376,10 @@ def main():
    video_log.close()
  if a.host_resources and (process.returncode==0 or (out/'invalid-scene.json').exists()):
   from host_resource_report import summarize_run
+  if a.linux_symbols and (out/'cpu-samples.csv').stat().st_size==0:
+   raise RuntimeError('Linux sampler produced no samples. See cpu-samples.log.')
   result=summarize_run(out, reference=bool(a.reference_template))
+  result['cpu_diagnostics']=dict(linux_symbols=a.linux_symbols,mailbox_profile=a.mailbox_profile)
   (out/'host-resource-report.json').write_text(json.dumps(result,indent=2)+'\n')
  raise SystemExit(process.returncode)
 

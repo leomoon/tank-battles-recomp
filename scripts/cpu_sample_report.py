@@ -4,9 +4,15 @@ import argparse,bisect,collections,json,subprocess
 from pathlib import Path
 
 
-def report(directory):
- directory=Path(directory);m=json.loads((directory/'measurement.json').read_text());b,e=m['interval_seconds']
- timing=json.loads((directory/'gameplay.jsonl').read_text().splitlines()[0]);origin=timing['monotonic_ns']-timing['elapsed_ns'];begin,end=origin+round(b*1e9),origin+round(e*1e9)
+def report(directory, interval=None, limit=40, player_symbols=None):
+ directory=Path(directory)
+ if interval is None:
+  m=json.loads((directory/'measurement.json').read_text());b,e=m['interval_seconds']
+  with (directory/'gameplay.jsonl').open() as stream:
+   timing=json.loads(stream.readline())
+  origin=timing['monotonic_ns']-timing['elapsed_ns']
+  interval=origin+round(b*1e9),origin+round(e*1e9)
+ begin,end=interval
  maps=[]
  for line in (directory/'cpu-sample-maps.txt').read_text().splitlines():
   fields=line.split(maxsplit=5)
@@ -19,10 +25,11 @@ def report(directory):
    if path not in cache:
     symbols=[];dynamic=True
     try:
-     with open(path,'rb') as f:header=f.read(18)
+     symbol_file=player_symbols if player_symbols and Path(path).name=='TankBattlesRecomp' else path
+     with open(symbol_file,'rb') as f:header=f.read(18)
      dynamic=int.from_bytes(header[16:18],'little' if header[5]==1 else 'big')==3
-     result=subprocess.run(['nm','-S','-n','-C','--defined-only',path],capture_output=True,text=True)
-     if result.returncode or not result.stdout:result=subprocess.run(['nm','-D','-S','-n','-C','--defined-only',path],capture_output=True,text=True)
+     result=subprocess.run(['nm','-S','-n','-C','--defined-only',symbol_file],capture_output=True,text=True)
+     if result.returncode or not result.stdout:result=subprocess.run(['nm','-D','-S','-n','-C','--defined-only',symbol_file],capture_output=True,text=True)
      for row in result.stdout.splitlines():
       values=row.split(maxsplit=3)
       if len(values)==4 and values[2] in ('t','T','w','W'):
@@ -39,7 +46,7 @@ def report(directory):
   stamp,tid,ip=line.split(',')
   if not begin<=int(stamp)<end:continue
   module,symbol=resolve(int(ip,16));counts[(int(tid),module,symbol)]+=1;threads[int(tid)]+=1;unmapped+=module=='[unmapped]'
- result=dict(samples=sum(counts.values()),thread_samples=dict(threads),unmapped=unmapped,hotspots=[dict(tid=t,module=mod,symbol=s,count=n) for (t,mod,s),n in counts.most_common(40)],scope='99 Hz user CPU samples, not wall-time or GPU utilization. Blocking waits/kernel time are excluded. A busy polling SPU core is not automatically the critical rendering path. Stripped/private library symbols remain unresolved.')
+ result=dict(samples=sum(counts.values()),thread_samples=dict(threads),unmapped=unmapped,hotspots=[dict(tid=t,module=mod,symbol=s,count=n) for (t,mod,s),n in counts.most_common(limit)],scope='99 Hz user CPU samples, not wall-time or GPU utilization. Blocking waits/kernel time are excluded. A busy polling SPU core is not automatically the critical rendering path. Stripped/private library symbols remain unresolved.')
  return result
 
 if __name__=='__main__':
