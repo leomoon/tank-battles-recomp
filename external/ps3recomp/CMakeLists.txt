@@ -507,6 +507,18 @@ if(PS3RECOMP_BUILD_TESTS)
     add_test(NAME vmx_fmaf COMMAND test_vmx_fmaf)
     set_tests_properties(vmx_fmaf PROPERTIES TIMEOUT 120)
 
+    add_executable(test_vmx_fmaf_scalar tests/test_vmx_fmaf.c)
+    target_compile_definitions(test_vmx_fmaf_scalar PRIVATE VMX_SCALAR_FMA)
+    target_compile_options(test_vmx_fmaf_scalar PRIVATE -UNDEBUG)
+    if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        target_compile_options(test_vmx_fmaf_scalar PRIVATE -mno-fma)
+    endif()
+    if(NOT WIN32)
+        target_link_libraries(test_vmx_fmaf_scalar PRIVATE m)
+    endif()
+    add_test(NAME vmx_fmaf_scalar COMMAND test_vmx_fmaf_scalar)
+    set_tests_properties(vmx_fmaf_scalar PROPERTIES TIMEOUT 120)
+
     # Current colors are explicit shader inputs even when they equal the
     # hardware default; exercise both compact fetch entry points without a GPU.
     add_executable(test_vertex_current_color

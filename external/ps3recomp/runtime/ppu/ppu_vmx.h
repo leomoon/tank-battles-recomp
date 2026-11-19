@@ -19,6 +19,11 @@
 #include <string.h>
 #include <math.h>
 
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__x86_64__) && !defined(VMX_SCALAR_FMA)
+#include <immintrin.h>
+#define VMX_HOST_FMA 1
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -296,7 +301,46 @@ VMX_INL float vmx_fmaf(float x, float z, float y) {
     return fmaf(x, z, y);
 #endif
 }
-VMX_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) { VMX_ARGS_PREP; const uint8_t* c = (const uint8_t*)c_;
+#ifdef VMX_HOST_FMA
+/* A target-specific call keeps the rest of the player at its baseline ISA.
+ * Shuffle bytes within each word, retaining the guest's lane order. */
+__attribute__((target("avx,fma,ssse3")))
+static void vmx_vmaddfp_host(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
+    const __m128i order = _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+    const __m128i exponent = _mm_set1_epi32(0x7F800000);
+    const __m128i magnitude = _mm_set1_epi32(0x7FFFFFFF);
+    const __m128i sign = _mm_set1_epi32((int32_t)0x80000000u);
+    __m128i x = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)a_), order);
+    __m128i y = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)b_), order);
+    __m128i z = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)c_), order);
+    if (vscr & VMX_NJ) {
+        const __m128i zero = _mm_setzero_si128();
+        x = _mm_andnot_si128(_mm_and_si128(_mm_cmpeq_epi32(_mm_and_si128(x, exponent), zero), magnitude), x);
+        y = _mm_andnot_si128(_mm_and_si128(_mm_cmpeq_epi32(_mm_and_si128(y, exponent), zero), magnitude), y);
+        z = _mm_andnot_si128(_mm_and_si128(_mm_cmpeq_epi32(_mm_and_si128(z, exponent), zero), magnitude), z);
+    }
+    __m128i result = _mm_castps_si128(_mm_fmadd_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(z), _mm_castsi128_ps(y)));
+    const __m128i nan = _mm_cmpgt_epi32(_mm_and_si128(result, magnitude), exponent);
+    result = _mm_or_si128(_mm_and_si128(nan, _mm_set1_epi32(0x7FC00000)), _mm_andnot_si128(nan, result));
+    if (vscr & VMX_NJ) {
+        const __m128i tiny = _mm_cmpeq_epi32(_mm_and_si128(result, exponent), _mm_setzero_si128());
+        result = _mm_or_si128(_mm_and_si128(tiny, _mm_and_si128(result, sign)), _mm_andnot_si128(tiny, result));
+    }
+    _mm_storeu_si128((__m128i*)d_, _mm_shuffle_epi8(result, order));
+}
+#endif
+
+VMX_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
+#ifdef VMX_HOST_FMA
+    /* Guest flush behavior is explicit. Host DAZ/FTZ or directed rounding
+     * must use the existing scalar implementation. */
+    if (__builtin_cpu_supports("fma") && __builtin_cpu_supports("ssse3") &&
+        (_mm_getcsr() & 0xE040u) == 0) {
+        vmx_vmaddfp_host(d_, a_, b_, c_, vscr);
+        return;
+    }
+#endif
+    VMX_ARGS_PREP; const uint8_t* c = (const uint8_t*)c_;
     for (int i = 0; i < 4; i++) {
         float x = vmx_f(vmx_flush(vmx_w(a, i), vscr)), y = vmx_f(vmx_flush(vmx_w(b, i), vscr)),
               z = vmx_f(vmx_flush(vmx_w(c, i), vscr));

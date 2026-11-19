@@ -20,8 +20,59 @@ static float f(uint32_t u) { float x; memcpy(&x, &u, 4); return x; }
 static uint32_t U(float x) { uint32_t u; memcpy(&u, &x, 4); return u; }
 static void put(uint8_t* v, int i, float x) { vmx_sw(v, i, U(x)); }
 
+static uint32_t reference_flush(uint32_t value, uint32_t vscr) {
+    if ((vscr & VMX_NJ) && (value & 0x7F800000u) == 0)
+        return value & 0x80000000u;
+    return value;
+}
+
+static int check_vectors(void) {
+    const uint32_t edges[] = {0, 0x80000000, 1, 0x80000001, 0x007FFFFF,
+        0x00800000, 0x80800000, 0x3F800000, 0xBF800000, 0x3F800001,
+        0x3F7FFFFE, 0x7F7FFFFF, 0x7F800000, 0xFF800000, 0x7FC12345,
+        0x7F812345, 0xFFC54321};
+    for (unsigned sample = 0; sample < 100000; ++sample) {
+        uint8_t inputs[3][16];
+        for (unsigned source = 0; source < 3; ++source)
+            for (unsigned lane = 0; lane < 4; ++lane) {
+                unsigned value = rnd();
+                if (sample < 4913) {
+                    unsigned divisor = source == 0 ? 1 : source == 1 ? 17 : 289;
+                    value = edges[(sample / divisor + lane) % 17];
+                }
+                vmx_sw(inputs[source], lane, value);
+            }
+        for (unsigned flush = 0; flush < 2; ++flush) {
+            uint32_t vscr = flush ? VMX_NJ : 0;
+            uint8_t expected[16];
+            for (unsigned lane = 0; lane < 4; ++lane) {
+                float a = f(reference_flush(vmx_w(inputs[0], lane), vscr));
+                float b = f(reference_flush(vmx_w(inputs[1], lane), vscr));
+                float c = f(reference_flush(vmx_w(inputs[2], lane), vscr));
+                uint32_t result = U(fmaf(a, c, b));
+                if ((result & 0x7FFFFFFFu) > 0x7F800000u) result = 0x7FC00000u;
+                vmx_sw(expected, lane, reference_flush(result, vscr));
+            }
+            for (unsigned alias = 0; alias < 4; ++alias) {
+                uint8_t storage[4][17];
+                for (unsigned source = 0; source < 3; ++source)
+                    memcpy(storage[source] + 1, inputs[source], 16);
+                uint8_t* dest = storage[alias] + 1;
+                vmx_vmaddfp(dest, storage[0] + 1, storage[1] + 1, storage[2] + 1, vscr);
+                if (memcmp(dest, expected, 16)) {
+                    printf("vmaddfp mismatch sample=%u flush=%u alias=%u\n", sample, flush, alias);
+                    return 1;
+                }
+            }
+        }
+    }
+    puts("vmaddfp edge/random vectors, both VSCR modes, unaligned aliases: passed");
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
+    if (check_vectors()) return 1;
     const long count = argc > 1 ? atol(argv[1]) : 20000000L;
     unsigned long long n = 0, bad = 0, lane_bad = 0;
     for (long i = 0; i < count; i++) {
