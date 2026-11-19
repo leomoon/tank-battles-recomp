@@ -48,6 +48,7 @@ void tank_battles_register_text_conversion() {}
 void tank_battles_register_asset_overrides() {}
 void tank_battles_register_entitlement_overrides() {}
 void tank_battles_register_offline_network() {}
+void tank_battles_trace_socket(uint32_t, uint32_t, uint32_t) {}
 static uint64_t generic(uint64_t a,uint64_t b,uint64_t c,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t) { return a*100+b*10+c; }
 static void clobber(ppu_context* c) { c->gpr[2]=0;vm_write64(c->gpr[1]+40,0);c->gpr[3]=0x54424f4b; }
 static int fast(ppu_context* c) {c->gpr[3]=0xBAD;return 1;}
