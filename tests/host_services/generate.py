@@ -8,13 +8,17 @@ root=Path(__file__).resolve().parents[2]
 out=Path(sys.argv[1]);out.mkdir(parents=True,exist_ok=True)
 sdk=root/'external/ps3recomp'
 sys.path.insert(0,str(sdk/'tools'))
-from ppu_lifter import PPULifter
+from ppu_lifter import PPULifter, HEADER_PREAMBLE
 (out/'ppu_recomp.h').write_text(PPULifter().emit_header())
 subprocess.run([sys.executable,str(root/'scripts/instrument_sdk.py'),'--sdk',str(sdk),'--output',str(out/'overlay')],check=True)
 
 def literal(path, token):
     tree=ast.parse(path.read_text())
     return next(node.value for node in ast.walk(tree) if isinstance(node,ast.Constant) and isinstance(node.value,str) and token in node.value)
+
+load32=sdk/'tools/test_ppu_load32.py'
+helpers=HEADER_PREAMBLE[HEADER_PREAMBLE.index('typedef struct ppu_mm'):HEADER_PREAMBLE.index('static inline uint64_t vm_read64_mm')]
+(out/'load32.cpp').write_text(literal(load32,'#include <assert.h>')+helpers+literal(load32,'static void fallback'))
 
 # Reuse the existing semantic fixtures, adapting only their host allocation,
 # sleep and test-thread scaffolding. Production source copies are unchanged.
@@ -28,6 +32,8 @@ def portable(source):
     source=source.replace('pthread_t guest;assert(!pthread_create(&guest,NULL,poll_guest,NULL));','SDL_Thread* guest=SDL_CreateThread(poll_guest,"fixture poll",NULL);assert(guest);')
     source=source.replace('static void* poll_guest(void* unused)','static int poll_guest(void* unused)').replace('    return NULL;','    return 0;').replace('pthread_join(guest,NULL)','SDL_WaitThread(guest,NULL)')
     return '#include "'+(root/'host_services.h').as_posix()+'"\n'+source
+
+(out/'remap.c').write_text(portable(literal(root/'scripts/test_index_remap.py','static void compare_oracle')))
 
 (out/'cellPad_under_test.c').write_text((out/'overlay/libs/input/cellPad.c').read_text())
 for name in ('positions','hotplug'):
