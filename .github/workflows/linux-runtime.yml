@@ -1,0 +1,45 @@
+name: Game-free Linux Vulkan runtime
+on:
+  workflow_dispatch:
+  push:
+    tags: ['*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools libcurl4-openssl-dev
+          python -m pip install -r external/ps3recomp/requirements.txt
+      - name: Configure production runtime with synthetic inputs
+        run: >-
+          cmake -S . -B build-runtime -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DTB_BUILD_RUNTIME_BUNDLE=ON -DPS3RECOMP_RSX_VULKAN=ON
+      - name: Compile runtime and fixtures
+        run: cmake --build build-runtime --parallel 4
+      - name: Run CPU and host contracts
+        run: ctest --test-dir build-runtime --output-on-failure
+      - name: Check game-free RPCN protocol
+        run: |
+          python scripts/test_rpcn_client.py --runner build-runtime/runtime_cpu_smoke
+          python scripts/test_patch_network_events.py
+      - name: Package and audit runtime
+        run: |
+          cmake --build build-runtime --target runtime_bundle
+          python scripts/runtime_bundle.py verify build-runtime/runtime-bundle --source '${{ github.sha }}'
+          tar -czf linux-runtime.tar.gz -C build-runtime runtime-bundle
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: linux-runtime-${{ github.sha }}
+          path: linux-runtime.tar.gz
+          if-no-files-found: error
+          retention-days: 14
