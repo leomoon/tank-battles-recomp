@@ -460,12 +460,31 @@ int rsx_vertex_remap_build(
         }
     }
 
+    /* Most indexed draws use one base and a compact range of vertex IDs.
+     * That range can address the existing generation table directly, avoiding
+     * hashing and probing while preserving first-use order. */
+    u32 first_id = refs[0].vertex_id, last_id = first_id;
+    const u32 base_index = refs[0].base_index;
+    int direct = 1;
+    for (u32 i = 1; i < count; i++) {
+        if (refs[i].base_index != base_index) {
+            direct = 0;
+            break;
+        }
+        if (refs[i].vertex_id < first_id) first_id = refs[i].vertex_id;
+        if (refs[i].vertex_id > last_id) last_id = refs[i].vertex_id;
+        if (last_id - first_id >= remap->slot_capacity) {
+            direct = 0;
+            break;
+        }
+    }
     u32 unique = 0;
     const u32 mask = remap->slot_capacity - 1u;
     for (u32 occurrence = 0; occurrence < count; occurrence++) {
         const rsx_vertex_ref ref = refs[occurrence];
         const u64 key = ((u64)ref.base_index << 32) | ref.vertex_id;
-        u32 slot_index = (u32)rsx_vertex_remap_hash(key) & mask;
+        u32 slot_index = direct ? ref.vertex_id - first_id
+                               : (u32)rsx_vertex_remap_hash(key) & mask;
         for (;;) {
             rsx_vertex_remap_slot* slot = &remap->slots[slot_index];
             if (slot->generation != remap->generation) {

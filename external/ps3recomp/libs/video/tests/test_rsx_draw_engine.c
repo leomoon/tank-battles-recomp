@@ -1165,6 +1165,16 @@ static void test_indexed_draws(void)
           "a triangle list of distinct vertices is not indexed (%u verts, %u indices)",
           stub.draw_vertices, stub.draw_indices);
 
+    u8 saved_position[4];
+    memcpy(saved_position, vm_base + VTX_OFFSET, sizeof saved_position);
+    const u8 updated_position[4] = {0x40, 0, 0, 0}; /* big-endian 2.0f */
+    memcpy(vm_base + VTX_OFFSET, updated_position, sizeof updated_position);
+    draw_triangle();
+    CHECK(stub.draw_first_vertex[0] == 2.0f,
+          "repeated references fetch rewritten guest vertex bytes (%g)",
+          stub.draw_first_vertex[0]);
+    memcpy(vm_base + VTX_OFFSET, saved_position, sizeof saved_position);
+
     /* A strip is expanded into a triangle list through an INDEX buffer: six
      * vertices become twelve indices over six uploaded vertices, rather than
      * twelve duplicated ones. */

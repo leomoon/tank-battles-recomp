@@ -47,13 +47,16 @@ def main():
  parser.add_argument('--host-resources',action='store_true',help='Sample Linux CPU and sensors across Battle and its menus')
  parser.add_argument('--mailbox-profile',action='store_true',help='Record Linux raw SPU mailbox status counters by scene')
  parser.add_argument('--linux-symbols',action='store_true',help='Diagnostic user-space CPU samples across the Linux resource route')
+ parser.add_argument('--vertex-profile',action='store_true',help='Diagnostic vertex preparation costs across the native Linux resource route')
  a=parser.parse_args()
- if (a.linux_symbols or a.mailbox_profile) and (not a.host_resources or a.reference_template):
+ if (a.linux_symbols or a.mailbox_profile or a.vertex_profile) and (not a.host_resources or a.reference_template):
   parser.error('CPU attribution requires the native --host-resources route')
+ if a.host_resources and a.reference_template and a.correctness_video:
+  parser.error('Resource-route video capture requires the native player')
  if a.host_resources and (sys.platform!='linux' or a.scene!='battle' or a.vblank_hz!='60' or
-    any((a.scopes,a.correctness_video,a.decode_profile,a.cpu_samples,a.frame_budget,a.page_census,a.soak_minutes,
+    any((a.scopes,a.decode_profile,a.cpu_samples,a.frame_budget,a.page_census,a.soak_minutes,
          a.pending_review,a.manual_boundaries))):
-  parser.error('--host-resources requires Linux Battle at 60 Hz with no other diagnostic capture')
+  parser.error('--host-resources requires Linux Battle at 60 Hz and compatible diagnostic options')
  if a.profile_seconds is None:
   a.profile_seconds=25 if a.host_resources else 60
  if a.host_resources and not a.reference_template:
@@ -93,6 +96,7 @@ def main():
    if a.host_resources:command+=['--host-resources']
    if a.linux_symbols:command+=['--linux-symbols']
    if a.mailbox_profile:command+=['--mailbox-profile']
+   if a.vertex_profile:command+=['--vertex-profile']
    if a.overlay:command+=['--overlay']
    result=subprocess.run(command);outcomes.append(result.returncode);(out/'outcomes.json').write_text(json.dumps(outcomes))
   raise SystemExit(0 if not any(outcomes) else 1)
@@ -124,6 +128,7 @@ def main():
   cmd+=['--profile-seconds',str(a.profile_seconds)]
   if a.overlay:cmd+=['--overlay']
   if a.mailbox_profile:cmd+=['--mailbox-profile']
+  if a.vertex_profile:cmd+=['--vertex-profile']
  desktop=None
  if os.name=='nt':
   from windows_gameplay import WindowsDesktop
@@ -132,7 +137,26 @@ def main():
  def event(label,**fields):
   if not out.is_dir():return
   stamp=time.monotonic_ns()
-  events.append(dict(seconds=stamp/1e9-start,monotonic_ns=stamp,label=label,**fields));(out/'route.json').write_text(json.dumps(events,indent=2)+'\n')
+  row=dict(seconds=stamp/1e9-start,monotonic_ns=stamp,label=label,**fields)
+  if a.vertex_profile and label in ('resource-start','resource-end'):
+   log=out/'startup.log'
+   offset=log.stat().st_size
+   (out/'diagnostic.trigger').write_text('snapshot')
+   deadline=time.monotonic()+5
+   while process.poll() is None and time.monotonic()<deadline:
+    with log.open('rb') as stream:
+     stream.seek(offset)
+     text=stream.read().decode(errors='replace')
+    counts=dict(re.findall(r'\[vulkan-count\] ([a-z-]+)=0x([0-9a-fA-F]+)',text))
+    if '[diagnostic] reason=snapshot requested' in text and all(
+       key in counts for key in ('guest-draw','pipeline','texture-upload','window-present')):
+     row['vulkan_counts']={key:int(value,16) for key,value in counts.items()}
+     row['vulkan_counts_observed_ns']=time.monotonic_ns()
+     break
+    time.sleep(.01)
+   else:raise RuntimeError('Vertex diagnostic snapshot was not recorded')
+  events.append(row)
+  (out/'route.json').write_text(json.dumps(events,indent=2)+'\n')
  def press(mask,label,reports=2):
   if a.reference_template:
    key={0x4000:'z',0x2000:'x',0x40:'Down'}[mask]
@@ -341,10 +365,15 @@ def main():
   guest_alive=desktop.owner(int(window))==int((out/'pid').read_text()) if desktop else Path('/proc', (out/'pid').read_text().strip()).exists() if not a.reference_template else True
   if not a.reference_template and guest_alive:
    try:
+    log=out/'startup.log'
+    offset=log.stat().st_size
     (out/'diagnostic.trigger').write_text('snapshot')
     deadline=time.monotonic()+5
     while process.poll() is None and time.monotonic()<deadline:
-     if '[execution-count] ppu-recovery=' in (out/'startup.log').read_text(errors='replace'):break
+     with log.open('rb') as stream:
+      stream.seek(offset)
+      snapshot=stream.read().decode(errors='replace')
+     if '[execution-count] ppu-recovery=' in snapshot:break
      time.sleep(.1)
     else:raise RuntimeError('Final strict-execution snapshot was not recorded')
    except ProcessLookupError:guest_alive=False
@@ -379,7 +408,7 @@ def main():
   if a.linux_symbols and (out/'cpu-samples.csv').stat().st_size==0:
    raise RuntimeError('Linux sampler produced no samples. See cpu-samples.log.')
   result=summarize_run(out, reference=bool(a.reference_template))
-  result['cpu_diagnostics']=dict(linux_symbols=a.linux_symbols,mailbox_profile=a.mailbox_profile)
+  result['cpu_diagnostics']=dict(linux_symbols=a.linux_symbols,mailbox_profile=a.mailbox_profile,vertex_profile=a.vertex_profile,video=a.correctness_video)
   (out/'host-resource-report.json').write_text(json.dumps(result,indent=2)+'\n')
  raise SystemExit(process.returncode)
 
