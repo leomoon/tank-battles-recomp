@@ -234,25 +234,52 @@ uint32_t perform(Op op,ppu_context* c) {
     }
     return np_argument;
 }
-void trace_offline(const char* name, uint32_t result, uint32_t detail=0) {
+bool offline_trace_enabled() {
     static const bool enabled=[] { const char* value=getenv("TB_OFFLINE_TRACE");return value && value[0]=='1'; }();
+    return enabled;
+}
+void trace_offline(const char* name, uint32_t result, uint32_t detail, uint32_t lr) {
     static unsigned count=0;
-    if(enabled && count<1024)fprintf(stderr,"[offline-trace] seq=%u name=%s result=0x%08X detail=0x%08X pending=%zu\n",
-                                   ++count,name,result,detail,completions.size());
+    if(offline_trace_enabled() && count<1024)
+        fprintf(stderr,"[offline-trace] seq=%u name=%s result=0x%08X detail=0x%08X pending=%zu lr=0x%08X\n",
+                ++count,name,result,detail,completions.size(),lr);
 }
 template<Op op>void handler(ppu_context* c,const char* name){
     std::lock_guard guard(lock);
-    const auto address=c->gpr[3];
+    const uint64_t address=c->gpr[3], event_key=c->gpr[4], context_out=c->gpr[6];
+    const uint32_t lr=c->lr;
     c->gpr[3]=perform(op,c);
+    if (!offline_trace_enabled()) return;
+    const uint32_t result=c->gpr[3];
+    uint32_t detail=0;
     if constexpr(op==Op::manager_status || op==Op::net_state) {
-        const uint32_t state=!c->gpr[3] && ea(address)?vm_read32(address):0;
-        static uint64_t previous=~uint64_t{0};
-        const uint64_t current=(c->gpr[3]<<32)|state;
-        if(current!=previous){trace_offline(name,c->gpr[3],state);previous=current;}
-    }else trace_offline(name,c->gpr[3]);
+        detail=result?0:vm_read32(address);
+        // Repeated polls at one site should leave room for other menu callers.
+        struct PollSite { uint32_t lr, result, state; };
+        static std::array<PollSite, 32> sites{};
+        for (auto& site:sites) {
+            if (site.lr==lr && site.result==result && site.state==detail && lr) return;
+            if (site.lr==lr || !site.lr) {
+                site={lr,result,detail};
+                break;
+            }
+        }
+    } else if constexpr(op==Op::dialog_unload) {
+        if (!result) detail=vm_read32(address+4);
+    } else if constexpr(op==Op::matching_create) {
+        if (!result) detail=vm_read16(context_out);
+    } else if constexpr(op==Op::matching_event) {
+        detail=event_key;
+    } else if constexpr(op==Op::matching_callback || op==Op::matching_aux_callback ||
+                        op==Op::matching_start || op==Op::matching_request) {
+        detail=address; // Context ID. Offline requests never assign a request ID.
+    }
+    trace_offline(name,result,detail,lr);
 }
 void check_callbacks(ppu_context* c) {
+    const uint32_t lr=c->lr;
     uint32_t queue_error=0;
+    bool queued=false;
     {
         std::lock_guard guard(lock);
         std::vector<Completion> retry;
@@ -260,7 +287,8 @@ void check_callbacks(ppu_context* c) {
             if(event.owner==Owner::net){
                 if(net && event.generation==net_generation) {
                     for(int slot=0;slot<4;++slot)cellSysutilQueueEvent(slot,event.status,0);
-                    trace_offline("net-dialog-event",0,event.status);
+                    trace_offline("net-dialog-event",0,event.status,lr);
+                    queued=true;
                 }
                 continue;
             }
@@ -271,14 +299,19 @@ void check_callbacks(ppu_context* c) {
                 if(!matching || !ctx || !ctx->pending)continue;
             }else if(!voice_pending || event.generation!=voice_generation)continue;
             const auto result=cellSysutilQueueGuestCallbackArgs(event.callback,event.args.data());
-            trace_offline("guest-callback-queue",result,event.callback);
+            trace_offline("guest-callback-queue",result,event.args[1],lr);
             if(result){queue_error=result;retry.push_back(event);continue;}
+            queued=true;
             if(ctx)ctx->pending=false;else voice_pending=false;
         }
         completions=std::move(retry);
     }
     delegate("cellSysutilCheckCallback",c);
     if(!c->gpr[3] && queue_error)c->gpr[3]=queue_error;
+    if (queued && offline_trace_enabled()) {
+        std::lock_guard guard(lock);
+        trace_offline("cellSysutilCheckCallback",c->gpr[3],0,lr);
+    }
 }
 
 struct Binding {const char* name;tank_battles_override_fn fn;};
@@ -335,4 +368,16 @@ void tank_battles_init_offline_network(){
 }
 void tank_battles_register_offline_network(){
     for(const auto& binding:bindings)tank_battles_register_override(ps3_compute_nid(binding.name),binding.fn);
+}
+
+void tank_battles_trace_socket(uint32_t nid, uint32_t result, uint32_t lr) {
+    // NPUB30154 sys_net imports, in stub order. Never inspect socket buffers.
+    static constexpr std::array<uint32_t,18> imports{
+        0x139a9e9b,0x1f953b9f,0x28e208bb,0x3f09e20a,0x6005cde1,0x64f66d35,
+        0x6db6e8cd,0x88f03575,0x8d1b77fb,0x9647570b,0x9c056962,0xa50777c6,
+        0xb0a59804,0xb68d5625,0xc94f6939,0xdc751b40,0xfba04f37,0xfdb8f926
+    };
+    if (std::find(imports.begin(),imports.end(),nid)==imports.end()) return;
+    std::lock_guard guard(lock);
+    trace_offline("sys_net",result,nid,lr);
 }

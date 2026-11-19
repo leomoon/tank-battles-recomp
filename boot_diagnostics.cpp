@@ -1,6 +1,7 @@
 #include "boot_diagnostics.h"
 #include "stubs.h"
 #include "execution_policy_api.h"
+#include "offline_network.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -27,6 +28,7 @@ struct Snapshot {
 };
 static Snapshot snapshots[64];
 static uint32_t trace_nid;
+static bool trace_offline;
 static std::atomic<uint32_t> traced_calls{0};
 static std::atomic<const char*> milestone{"process start"};
 static std::atomic<bool> stop_requests{false};
@@ -110,6 +112,7 @@ static LONG WINAPI report_exception(EXCEPTION_POINTERS* info) {
 #endif
 void tank_battles_diagnostics_init() {
     if (const char* value = getenv("TB_TRACE_NID")) trace_nid = static_cast<uint32_t>(strtoul(value, nullptr, 0));
+    if (const char* value = getenv("TB_OFFLINE_TRACE")) trace_offline = value[0] == '1';
 #ifdef _WIN32
     SetUnhandledExceptionFilter(report_exception);
 #else
@@ -149,10 +152,12 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* context) {
         s.sequence.fetch_add(1);
     }
     const bool trace = trace_nid && nid == trace_nid && traced_calls.fetch_add(1) < 32;
+    const uint32_t lr = static_cast<uint32_t>(context->lr);
     if (trace) fprintf(stderr, "[port-hle] enter nid=0x%08X lr=0x%08X r3=0x%016llX\n",
                        nid, static_cast<uint32_t>(context->lr), (unsigned long long)context->gpr[3]);
     if (!tank_battles_dispatch_override(nid, context))
         tb_sdk_ps3_hle_call(nid, context);
+    if (trace_offline) tank_battles_trace_socket(nid, static_cast<uint32_t>(context->gpr[3]), lr);
     if (trace) fprintf(stderr, "[port-hle] return nid=0x%08X r3=0x%016llX\n",
                        nid, (unsigned long long)context->gpr[3]);
 }
