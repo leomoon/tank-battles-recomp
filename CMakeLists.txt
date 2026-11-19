@@ -322,6 +322,7 @@ set(TB_HOST_SOURCES
     texture_decode_fast.cpp
     execution_policy.cpp
     execution_spu_probe.c
+    spu_idle.c
     hle_inventory.cpp
     content_paths.cpp
     entitlement.cpp

@@ -191,3 +191,9 @@ Teardown fix: deferred image destruction now stops once the draw engine is shut 
 ## Linux PPU load CPU result
 
 The 32-bit guest load helper is forced inline so the compiler can keep the function’s memory snapshot in registers. Six resource runs in reversed parent/candidate order reduced median default Battle process CPU from 1.969 to 1.885 logical cores and main PPU CPU from 0.594 to 0.523. Held menus and debriefing showed little change. The size-tool text total grew by 32.32 MB. The Linux memory fixture checks boundaries, alignment, byte order and guarded fallbacks with sanitizers. Local measurements and executable identities are recorded in [the load experiment](../analysis/performance/cpu-load32/REPORT.md).
+
+## Linux raw SPU idle wait
+
+The identified Tank Battles raw worker now parks after a short spin when both local-store work slots and its mailbox are empty. Mailbox, signal and stop producers wake it through the existing channel condition variable. A one-millisecond timeout covers local-store and DMA writes without notification. Linux enables the wait by default, with `TB_RAW_SPU_IDLE=0` selecting the original polling path. Other hosts require explicit opt-in.
+
+Three comparison pairs reduced median Battle process CPU from 1.871 to 0.929 logical cores, main menu from 1.285 to 0.304 and debriefing from 1.687 to 0.690. A diagnostic identified raw-worker CPU at 0.0213 core in Battle. Fresh full-minute Battle and Campaign passed the existing pacing limits at 59.9667 and 60.00 completed GAME FPS, with host audio and strict execution. Local evidence, thermal readings and test coverage are in [the idle-wait report](../analysis/performance/cpu-spu-idle/REPORT.md).

@@ -25,6 +25,7 @@ These switches remain available in both build profiles. Unset them for the accep
 | `TB_VK_FENCE_POLL` | off | `1` enables bounded fence polling before the blocking wait |
 | `TB_COLOR_READBACK_CACHE` | off | `1` enables the experimental readback cache |
 | `TB_DRAW_REMAP_CACHE` | off | `1` enables the experimental index-remap cache |
+| `TB_RAW_SPU_IDLE` | on Linux, off elsewhere | `0` selects the original raw-SPU polling loop, `1` enables the bounded idle wait |
 | `TB_DRAW_REMAP_VERIFY` | off | `1` checks reused remaps against fresh computation |
 | `TB_FPS_OVERLAY` | off, or saved preference | `1` shows it, `0` hides it |
 | `PS3RECOMP_FULLSCREEN` | off, or saved preference | `1` starts in fullscreen, `0` in a window |

@@ -43,6 +43,7 @@
 #include "guest_layout.h"
 #include "execution_policy_api.h"
 #include "frame_budget.h"
+extern "C" void tank_battles_spu_idle_init(void);
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -773,6 +774,7 @@ int tb_player_main(int argc, char** argv)
     tank_battles_milestone("filesystem registered");
     lv2_init_syscalls();     /* the lv2 syscall table */
 
+    tank_battles_spu_idle_init();
     tank_battles_register_overrides();
     tank_battles_milestone("port overrides registered");
     if (!tank_battles_write_hle_inventory()) return 1;

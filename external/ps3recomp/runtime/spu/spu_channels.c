@@ -91,6 +91,9 @@ static uint64_t spu_host_ns(void)
  * released. cellSpurs sets it so a PPU blocked in cellSpursEventFlagWait wakes
  * when a task sets the flag, instead of on its next 2 ms poll. */
 void (*g_spu_line_commit_hook)(uint32_t line) = 0;
+/* Optional title-owned idle predicate and bounded wait. Set before SPU startup.
+ * The hook must preserve channel values and return when work or stop arrives. */
+void (*g_spu_idle_poll_hook)(spu_context*) = 0;
 /* spu_workload.c: wakes tasks parked in WAIT_SIGNAL on that line's taskset. */
 void spu_taskset_line_committed(uint32_t line);
 /* SPU_LS_WATCH=0x1BE80[,0x927D80...]: watch up to 4 16-byte LS lines (reads
@@ -1494,6 +1497,11 @@ uint32_t spu_rchcnt(spu_context* ctx, uint32_t channel)
          * mailbox words: the worker checks rchcnt to decide whether its reply
          * has arrived, and parking on an "empty" inbox that actually holds the
          * reply strands it. */
+        if (g_spu_idle_poll_hook && !ctx->park_on_empty_inmbox &&
+            ctx->rcv_evt_n == 0 && ctx->ch_in_mbox.count == 0) {
+            g_spu_idle_poll_hook(ctx);
+            spu_honour_stop_request(ctx);
+        }
         if (ctx->park_on_empty_inmbox && ctx->rcv_evt_n == 0 &&
             ctx->ch_in_mbox.count == 0) {
             extern void spu_halt(spu_context*);

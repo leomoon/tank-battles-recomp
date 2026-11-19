@@ -57,7 +57,7 @@ BUILD_FIELDS = ('executable_sha256', 'sdk_manifest_sha256', 'source_commit', 'so
 
 def source_identity():
     names = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().strip('\0').split('\0')
-    for folder,pattern in [('','*.cpp'),('','*.h'),('sdk_overrides','*.inc'),('sdk_overrides','*.h'),('scripts','*.py'),('shaders','*.comp'),('shaders','*.inc'),('tests','*.inc'),('tests','*.cpp'),('tests/texture_decode','CMakeLists.txt'),('licenses','*.txt')]:
+    for folder,pattern in [('','*.cpp'),('','*.c'),('','*.h'),('sdk_overrides','*.inc'),('sdk_overrides','*.h'),('scripts','*.py'),('shaders','*.comp'),('shaders','*.inc'),('tests','*.inc'),('tests','*.cpp'),('tests/texture_decode','CMakeLists.txt'),('licenses','*.txt')]:
         names += [str(p.relative_to(ROOT)) for p in (ROOT/folder).glob(pattern)]
     hashes = {name: hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in sorted(set(names)) if (ROOT/name).is_file()}
     return hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
@@ -95,7 +95,7 @@ def freeze_build(build, output):
         shutil.copy2(build/name,target)
     (output/'commands.txt').write_text(subprocess.check_output(['ninja','-C',str(build),'-t','commands'],text=True))
     names=subprocess.check_output(['git','ls-files','-z'],cwd=ROOT).decode().strip('\0').split('\0')
-    for folder, pattern in [('','*.cpp'),('','*.h'),('sdk_overrides','*.inc'),('sdk_overrides','*.h'),('scripts','*.py'),('shaders','*.comp'),('shaders','*.inc'),('tests','*.inc'),('tests','*.cpp'),('tests/texture_decode','CMakeLists.txt'),('licenses','*.txt')]:
+    for folder, pattern in [('','*.cpp'),('','*.c'),('','*.h'),('sdk_overrides','*.inc'),('sdk_overrides','*.h'),('scripts','*.py'),('shaders','*.comp'),('shaders','*.inc'),('tests','*.inc'),('tests','*.cpp'),('tests/texture_decode','CMakeLists.txt'),('licenses','*.txt')]:
         names += [str(p.relative_to(ROOT)) for p in (ROOT/folder).glob(pattern)]
     files={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in sorted(set(names)) if (ROOT/name).is_file()}
     with tarfile.open(output/'source.tar','w') as archive:
