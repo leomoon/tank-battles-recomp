@@ -106,6 +106,8 @@ def main():
       x,y=c['at'];w,h=c['size'];position=[round(min(max(x,mx+8),mx+mw-w-8)),round(min(max(y,my+8),my+mh-h-8))]
      if c.get('grouped'):
       operations=['hl.dsp.window.move({ window = "'+prefix+'", out_of_group = true })']
+     elif c.get('fullscreen'):
+      operations=['hl.dsp.window.fullscreen({ window = "'+prefix+'", mode = "'+('maximized' if c['fullscreen']==2 else 'fullscreen')+'", action = "unset" })']
      elif not c.get('floating'):
       operations=['hl.dsp.window.float({ window = "'+prefix+'", action = "toggle" })']
      elif not c.get('pinned'):
