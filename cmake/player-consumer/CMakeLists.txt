@@ -14,6 +14,10 @@ foreach(path_variable TB_PORT_ROOT TB_RUNTIME_ROOT RECOMP_DIR PS3RECOMP_DIR PORT
 endforeach()
 
 include("${TB_RUNTIME_ROOT}/cmake/RuntimeConsumer.cmake")
+find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${TB_PORT_ROOT}/scripts/patch_network_events.py")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${TB_PORT_ROOT}/scripts/patch_network_events.py"
+    "${RECOMP_DIR}" COMMAND_ERROR_IS_FATAL ANY)
 include("${PS3RECOMP_DIR}/cmake/PS3RecompSPU.cmake")
 ps3recomp_generate_spu("${CMAKE_CURRENT_BINARY_DIR}/generated_spu" "${PORT_SPU_INPUTS}")
 file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS "${RECOMP_DIR}/*.c" "${RECOMP_DIR}/*.cpp")

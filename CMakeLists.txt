@@ -209,6 +209,9 @@ endif()
 
 # Generate instrumented copies of selected SDK sources; the pinned checkout stays clean.
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_network_events.py")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_network_events.py"
+    "${RECOMP_DIR}" COMMAND_ERROR_IS_FATAL ANY)
 set(EXECUTION_SDK "${CMAKE_BINARY_DIR}/instrumented_sdk")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_memory_copy.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_texture_coherence.inc"
@@ -324,6 +327,8 @@ set(TB_HOST_SOURCES
     entitlement.cpp
     offline_network.cpp
     rpcn/client.cpp
+    rpcn/matching.cpp
+    rpcn/matching_room.cpp
     offline_network_probe.cpp
     entitlement_edat.c
     asset_probe.cpp
@@ -492,6 +497,7 @@ endforeach()
 
 if(TB_BUILD_RUNTIME_BUNDLE)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeBundle.cmake")
+    add_subdirectory(tests/rpcn)
 endif()
 
 # ---------------------------------------------------------------------------

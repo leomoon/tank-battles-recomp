@@ -3,6 +3,7 @@
 #include "offline_network.h"
 #include "stubs.h"
 #include "rpcn/client.h"
+#include "rpcn/matching.h"
 #include "ppu_recomp.h"
 #include "ps3emu/nid.h"
 #include <algorithm>
@@ -56,7 +57,12 @@ bool ea(uint64_t address, unsigned count=4) {
 }
 MatchingContext* context(uint32_t id) { for (auto& c:contexts) if(c.id && c.id==id) return &c; return nullptr; }
 void clear_matching() { matching=false; for(auto& c:contexts)c={}; std::erase_if(completions,[](const auto& e){return e.owner==Owner::matching;}); }
-void reset_np_services() { score.clear();tus.clear();np2=false;clear_matching();manager_callback={};voice_pending=false;++voice_generation;signaling.fill(0);std::erase_if(completions,[](const auto& e){return e.owner!=Owner::net;}); }
+void reset_np_services() {
+    score.clear();tus.clear();np2=false;clear_matching();manager_callback={};
+    voice_pending=false;++voice_generation;signaling.fill(0);
+    std::erase_if(completions,[](const auto& e){return e.owner!=Owner::net;});
+    if (tb::rpcn::enabled()) tb::rpcn::reset_matching();
+}
 void delegate(const char* name, ppu_context* c) {
     tb_sdk_ps3_hle_call(ps3_compute_nid(name),c);
 }
@@ -389,6 +395,7 @@ void check_callbacks(ppu_context* c) {
         }
         completions=std::move(retry);
     }
+    if (tb::rpcn::enabled()) tb::rpcn::pump_matching();
     delegate("cellSysutilCheckCallback",c);
     if(!c->gpr[3] && queue_error)c->gpr[3]=queue_error;
     if (queued && offline_trace_enabled()) {
@@ -455,6 +462,7 @@ void tank_battles_init_offline_network(bool use_rpcn){
 void tank_battles_register_offline_network(){
     for(const auto& binding:bindings)tank_battles_register_override(ps3_compute_nid(binding.name),binding.fn);
     if (tb::rpcn::enabled()) {
+        tb::rpcn::register_matching();
         tank_battles_register_override(ps3_compute_nid("sceNpManagerGetNpId"),
             [](ppu_context* c){handler<Op::manager_id>(c,"sceNpManagerGetNpId");});
         tank_battles_register_override(ps3_compute_nid("cellNetCtlAddHandler"),

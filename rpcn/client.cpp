@@ -6,10 +6,12 @@
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -119,6 +121,19 @@ struct Frame {
     Bytes body;
 };
 
+struct Pending {
+    Request command;
+    Bytes data;
+    std::promise<Reply> completion;
+};
+
+std::mutex state_lock;
+Status session_status;
+std::deque<Pending> requests;
+std::vector<Notification> notifications;
+bool requested = false;
+std::jthread worker;
+
 void require_ok(CURLcode code) {
     if (code != CURLE_OK) throw std::runtime_error(curl_easy_strerror(code));
 }
@@ -173,8 +188,70 @@ public:
             data.insert(data.end(), field.begin(), field.end());
             data.push_back(0);
         }
+        auto reply = exchange(static_cast<uint16_t>(command), data);
+        if (reply.front()) {
+            const auto reason = reply.front();
+            const char* description = "request rejected";
+            if (reason == 6) description = "account already signed in";
+            if (reason == 7) description = "unknown NP ID";
+            if (reason == 8) description = "incorrect password";
+            if (reason == 9) description = "invalid token";
+            if (reason == 11) description = "NP ID already exists";
+            if (reason == 13) description = "email already registered";
+            throw std::runtime_error(std::string("RPCN ") + description + " (code " +
+                                     std::to_string(reason) + ")");
+        }
+        return reply;
+    }
+
+    void serve() {
+        while (!stop_.stop_requested()) {
+            std::optional<Pending> pending;
+            {
+                std::lock_guard guard(state_lock);
+                if (!requests.empty()) {
+                    pending.emplace(std::move(requests.front()));
+                    requests.pop_front();
+                }
+            }
+            if (pending) {
+                try {
+                    pending->completion.set_value({exchange(static_cast<uint16_t>(pending->command), pending->data)});
+                } catch (...) {
+                    pending->completion.set_value({});
+                    throw;
+                }
+                continue;
+            }
+            unsigned char type = 0;
+            size_t length = 0;
+            const auto code = curl_easy_recv(handle_.get(), &type, 1, &length);
+            if (code == CURLE_AGAIN) {
+                std::this_thread::sleep_for(10ms);
+                continue;
+            }
+            require_ok(code);
+            if (!length) throw std::runtime_error("RPCN server closed the connection");
+            auto frame = receive_tail(type, Clock::now() + 5s);
+            if (frame.type != Packet::notification)
+                throw std::runtime_error("Unexpected RPCN packet while signed in");
+            notify(std::move(frame));
+        }
+    }
+
+private:
+    void notify(Frame frame) {
+        // Room membership, room-data and room-message notifications.
+        if (frame.command>3 && frame.command!=9) return;
+        std::lock_guard guard(state_lock);
+        if (notifications.size()>=128 || frame.body.size()>256*1024)
+            throw std::runtime_error("RPCN room notification limit exceeded");
+        notifications.push_back({frame.command,std::move(frame.body)});
+    }
+
+    Bytes exchange(uint16_t command, const Bytes& data) {
         Bytes packet{static_cast<unsigned char>(Packet::request)};
-        append_le(packet, static_cast<uint16_t>(command), 2);
+        append_le(packet, command, 2);
         append_le(packet, header_size + data.size(), 4);
         const auto id = next_id_++;
         append_le(packet, id, 8);
@@ -183,36 +260,16 @@ public:
         write(packet, deadline);
         for (;;) {
             auto reply = receive(deadline);
-            if (reply.type == Packet::notification) continue;
-            if (reply.type != Packet::reply || reply.id != id ||
-                reply.command != static_cast<uint16_t>(command) || reply.body.empty())
-                throw std::runtime_error("RPCN replied with an unexpected command or request ID");
-            if (reply.body.front()) {
-                const auto reason = reply.body.front();
-                const char* description = "request rejected";
-                if (reason == 6) description = "account already signed in";
-                if (reason == 7) description = "unknown NP ID";
-                if (reason == 8) description = "incorrect password";
-                if (reason == 9) description = "invalid token";
-                if (reason == 11) description = "NP ID already exists";
-                if (reason == 13) description = "email already registered";
-                throw std::runtime_error(std::string("RPCN ") + description + " (code " +
-                                         std::to_string(reason) + ")");
+            if (reply.type == Packet::notification) {
+                notify(std::move(reply));
+                continue;
             }
+            if (reply.type != Packet::reply || reply.id != id || reply.command != command || reply.body.empty())
+                throw std::runtime_error("RPCN replied with an unexpected command or request ID");
             return std::move(reply.body);
         }
     }
 
-    void idle() {
-        while (!stop_.stop_requested()) {
-            auto frame = receive(Clock::time_point::max());
-            if (frame.type != Packet::notification)
-                throw std::runtime_error("Unexpected RPCN packet while signed in");
-            // Account notifications have no guest consumer in the first online profile.
-        }
-    }
-
-private:
     void check_deadline(Clock::time_point deadline) {
         if (stop_.stop_requested()) throw std::runtime_error("RPCN operation cancelled");
         if (Clock::now() >= deadline) throw std::runtime_error("RPCN transfer timed out");
@@ -249,17 +306,22 @@ private:
     }
 
     Frame receive(Clock::time_point deadline) {
+        unsigned char type = 0;
+        read({&type, 1}, deadline);
+        return receive_tail(type, deadline);
+    }
+
+    Frame receive_tail(unsigned char type, Clock::time_point deadline) {
         std::array<unsigned char, header_size> header{};
+        header[0] = type;
         auto bytes = std::span(header);
-        read(bytes.first(1), deadline);
         deadline = std::min(deadline, Clock::now() + 5s);
         read(bytes.subspan(1), deadline);
-        const auto type = static_cast<Packet>(header[0]);
         const auto length = read_le(bytes.subspan(3, 4));
         if (header[0] > static_cast<unsigned char>(Packet::server_info) ||
             length < header_size || length - header_size > max_body)
             throw std::runtime_error("Invalid RPCN frame header");
-        Frame frame{type, static_cast<uint16_t>(read_le(bytes.subspan(1, 2))),
+        Frame frame{static_cast<Packet>(type), static_cast<uint16_t>(read_le(bytes.subspan(1, 2))),
                     read_le(bytes.subspan(7, 8)), Bytes(static_cast<size_t>(length - header_size))};
         read(frame.body, deadline);
         return frame;
@@ -280,14 +342,14 @@ void login(Connection& connection, const Profile& profile) {
         throw std::runtime_error("Incomplete RPCN login identity");
 }
 
-std::mutex state_lock;
-Status session_status;
-bool requested = false;
-std::jthread worker;
-
 void set_status(State state, std::string npid = {}) {
     std::lock_guard guard(state_lock);
     session_status = {state, std::move(npid)};
+    if (state == State::offline) {
+        for (auto& pending : requests) pending.completion.set_value({});
+        requests.clear();
+        notifications.clear();
+    }
 }
 
 }
@@ -303,7 +365,7 @@ bool start(const char* profile_path) {
                 login(connection, profile);
                 set_status(State::online, profile.npid);
                 fprintf(stderr, "[rpcn] Signed in to %s as %s\n", profile.endpoint.c_str(), profile.npid.c_str());
-                connection.idle();
+                connection.serve();
             } catch (const std::exception& error) {
                 if (!stop.stop_requested()) fprintf(stderr, "[rpcn] %s\n", error.what());
             }
@@ -328,6 +390,23 @@ bool enabled() { return requested; }
 Status status() {
     std::lock_guard guard(state_lock);
     return session_status;
+}
+
+std::future<Reply> submit(Request command, Bytes body) {
+    std::lock_guard guard(state_lock);
+    if (session_status.state != State::online || body.size() > max_body || requests.size() >= 32)
+        return {};
+    Pending pending{command, std::move(body), {}};
+    auto future = pending.completion.get_future();
+    requests.push_back(std::move(pending));
+    return future;
+}
+
+std::vector<Notification> take_notifications() {
+    std::lock_guard guard(state_lock);
+    std::vector<Notification> result;
+    result.swap(notifications);
+    return result;
 }
 
 int account_command(const char* profile_path, bool create) {

@@ -67,4 +67,4 @@ python scripts/port.py rpcn check /path/to/profile.ini
 python scripts/port.py run --rpcn-profile /path/to/profile.ini --console
 ```
 
-Pass `--build-dir` when using a build outside the project's configured default. For a standalone player, the equivalent executable arguments are `--rpcn-create-account FILE`, `--rpcn-check FILE`, or `<PPU ELF> --rpcn-profile FILE`. Sign-in opens the Online Battle submenu. Room creation and gameplay are later milestones.
+Pass `--build-dir` when using a build outside the project's configured default. For a standalone player, the equivalent executable arguments are `--rpcn-create-account FILE`, `--rpcn-check FILE`, or `<PPU ELF> --rpcn-profile FILE`. Sign-in opens the Online Battle submenu. [Native RPCN rooms](RPCN_ROOMS.md) covers room support and its tests. Live peer signaling and synchronized gameplay are still in development.

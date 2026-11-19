@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdint>
+#include <future>
 #include <string>
+#include <vector>
 
 namespace tb::rpcn {
 
@@ -10,6 +13,25 @@ struct Status {
     State state = State::offline;
     std::string npid;
 };
+
+struct Reply {
+    // A missing response indicates that the connection ended.
+    std::vector<unsigned char> body;
+};
+
+enum class Request : uint16_t {
+    server_list = 12, world_list = 13, create_room = 14, join_room = 15,
+    leave_room = 16, search_room = 17, get_room_data = 20, set_room_data = 21,
+    ping_room_owner = 25, send_room_message = 26,
+};
+
+struct Notification {
+    uint16_t command;
+    std::vector<unsigned char> body;
+};
+
+std::future<Reply> submit(Request command, std::vector<unsigned char> body);
+std::vector<Notification> take_notifications();
 
 bool start(const char* profile_path);
 void stop();

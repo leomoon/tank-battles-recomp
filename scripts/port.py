@@ -89,6 +89,8 @@ def prepare(args, config) -> None:
          "--hle-stubs", str(analysis / f"{elf.stem}.imports.json"),
          "--output", str(resolve(config["paths"]["recompiled"])),
          "--jobs", str(jobs), "--chunk-lines", str(config["recompiler"]["chunk_lines"])])
+    from patch_network_events import patch
+    patch(resolve(config["paths"]["recompiled"]))
 
 
 def configure(args, config) -> None:
