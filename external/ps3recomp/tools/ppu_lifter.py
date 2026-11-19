@@ -239,6 +239,13 @@ static inline uint16_t vm_read16_mm(const ppu_mm* m, uint64_t a)
         return __builtin_bswap16(v); }
     return vm_read16(a);
 }
+/* Keep the normal 32-bit load at the caller so the per-function range and
+ * poll-word snapshot can stay in registers across repeated guest loads. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#elif defined(_MSC_VER)
+__forceinline
+#endif
 static inline uint32_t vm_read32_mm(const ppu_mm* m, uint64_t a)
 {
     const uint32_t ea = (uint32_t)a;

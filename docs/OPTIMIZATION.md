@@ -187,3 +187,7 @@ The remaining copies are the depth conversion's.
 Teardown fix: deferred image destruction now stops once the draw engine is shut down, and anything still queued is destroyed after the device is idled and before `vkDestroyDevice`. Destroying the device with live images faulted inside `igvk64.dll` (read of null+0x150) at exit.
 
 `shaders/glsl_spirv_tool.cpp` builds a minimal `glslangValidator -V` stand-in from the glslang libraries the runtime already links, for hosts without the glslang tools. It reproduces both earlier embedded shaders byte for byte, and `scripts/compile_depth_shader.py --glslang <tool>` uses it.
+
+## Linux PPU load CPU result
+
+The 32-bit guest load helper is forced inline so the compiler can keep the function’s memory snapshot in registers. Six resource runs in reversed parent/candidate order reduced median default Battle process CPU from 1.969 to 1.885 logical cores and main PPU CPU from 0.594 to 0.523. Held menus and debriefing showed little change. The size-tool text total grew by 32.32 MB. The Linux memory fixture checks boundaries, alignment, byte order and guarded fallbacks with sanitizers. Local measurements and executable identities are recorded in [the load experiment](../analysis/performance/cpu-load32/REPORT.md).
