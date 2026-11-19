@@ -12,8 +12,9 @@ class NetworkHookTests(unittest.TestCase):
             path.write_text('#include "ppu_recomp.h"\n' + SIGNATURE + '}\n')
             patch(name)
             first = path.read_bytes()
-            self.assertIn((SIGNATURE + HOOK).encode(), first)
-            self.assertEqual(first.count(DECLARATION.encode()), 1)
+            source = path.read_text()
+            self.assertIn(SIGNATURE + HOOK, source)
+            self.assertEqual(source.count(DECLARATION), 1)
             patch(name)
             self.assertEqual(path.read_bytes(), first)
 
