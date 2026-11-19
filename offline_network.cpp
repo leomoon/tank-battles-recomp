@@ -2,6 +2,7 @@
  * ABI/error/event definitions checked against the local RPCS3 source. */
 #include "offline_network.h"
 #include "stubs.h"
+#include "rpcn/client.h"
 #include "ppu_recomp.h"
 #include "ps3emu/nid.h"
 #include <algorithm>
@@ -39,6 +40,12 @@ struct Completion { Owner owner; uint32_t id, generation, callback; std::array<u
 std::mutex lock;
 TitlePool score,tus;
 bool np2=false, matching=false, net=false, dialog=false, voice_pending=false;
+bool dialog_waiting=false;
+struct StatusCallback {
+    uint32_t opd=0, arg=0, previous=0;
+};
+StatusCallback manager_callback;
+std::array<StatusCallback,16> net_handlers;
 uint32_t net_generation=0, voice_generation=0, next_context=1;
 std::array<MatchingContext,16> contexts;
 std::array<uint32_t,16> signaling{};
@@ -49,7 +56,7 @@ bool ea(uint64_t address, unsigned count=4) {
 }
 MatchingContext* context(uint32_t id) { for (auto& c:contexts) if(c.id && c.id==id) return &c; return nullptr; }
 void clear_matching() { matching=false; for(auto& c:contexts)c={}; std::erase_if(completions,[](const auto& e){return e.owner==Owner::matching;}); }
-void reset_np_services() { score.clear();tus.clear();np2=false;clear_matching();voice_pending=false;++voice_generation;signaling.fill(0);std::erase_if(completions,[](const auto& e){return e.owner!=Owner::net;}); }
+void reset_np_services() { score.clear();tus.clear();np2=false;clear_matching();manager_callback={};voice_pending=false;++voice_generation;signaling.fill(0);std::erase_if(completions,[](const auto& e){return e.owner!=Owner::net;}); }
 void delegate(const char* name, ppu_context* c) {
     tb_sdk_ps3_hle_call(ps3_compute_nid(name),c);
 }
@@ -70,14 +77,31 @@ uint32_t transaction_create(TitlePool& pool, uint32_t id, uint32_t offline_error
     return offline_error; // No request or transaction handle is allocated offline.
 }
 enum class Op {
-    np_term,np2_init,np2_term,manager_status,manager_register,manager_unregister,
-    net_init,net_term,net_state,dialog_load,dialog_unload,
+    np_term,np2_init,np2_term,manager_status,manager_register,manager_unregister,manager_id,
+    net_init,net_term,net_state,net_add,net_delete,dialog_load,dialog_unload,
     score_init,score_term,score_title,score_destroy,score_transaction,score_request,
     tus_init,tus_term,tus_title,tus_destroy,tus_transaction,tus_request,
     matching_init,matching_term,matching_create,matching_destroy,matching_callback,
     matching_start,matching_stop,matching_abort,matching_request,matching_event,matching_aux_callback,
     voice_init,voice_load,voice_unload,voice_other,basic_request,basic_abort,signal_create,signal_destroy,signal_callback,signal_query,signal_activate
 };
+
+uint32_t manager_state(tb::rpcn::State state) {
+    if (state == tb::rpcn::State::online) return 3;
+    if (state == tb::rpcn::State::connecting) return 2;
+    return 0xffffffffu;
+}
+
+uint32_t net_state(tb::rpcn::State state) {
+    if (state == tb::rpcn::State::online) return 3;
+    if (state == tb::rpcn::State::connecting) return 1;
+    return 0;
+}
+
+void net_dialog_event(uint32_t event) {
+    completions.push_back({Owner::net,0,net_generation,0,{},event});
+}
+
 uint32_t perform(Op op,ppu_context* c) {
     const uint32_t a=c->gpr[3],b=c->gpr[4];
     switch(op) {
@@ -91,23 +115,56 @@ uint32_t perform(Op op,ppu_context* c) {
     case Op::manager_status:
         if(!np_is_initialized())return np_not_init;
         if(!ea(c->gpr[3]))return np_argument;
-        vm_write32(a,0xffffffffu);return 0;
+        vm_write32(a,tb::rpcn::enabled()?manager_state(tb::rpcn::status().state):0xffffffffu);return 0;
     case Op::manager_register:
         if(!np_is_initialized())return np_not_init;
         if(!ea(c->gpr[3],8))return np_argument;
+        if (tb::rpcn::enabled()) {
+            manager_callback={a,b,0xffffffffu};
+            return 0;
+        }
         delegate("sceNpManagerRegisterCallback",c);return c->gpr[3];
     case Op::manager_unregister:
         if(!np_is_initialized())return np_not_init;
+        if (tb::rpcn::enabled()) {
+            manager_callback={};
+            return 0;
+        }
         delegate("sceNpManagerUnregisterCallback",c);return c->gpr[3];
+    case Op::manager_id: {
+        if(!np_is_initialized())return np_not_init;
+        if(!ea(c->gpr[3],36))return np_argument;
+        const auto identity=tb::rpcn::status();
+        if (identity.state!=tb::rpcn::State::online) return 0x8002aa0cu;
+        for (unsigned i=0; i<36; ++i)
+            vm_write8(a+i,i<identity.npid.size()?static_cast<uint8_t>(identity.npid[i]):0);
+        return 0;
+    }
     case Op::net_init:
         delegate("cellNetCtlInit",c);if(!c->gpr[3])net=true;return c->gpr[3];
     case Op::net_term:
-        net=false;dialog=false;++net_generation;
+        net=false;dialog=false;dialog_waiting=false;++net_generation;
+        net_handlers.fill({});
         std::erase_if(completions,[](const auto& e){return e.owner==Owner::net;});delegate("cellNetCtlTerm",c);return 0;
     case Op::net_state:
         if(!net)return net_not_init;
         if(!ea(c->gpr[3]))return net_address;
-        vm_write32(a,0);return 0;
+        vm_write32(a,tb::rpcn::enabled()?net_state(tb::rpcn::status().state):0);return 0;
+    case Op::net_add: {
+        if(!net)return net_not_init;
+        const auto out=c->gpr[5];
+        if(!ea(c->gpr[3],8)||!ea(out))return net_address;
+        delegate("cellNetCtlAddHandler",c);
+        if (!c->gpr[3]) {
+            const auto index=vm_read32(out);
+            if (index<net_handlers.size()) net_handlers[index]={a,b,0};
+        }
+        return c->gpr[3];
+    }
+    case Op::net_delete:
+        delegate("cellNetCtlDelHandler",c);
+        if (!c->gpr[3] && a<net_handlers.size()) net_handlers[a]={};
+        return c->gpr[3];
     case Op::dialog_load:
         if(!net)return net_not_init;
         if(!ea(c->gpr[3],12))return net_address;
@@ -115,15 +172,18 @@ uint32_t perform(Op op,ppu_context* c) {
         if(vm_read32(a+4)>1)return 0x8013010au;
         if(dialog || completions.size()>60)return net_unavailable;
         dialog=true;++net_generation;
-        for(uint32_t status:{0x801u,0x802u})completions.push_back({Owner::net,0,net_generation,0,{},status});
+        net_dialog_event(0x801u);
+        dialog_waiting=tb::rpcn::enabled() && tb::rpcn::status().state==tb::rpcn::State::connecting;
+        if (!dialog_waiting) net_dialog_event(0x802u);
         return 0;
     case Op::dialog_unload:
         if(!net)return net_not_init;
         if(!ea(c->gpr[3],8))return net_address;
         if(vm_read32(a)!=8)return net_size;
         if(!dialog || completions.size()>=64)return net_unavailable;
-        vm_write32(a+4,net_cancelled);dialog=false;
-        completions.push_back({Owner::net,0,net_generation,0,{},0x803});return 0;
+        vm_write32(a+4,tb::rpcn::enabled() && tb::rpcn::status().state==tb::rpcn::State::online?0:net_cancelled);
+        dialog=false;dialog_waiting=false;
+        net_dialog_event(0x803u);return 0;
     case Op::score_init: case Op::tus_init: {
         auto& pool=op==Op::score_init?score:tus;
         if(!np_is_initialized())return np_not_init;
@@ -282,6 +342,29 @@ void check_callbacks(ppu_context* c) {
     bool queued=false;
     {
         std::lock_guard guard(lock);
+        if (tb::rpcn::enabled()) {
+            const auto state=tb::rpcn::status().state;
+            if (dialog_waiting && state!=tb::rpcn::State::connecting) {
+                net_dialog_event(0x802u);
+                dialog_waiting=false;
+            }
+            const auto np=manager_state(state);
+            if (manager_callback.opd && np!=2 && manager_callback.previous!=np) {
+                const uint64_t args[8]={np,0,manager_callback.arg};
+                const auto result=cellSysutilQueueGuestCallbackArgs(manager_callback.opd,args);
+                trace_offline("rpcn-manager-event",result,np,lr);
+                if (!result) manager_callback.previous=np;
+            }
+            const auto link=net_state(state);
+            for (auto& handler:net_handlers) {
+                if (!handler.opd || handler.previous==link) continue;
+                const uint32_t event=link==3?2:link==0?5:0;
+                const uint64_t args[8]={handler.previous,link,event,0,handler.arg};
+                const auto result=cellSysutilQueueGuestCallbackArgs(handler.opd,args);
+                trace_offline("rpcn-netctl-event",result,link,lr);
+                if (!result) handler.previous=link;
+            }
+        }
         std::vector<Completion> retry;
         for(const auto& event:completions){
             if(event.owner==Owner::net){
@@ -358,16 +441,27 @@ const Binding bindings[]={
 };
 #undef B
 }
-void tank_battles_init_offline_network(){
+void tank_battles_init_offline_network(bool use_rpcn){
 #ifdef _WIN32
     _putenv_s("PS3_NET_ONLINE","");_putenv_s("PSNR_SERVER","");
 #else
     unsetenv("PS3_NET_ONLINE");unsetenv("PSNR_SERVER");
 #endif
-    fprintf(stderr,"[offline] Tank Battles profile: PSN and host matchmaking disabled\n");
+    if (use_rpcn)
+        fprintf(stderr,"[rpcn] Tank Battles profile: connecting to the selected server\n");
+    else
+        fprintf(stderr,"[offline] Tank Battles profile: PSN and host matchmaking disabled\n");
 }
 void tank_battles_register_offline_network(){
     for(const auto& binding:bindings)tank_battles_register_override(ps3_compute_nid(binding.name),binding.fn);
+    if (tb::rpcn::enabled()) {
+        tank_battles_register_override(ps3_compute_nid("sceNpManagerGetNpId"),
+            [](ppu_context* c){handler<Op::manager_id>(c,"sceNpManagerGetNpId");});
+        tank_battles_register_override(ps3_compute_nid("cellNetCtlAddHandler"),
+            [](ppu_context* c){handler<Op::net_add>(c,"cellNetCtlAddHandler");});
+        tank_battles_register_override(ps3_compute_nid("cellNetCtlDelHandler"),
+            [](ppu_context* c){handler<Op::net_delete>(c,"cellNetCtlDelHandler");});
+    }
 }
 
 void tank_battles_trace_socket(uint32_t nid, uint32_t result, uint32_t lr) {

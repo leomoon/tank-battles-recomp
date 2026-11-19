@@ -61,6 +61,7 @@ def main():
     parser.add_argument('--entitlement', choices=['purchased','missing-unlock'], default='purchased')
     parser.add_argument('--deny-host-ip', action='store_true', help='Deny new IPv4/IPv6 sockets while allowing local display/audio IPC')
     parser.add_argument('--offline-trace', action='store_true', help='Log bounded offline service request/callback results')
+    parser.add_argument('--rpcn-profile', help='Opt in to RPCN with an explicit private profile file')
     parser.add_argument('--observe-entitlement', action='store_true', help='Read the validated guest trial/completion flags; requires capstone and Linux /proc')
     parser.add_argument('--timeout', type=positive_seconds, default=24)
     parser.add_argument('--warmup', type=positive_seconds, default=10)
@@ -96,6 +97,8 @@ def main():
         parser.error('Use a new output directory to preserve previous evidence')
     if args.resume_profile and not args.user_profile:
         parser.error('--resume-profile requires --user-profile')
+    if args.rpcn_profile and args.deny_host_ip:
+        parser.error('--rpcn-profile requires host IP sockets')
     user_profile = resolve(args.user_profile) if args.user_profile else output / 'profile'
     if not user_profile.is_relative_to(ROOT / 'analysis'):
         parser.error('--user-profile must be inside ignored analysis/')
@@ -147,6 +150,8 @@ def main():
     if args.offline_trace:
         env['TB_OFFLINE_TRACE']='1'
     command = [str(resolve(args.build_dir) / 'TankBattlesRecomp'), str(content / 'USRDIR/EBOOT.elf')]
+    if args.rpcn_profile:
+        command.extend(['--rpcn-profile', str(resolve(args.rpcn_profile))])
     entitlement_flags, guest_process = None, None
     if args.observe_entitlement:
         from verify_entitlement import layout, guest_flags

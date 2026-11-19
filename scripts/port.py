@@ -209,14 +209,25 @@ def launch_environment(config, paramsfo=None, mounts=None):
     return env
 
 
-def launch(args, config) -> int:
-    elf = elf_path(args, config)
+def player_executable(args, config) -> Path:
     build_dir = resolve(args.build_dir or config["paths"]["build"])
     executable = build_dir / ("TankBattlesRecomp.exe" if os.name == "nt" else "TankBattlesRecomp")
     if os.name == "nt" and not executable.is_file():
         executable = build_dir / "Release/TankBattlesRecomp.exe"
     if not executable.is_file():
         raise ValueError(f"Port executable not found: {executable}. Run configure and build first.")
+    return executable
+
+
+def rpcn_account(args, config) -> int:
+    flag = "--rpcn-create-account" if args.action == "create" else "--rpcn-check"
+    return subprocess.run([str(player_executable(args, config)), flag, str(resolve(args.profile))],
+                          cwd=ROOT).returncode
+
+
+def launch(args, config) -> int:
+    elf = elf_path(args, config)
+    executable = player_executable(args, config)
     env = launch_environment(config, args.paramsfo)
     log_path = resolve(args.log) if args.log else None
     if args.log and not log_path.is_relative_to((ROOT / "analysis").resolve()):
@@ -228,7 +239,10 @@ def launch(args, config) -> int:
         print(f"[session] log: {log_path}", flush=True)
     if args.console:
         env["TB_LOG_CONSOLE"] = "1"
-    status, _ = run_session([str(executable), str(elf)], cwd=ROOT, env=env,
+    command = [str(executable), str(elf)]
+    if args.rpcn_profile:
+        command.extend(["--rpcn-profile", str(resolve(args.rpcn_profile))])
+    status, _ = run_session(command, cwd=ROOT, env=env,
                             timeout=args.timeout, log_path=log_path, request_snapshot=True)
     return status
 
@@ -284,15 +298,21 @@ def main() -> int:
     launch_command.add_argument("--elf")
     launch_command.add_argument("--paramsfo", help="Local PARAM.SFO (defaults to config.toml)")
     launch_command.add_argument("--build-dir")
+    launch_command.add_argument("--rpcn-profile", help="Opt in to RPCN using a private profile file")
     launch_command.add_argument("--timeout", type=positive_seconds, help="Maximum run time in seconds; timeout exits with status 124")
     logging = launch_command.add_mutually_exclusive_group()
     logging.add_argument("--log", help="Diagnostic log under analysis/; default: per-user state directory")
     logging.add_argument("--console", action="store_true", help="Print game output to the terminal instead of an automatic log")
+    rpcn_command = commands.add_parser("rpcn", help="Create or check an account on a private RPCN server")
+    rpcn_command.add_argument("action", choices=["create", "check"])
+    rpcn_command.add_argument("profile", help="Private RPCN profile file")
+    rpcn_command.add_argument("--build-dir")
     args = parser.parse_args()
     try:
         with resolve(args.config).open("rb") as file:
             config = tomllib.load(file)
-        result = {"setup": setup, "prepare": prepare, "configure": configure, "build": build, "run": launch}[args.command](args, config)
+        result = {"setup": setup, "prepare": prepare, "configure": configure, "build": build,
+                  "run": launch, "rpcn": rpcn_account}[args.command](args, config)
         return result if isinstance(result, int) else 0
     except (OSError, ValueError, KeyError) as error:
         parser.exit(2, f"error: {error}\n")

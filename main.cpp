@@ -39,6 +39,7 @@
 #include "content_paths.h"
 #include "entitlement.h"
 #include "offline_network.h"
+#include "rpcn/client.h"
 #include "guest_layout.h"
 #include "execution_policy_api.h"
 #include "frame_budget.h"
@@ -54,6 +55,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <mutex>
 #include <thread>
 
@@ -690,8 +692,19 @@ static int run_guest(uint32_t entry, uint32_t stack_top) { return ppu_run(entry,
 
 int tb_player_main(int argc, char** argv)
 {
+    if (argc == 3 && std::strcmp(argv[1], "--rpcn-create-account") == 0)
+        return tb::rpcn::account_command(argv[2], true);
+    if (argc == 3 && std::strcmp(argv[1], "--rpcn-check") == 0)
+        return tb::rpcn::account_command(argv[2], false);
     if (argc < 2) {
-        printf("usage: %s <PPU ELF>\n", argv[0]);
+        printf("usage: %s <PPU ELF> [--rpcn-profile FILE]\n", argv[0]);
+        return 2;
+    }
+    const char* rpcn_profile = nullptr;
+    if (argc == 4 && std::strcmp(argv[2], "--rpcn-profile") == 0)
+        rpcn_profile = argv[3];
+    else if (argc != 2) {
+        fprintf(stderr, "Expected <PPU ELF> [--rpcn-profile FILE]\n");
         return 2;
     }
     tb_player_session_begin();
@@ -745,7 +758,11 @@ int tb_player_main(int argc, char** argv)
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
     tb_settings_init();
 
-    tank_battles_init_offline_network();
+    tank_battles_init_offline_network(rpcn_profile != nullptr);
+    if (rpcn_profile) {
+        if (!tb::rpcn::start(rpcn_profile)) return 2;
+        atexit(tb::rpcn::stop);
+    }
     ppu_recomp_register();   /* lifted function table -> address map */
     tank_battles_milestone("function table registered");
     ps3_load_prx_modules();  /* this game's lifted system PRX, if it has any */

@@ -47,3 +47,24 @@ Observed on the development Linux host (Ryzen 9 7950X, GCC 16.2.1, eight paralle
 All 74 generated PPU compiler invocations in each profile use effective `-O2`. Release uses `-g0` and has neither `.debug_info` nor `.symtab` in the final stripped ELF; the developer executable retains both. Detailed local records are under `analysis/player-builds/`.
 
 The player Release passed a clean 60-second default Battle check on this host with the overlay off and PipeWire audio: 59.9667 completed GAME FPS, mean 16.67595 ms, p95 16.76072 ms and p99 16.78321 ms. Strict fallback counters were zero and the session exited normally. Hardware draw-group fixtures passed async, fence-poll and serial modes. These results cover the selected route, not every mission or Windows; local evidence is under `analysis/performance/player-release-acceptance/`.
+## Private RPCN sign-in
+
+The native player defaults to offline. To test sign-in, create a private profile outside the game directory and give it these settings. Keep the file readable only by your account.
+
+```ini
+endpoint=lmsvc.lan:31313
+ca=rpcn-cert.pem
+npid=YourPlayer
+password=your-rpcn-password
+email=player@example.invalid
+```
+
+Use the certificate your server operator supplied for a private server. The `ca` path is relative to the profile. For a server with a publicly trusted certificate, omit `ca`. Account creation needs `email`. A server that validates email also requires the issued `token` for sign-in.
+
+```bash
+python scripts/port.py rpcn create /path/to/profile.ini
+python scripts/port.py rpcn check /path/to/profile.ini
+python scripts/port.py run --rpcn-profile /path/to/profile.ini --console
+```
+
+Pass `--build-dir` when using a build outside the project's configured default. For a standalone player, the equivalent executable arguments are `--rpcn-create-account FILE`, `--rpcn-check FILE`, or `<PPU ELF> --rpcn-profile FILE`. Sign-in opens the Online Battle submenu. Room creation and gameplay are later milestones.

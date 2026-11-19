@@ -1,0 +1,353 @@
+#include "client.h"
+
+#include <curl/curl.h>
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <mutex>
+#include <span>
+#include <stdexcept>
+#include <string_view>
+#include <thread>
+#include <vector>
+
+namespace tb::rpcn {
+namespace {
+
+using namespace std::chrono_literals;
+using Clock = std::chrono::steady_clock;
+using Bytes = std::vector<unsigned char>;
+constexpr unsigned protocol_version = 34;
+constexpr size_t header_size = 15;
+constexpr size_t max_body = 0x800000 - header_size;
+enum class Packet : unsigned char { request, reply, notification, server_info };
+enum class Command : uint16_t { login, terminate, create };
+
+struct Profile {
+    std::string endpoint, ca, npid, password, token, email;
+};
+
+std::filesystem::path utf8_path(std::string_view value) {
+    return std::filesystem::path(std::u8string(value.begin(), value.end()));
+}
+
+std::string read_small_file(const std::filesystem::path& path, size_t limit) {
+    std::ifstream input(path, std::ios::binary);
+    std::string content(limit + 1, '\0');
+    input.read(content.data(), static_cast<std::streamsize>(content.size()));
+    if (!input.eof() || input.bad() || static_cast<size_t>(input.gcount()) > limit)
+        throw std::runtime_error("Cannot read RPCN profile or CA file within its size limit");
+    content.resize(static_cast<size_t>(input.gcount()));
+    if (content.find('\0') != std::string::npos)
+        throw std::runtime_error("Unexpected NUL byte in RPCN profile or CA file");
+    return content;
+}
+
+Profile read_profile(const char* name, bool create) {
+    const auto path = utf8_path(name);
+    const auto content = read_small_file(path, 4096);
+    Profile profile;
+    std::string ca_path;
+    size_t start = 0;
+    while (start < content.size()) {
+        const size_t end = content.find('\n', start);
+        auto line = std::string_view(content).substr(start, end - start);
+        start = end == std::string::npos ? content.size() : end + 1;
+        if (line.ends_with('\r')) line.remove_suffix(1);
+        if (line.empty() || line.starts_with('#')) continue;
+        const size_t equals = line.find('=');
+        if (equals == std::string_view::npos)
+            throw std::runtime_error("Expected key=value in RPCN profile");
+        const auto key = line.substr(0, equals);
+        const auto value = line.substr(equals + 1);
+        std::string* target = nullptr;
+        if (key == "endpoint") target = &profile.endpoint;
+        else if (key == "ca") target = &ca_path;
+        else if (key == "npid") target = &profile.npid;
+        else if (key == "password") target = &profile.password;
+        else if (key == "token") target = &profile.token;
+        else if (key == "email") target = &profile.email;
+        if (!target || !target->empty() || value.empty())
+            throw std::runtime_error("Unknown, repeated or empty RPCN profile setting");
+        *target = value;
+    }
+    const auto colon = profile.endpoint.rfind(':');
+    const std::string_view endpoint(profile.endpoint);
+    if (colon == std::string::npos || colon == 0 ||
+        endpoint.substr(0, colon).find_first_not_of(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-") != std::string_view::npos)
+        throw std::runtime_error("RPCN endpoint must use hostname:port or IPv4:port");
+    const auto port = endpoint.substr(colon + 1);
+    unsigned port_number = 0;
+    const auto parsed = std::from_chars(port.data(), port.data() + port.size(), port_number);
+    if (parsed.ec != std::errc() || parsed.ptr != port.data() + port.size() ||
+        port_number == 0 || port_number > 65535)
+        throw std::runtime_error("Invalid RPCN endpoint port");
+    if (profile.npid.size() < 3 || profile.npid.size() > 16 ||
+        profile.npid.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
+            std::string::npos)
+        throw std::runtime_error("RPCN NP ID must be 3 to 16 letters, digits, hyphens or underscores");
+    if (profile.password.empty() || (create && profile.email.empty()))
+        throw std::runtime_error("RPCN profile needs a password and account creation also needs an email");
+    if (!ca_path.empty())
+        profile.ca = read_small_file(path.parent_path() / utf8_path(ca_path), 256 * 1024);
+    return profile;
+}
+
+uint64_t read_le(std::span<const unsigned char> data) {
+    uint64_t value = 0;
+    for (size_t i = 0; i < data.size(); ++i) value |= uint64_t(data[i]) << (i * 8);
+    return value;
+}
+
+void append_le(Bytes& bytes, uint64_t value, unsigned count) {
+    for (unsigned i = 0; i < count; ++i) {
+        bytes.push_back(static_cast<unsigned char>(value));
+        value >>= 8;
+    }
+}
+
+struct Frame {
+    Packet type;
+    uint16_t command;
+    uint64_t id;
+    Bytes body;
+};
+
+void require_ok(CURLcode code) {
+    if (code != CURLE_OK) throw std::runtime_error(curl_easy_strerror(code));
+}
+
+int cancel_transfer(void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    return static_cast<const std::stop_token*>(context)->stop_requested() ? 1 : 0;
+}
+
+class Connection {
+public:
+    Connection(const Profile& profile, std::stop_token stop) : stop_(stop) {
+        static const CURLcode init = curl_global_init(CURL_GLOBAL_DEFAULT);
+        require_ok(init);
+        handle_.reset(curl_easy_init());
+        if (!handle_) throw std::runtime_error("Could not allocate RPCN TLS connection");
+        CURL* easy = handle_.get();
+        const auto url = "https://" + profile.endpoint + "/";
+        require_ok(curl_easy_setopt(easy, CURLOPT_URL, url.c_str()));
+        require_ok(curl_easy_setopt(easy, CURLOPT_CONNECT_ONLY, 1L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_PROXY, ""));
+        require_ok(curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 1L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, 2L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2));
+        require_ok(curl_easy_setopt(easy, CURLOPT_SSL_ENABLE_ALPN, 0L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_TCP_KEEPALIVE, 1L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT_MS, 5000L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, 5000L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_NOPROGRESS, 0L));
+        require_ok(curl_easy_setopt(easy, CURLOPT_XFERINFOFUNCTION, cancel_transfer));
+        require_ok(curl_easy_setopt(easy, CURLOPT_XFERINFODATA, &stop_));
+        if (!profile.ca.empty()) {
+            curl_blob ca{const_cast<char*>(profile.ca.data()), profile.ca.size(), CURL_BLOB_COPY};
+            require_ok(curl_easy_setopt(easy, CURLOPT_CAINFO_BLOB, &ca));
+        }
+#ifdef _WIN32
+        else {
+            require_ok(curl_easy_setopt(easy, CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_NATIVE_CA)));
+        }
+#endif
+        require_ok(curl_easy_perform(easy));
+        const auto hello = receive(Clock::now() + 5s);
+        if (hello.type != Packet::server_info || hello.command || hello.id || hello.body.size() != 4)
+            throw std::runtime_error("Invalid RPCN greeting");
+        if (read_le(hello.body) != protocol_version)
+            throw std::runtime_error("RPCN protocol mismatch (expected version 34)");
+    }
+
+    Bytes request(Command command, std::initializer_list<std::string_view> fields) {
+        Bytes data;
+        for (const auto field : fields) {
+            data.insert(data.end(), field.begin(), field.end());
+            data.push_back(0);
+        }
+        Bytes packet{static_cast<unsigned char>(Packet::request)};
+        append_le(packet, static_cast<uint16_t>(command), 2);
+        append_le(packet, header_size + data.size(), 4);
+        const auto id = next_id_++;
+        append_le(packet, id, 8);
+        packet.insert(packet.end(), data.begin(), data.end());
+        const auto deadline = Clock::now() + 5s;
+        write(packet, deadline);
+        for (;;) {
+            auto reply = receive(deadline);
+            if (reply.type == Packet::notification) continue;
+            if (reply.type != Packet::reply || reply.id != id ||
+                reply.command != static_cast<uint16_t>(command) || reply.body.empty())
+                throw std::runtime_error("RPCN replied with an unexpected command or request ID");
+            if (reply.body.front()) {
+                const auto reason = reply.body.front();
+                const char* description = "request rejected";
+                if (reason == 6) description = "account already signed in";
+                if (reason == 7) description = "unknown NP ID";
+                if (reason == 8) description = "incorrect password";
+                if (reason == 9) description = "invalid token";
+                if (reason == 11) description = "NP ID already exists";
+                if (reason == 13) description = "email already registered";
+                throw std::runtime_error(std::string("RPCN ") + description + " (code " +
+                                         std::to_string(reason) + ")");
+            }
+            return std::move(reply.body);
+        }
+    }
+
+    void idle() {
+        while (!stop_.stop_requested()) {
+            auto frame = receive(Clock::time_point::max());
+            if (frame.type != Packet::notification)
+                throw std::runtime_error("Unexpected RPCN packet while signed in");
+            // Account notifications have no guest consumer in the first online profile.
+        }
+    }
+
+private:
+    void check_deadline(Clock::time_point deadline) {
+        if (stop_.stop_requested()) throw std::runtime_error("RPCN operation cancelled");
+        if (Clock::now() >= deadline) throw std::runtime_error("RPCN transfer timed out");
+    }
+
+    void read(std::span<unsigned char> bytes, Clock::time_point deadline) {
+        while (!bytes.empty()) {
+            check_deadline(deadline);
+            size_t n = 0;
+            const auto code = curl_easy_recv(handle_.get(), bytes.data(), bytes.size(), &n);
+            if (code == CURLE_AGAIN) {
+                std::this_thread::sleep_for(15ms);
+                continue;
+            }
+            require_ok(code);
+            if (n == 0) throw std::runtime_error("RPCN server closed the connection");
+            bytes = bytes.subspan(n);
+        }
+    }
+
+    void write(std::span<const unsigned char> bytes, Clock::time_point deadline) {
+        while (!bytes.empty()) {
+            check_deadline(deadline);
+            size_t n = 0;
+            const auto code = curl_easy_send(handle_.get(), bytes.data(), bytes.size(), &n);
+            if (code == CURLE_AGAIN) {
+                std::this_thread::sleep_for(15ms);
+                continue;
+            }
+            require_ok(code);
+            if (n == 0) throw std::runtime_error("RPCN connection stopped accepting bytes");
+            bytes = bytes.subspan(n);
+        }
+    }
+
+    Frame receive(Clock::time_point deadline) {
+        std::array<unsigned char, header_size> header{};
+        auto bytes = std::span(header);
+        read(bytes.first(1), deadline);
+        deadline = std::min(deadline, Clock::now() + 5s);
+        read(bytes.subspan(1), deadline);
+        const auto type = static_cast<Packet>(header[0]);
+        const auto length = read_le(bytes.subspan(3, 4));
+        if (header[0] > static_cast<unsigned char>(Packet::server_info) ||
+            length < header_size || length - header_size > max_body)
+            throw std::runtime_error("Invalid RPCN frame header");
+        Frame frame{type, static_cast<uint16_t>(read_le(bytes.subspan(1, 2))),
+                    read_le(bytes.subspan(7, 8)), Bytes(static_cast<size_t>(length - header_size))};
+        read(frame.body, deadline);
+        return frame;
+    }
+
+    std::stop_token stop_;
+    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle_{nullptr, curl_easy_cleanup};
+    uint64_t next_id_ = 1;
+};
+
+void login(Connection& connection, const Profile& profile) {
+    const auto reply = connection.request(Command::login, {profile.npid, profile.password, profile.token});
+    auto name = std::find(reply.begin() + 1, reply.end(), 0);
+    if (name == reply.end() || name == reply.begin() + 1)
+        throw std::runtime_error("Incomplete RPCN login identity");
+    const auto avatar = std::find(name + 1, reply.end(), 0);
+    if (avatar == reply.end() || reply.end() - avatar < 25 || !read_le(std::span(avatar + 1, 8)))
+        throw std::runtime_error("Incomplete RPCN login identity");
+}
+
+std::mutex state_lock;
+Status session_status;
+bool requested = false;
+std::jthread worker;
+
+void set_status(State state, std::string npid = {}) {
+    std::lock_guard guard(state_lock);
+    session_status = {state, std::move(npid)};
+}
+
+}
+
+bool start(const char* profile_path) {
+    try {
+        auto profile = read_profile(profile_path, false);
+        requested = true; // Set once before guest threads start.
+        set_status(State::connecting);
+        worker = std::jthread([profile = std::move(profile)](std::stop_token stop) {
+            try {
+                Connection connection(profile, stop);
+                login(connection, profile);
+                set_status(State::online, profile.npid);
+                fprintf(stderr, "[rpcn] Signed in to %s as %s\n", profile.endpoint.c_str(), profile.npid.c_str());
+                connection.idle();
+            } catch (const std::exception& error) {
+                if (!stop.stop_requested()) fprintf(stderr, "[rpcn] %s\n", error.what());
+            }
+            set_status(State::offline);
+        });
+        return true;
+    } catch (const std::exception& error) {
+        fprintf(stderr, "[rpcn] %s\n", error.what());
+        return false;
+    }
+}
+
+void stop() {
+    if (worker.joinable()) {
+        worker.request_stop();
+        worker.join();
+    }
+}
+
+bool enabled() { return requested; }
+
+Status status() {
+    std::lock_guard guard(state_lock);
+    return session_status;
+}
+
+int account_command(const char* profile_path, bool create) {
+    try {
+        const auto profile = read_profile(profile_path, create);
+        Connection connection(profile, {});
+        if (create) {
+            connection.request(Command::create, {profile.npid, profile.password, profile.npid,
+                                                  "https://example.invalid/avatar", profile.email});
+            printf("[rpcn] Created account %s\n", profile.npid.c_str());
+        } else {
+            login(connection, profile);
+            printf("[rpcn] Signed in as %s\n", profile.npid.c_str());
+            connection.request(Command::terminate, {});
+        }
+        return 0;
+    } catch (const std::exception& error) {
+        fprintf(stderr, "[rpcn] %s\n", error.what());
+        return 1;
+    }
+}
+
+}

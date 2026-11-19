@@ -323,6 +323,7 @@ set(TB_HOST_SOURCES
     content_paths.cpp
     entitlement.cpp
     offline_network.cpp
+    rpcn/client.cpp
     offline_network_probe.cpp
     entitlement_edat.c
     asset_probe.cpp
@@ -331,6 +332,8 @@ set(TB_HOST_SOURCES
 )
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeTargets.cmake")
+find_package(CURL 7.77 REQUIRED)
+target_link_libraries(tank_battles_host PUBLIC CURL::libcurl)
 add_executable(${PROJECT_NAME} runtime_entry.cpp ${RECOMP_SOURCES} ${SPU_SOURCES})
 target_link_libraries(${PROJECT_NAME} PRIVATE tank_battles_host tank_battles_boot)
 

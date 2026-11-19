@@ -6,6 +6,7 @@
     {"name": "sdl2", "features": ["vulkan"]},
     {"name": "glslang", "features": ["tools", "opt"]},
     "vulkan-headers",
-    "libiconv"
+    "libiconv",
+    {"name": "curl", "default-features": false, "features": ["openssl"]}
   ]
 }

@@ -29,14 +29,14 @@ Requires Python 3.11+ and a C17/C++20 compiler.
 **Arch Linux / Omarchy:**
 
 ```bash
-sudo pacman -S --needed base-devel git python python-pip cmake ninja pkgconf sdl2-compat vulkan-headers vulkan-icd-loader glslang spirv-tools
+sudo pacman -S --needed base-devel git python python-pip cmake ninja pkgconf sdl2-compat vulkan-headers vulkan-icd-loader glslang spirv-tools curl
 ```
 
 **Ubuntu 24.04+ / Debian 13+:**
 
 ```bash
 sudo apt update
-sudo apt install build-essential git python3 python3-venv python3-pip cmake ninja-build pkg-config libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools
+sudo apt install build-essential git python3 python3-venv python3-pip cmake ninja-build pkg-config libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools libcurl4-openssl-dev
 ```
 
 Also install your GPU's Vulkan driver. Arch uses [sdl2-compat](https://archlinux.org/packages/extra/x86_64/sdl2-compat/) for SDL2; Ubuntu's [glslang packages](https://packages.ubuntu.com/noble/glslang-dev) include the development libraries required by the build.
@@ -85,7 +85,7 @@ From that folder, launch:
 ./TankBattlesRecomp game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf
 ```
 
-The executable still needs the ELF and game data. Python, the SDK, generated C/C++ sources, original PKG and SELF key file are not needed to play. The destination Linux system needs compatible SDL2, glslang/SPIRV-Tools runtime libraries, the Vulkan loader and a GPU driver; this is not a self-contained AppImage. Saves are under `game/dev_hdd0/home/00000001/savedata/`.
+The executable still needs the ELF and game data. Python, the SDK, generated C/C++ sources, original PKG and SELF key file are not needed to play. The destination Linux system needs compatible SDL2, glslang/SPIRV-Tools and libcurl runtime libraries, the Vulkan loader and a GPU driver; this is not a self-contained AppImage. Saves are under `game/dev_hdd0/home/00000001/savedata/`.
 
 This finished folder contains game code, assets and your license material. Keep it private.
 

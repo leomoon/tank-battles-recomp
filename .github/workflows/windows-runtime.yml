@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: ['master', 'validation/windows-runtime-*']
-    paths: ['*.cpp', '*.h', 'CMakeLists.txt', 'cmake/**', 'scripts/**', 'sdk_overrides/**', 'tests/**', 'ci/windows-runtime/**', '.github/workflows/windows-runtime.yml']
+    paths: ['*.cpp', '*.h', 'CMakeLists.txt', 'cmake/**', 'scripts/**', 'sdk_overrides/**', 'rpcn/**', 'tests/**', 'ci/windows-runtime/**', '.github/workflows/windows-runtime.yml']
   pull_request:
-    paths: ['*.cpp', '*.h', 'CMakeLists.txt', 'cmake/**', 'scripts/**', 'sdk_overrides/**', 'tests/**', 'ci/windows-runtime/**', '.github/workflows/windows-runtime.yml']
+    paths: ['*.cpp', '*.h', 'CMakeLists.txt', 'cmake/**', 'scripts/**', 'sdk_overrides/**', 'rpcn/**', 'tests/**', 'ci/windows-runtime/**', '.github/workflows/windows-runtime.yml']
 permissions:
   contents: read
 jobs:
@@ -56,6 +56,8 @@ jobs:
         run: cmake --build build-runtime --config Release --parallel 4
       - name: Run CPU smoke and production contracts
         run: ctest --test-dir build-runtime -C Release --output-on-failure
+      - name: Check game-free RPCN account protocol
+        run: python scripts/test_rpcn_client.py --runner build-runtime/Release/runtime_cpu_smoke.exe
       - name: Create audited game-free runtime bundle
         run: cmake --build build-runtime --config Release --target runtime_bundle
       - uses: actions/upload-artifact@v7.0.2
