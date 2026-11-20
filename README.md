@@ -118,7 +118,7 @@ python -m pip install -r external/ps3recomp/requirements.txt
 
 The player links a prebuilt, game-free *runtime bundle*: the PS3 runtime, Vulkan renderer and host services. It must come from the same commit as your checkout. Either:
 
-- **Download it** from the repository's **Test and build Windows and Linux runtimes** GitHub Actions run for your tag's commit, and extract the Windows artifact to a folder such as `build-runtime\runtime-bundle`. This workflow runs only on tag pushes, in one job: Windows and Linux tests first, then Windows and Linux bundle builds. Linux builds and tests use Ubuntu 24.04 through WSL on the Windows runner. Each platform has its own downloadable artifact. Your clang-cl version must match the bundle compiler (currently Clang 22.1.3); setup refuses a mismatch.
+- **Download it** from the repository's **Test and build Windows and Linux runtimes** GitHub Actions run for your tag's commit, and extract the Windows artifact to a folder such as `build-runtime\runtime-bundle`. This workflow runs only on tag pushes. Its graph has a Test stage followed by parallel Windows and Linux stages, each on its native runner. Both build stages require Test to pass and produce separate downloadable artifacts. Your clang-cl version must match the bundle compiler (currently Clang 22.1.3); setup refuses a mismatch.
 - **Or build it** with the same pinned [vcpkg](https://github.com/microsoft/vcpkg) dependencies as CI:
 
   ```powershell

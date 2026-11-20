@@ -5,16 +5,40 @@ on:
 permissions:
   contents: read
 jobs:
-  runtime:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools libcurl4-openssl-dev
+          python -m pip install -r external/ps3recomp/requirements.txt
+      - name: Test host services, entitlement and texture decoder
+        run: |
+          for suite in host_services entitlement texture_decode; do
+            cmake -S "tests/$suite" -B "build-test-$suite" -G Ninja -DCMAKE_BUILD_TYPE=Release
+            cmake --build "build-test-$suite" --parallel 4
+            ctest --test-dir "build-test-$suite" --output-on-failure
+          done
+          python scripts/test_patch_network_events.py
+          python -m unittest discover -s scripts -p test_runtime_bundle.py
+          python -m unittest discover -s scripts -p test_runtime_abi.py
+  windows:
+    name: Windows
+    needs: test
     runs-on: windows-2025-vs2026
-    timeout-minutes: 120
+    timeout-minutes: 90
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
@@ -35,30 +59,10 @@ jobs:
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             "-DVCPKG_MANIFEST_DIR=$pwd/ci/windows-runtime" -DVCPKG_TARGET_TRIPLET=x64-windows-static
-      - name: Set up Linux dependencies in WSL
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          wsl --set-default-version 1
-          wsl --install --distribution Ubuntu-24.04 --no-launch --web-download
-          wsl --set-version Ubuntu-24.04 1
-          $workspace = (wsl -d Ubuntu-24.04 -u root -- wslpath -u "$env:GITHUB_WORKSPACE").Trim()
-          "WSL_WORKSPACE=$workspace" >> $env:GITHUB_ENV
-          wsl -d Ubuntu-24.04 -u root -- bash "$workspace/ci/runtime-linux.sh" setup "$workspace" "$env:GITHUB_SHA"
-      # Tests need compiled fixtures. The test steps compile those first;
-      # neither release bundle is produced until every test step succeeds.
-      - name: Test Windows runtime, host services, entitlement and decoder
+      - name: Compile and test Windows production runtime
         run: ./ci/runtime-windows.ps1 -Phase test
-      - name: Test Linux runtime, host services, entitlement and decoder
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          wsl -d Ubuntu-24.04 -u root -- bash "$env:WSL_WORKSPACE/ci/runtime-linux.sh" test
-      - name: Build Windows runtime
+      - name: Package and verify Windows runtime
         run: ./ci/runtime-windows.ps1 -Phase build
-      - name: Build Linux runtime
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          wsl -d Ubuntu-24.04 -u root -- bash "$env:WSL_WORKSPACE/ci/runtime-linux.sh" build "$env:WSL_WORKSPACE" "$env:GITHUB_SHA"
       - name: Upload Windows runtime
         uses: actions/upload-artifact@v7.0.2
         with:
@@ -66,6 +70,36 @@ jobs:
           path: build-runtime-windows/runtime-bundle/
           if-no-files-found: error
           retention-days: 14
+  linux:
+    name: Linux
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools libcurl4-openssl-dev
+          python -m pip install -r external/ps3recomp/requirements.txt
+      - name: Compile and test Linux production runtime
+        run: |
+          cmake -S . -B build-runtime-linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DTB_BUILD_RUNTIME_BUNDLE=ON -DPS3RECOMP_RSX_VULKAN=ON
+          python scripts/compile_depth_shader.py --check
+          cmake --build build-runtime-linux --parallel 4
+          ctest --test-dir build-runtime-linux --output-on-failure
+          python scripts/test_rpcn_client.py --runner build-runtime-linux/runtime_cpu_smoke
+      - name: Package and verify Linux runtime
+        run: |
+          cmake --build build-runtime-linux --target runtime_bundle
+          python scripts/runtime_bundle.py verify build-runtime-linux/runtime-bundle --source "$GITHUB_SHA"
+          cp -a build-runtime-linux/runtime-bundle 'relocated runtime bundle'
+          python scripts/verify_runtime_consumer.py --bundle 'relocated runtime bundle' --output 'fresh consumer with spaces' --source "$GITHUB_SHA"
+          python scripts/verify_bundle_contracts.py --bundle 'relocated runtime bundle'
+          tar -czf linux-runtime.tar.gz -C build-runtime-linux runtime-bundle
       - name: Upload Linux runtime
         uses: actions/upload-artifact@v7.0.2
         with:
