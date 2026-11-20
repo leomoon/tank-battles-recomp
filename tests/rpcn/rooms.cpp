@@ -2,6 +2,7 @@
 #include "ps3emu/nid.h"
 #include "stubs.h"
 #include "rpcn/client.h"
+#include "rpcn/basic.h"
 #include "rpcn/matching.h"
 #include "rpcn/matching_data.h"
 #include "external/ps3recomp/libs/network/np_peer_transport.h"
@@ -286,6 +287,40 @@ int main(int argc,char** argv) {
     const bool owner=std::string_view(argv[3])=="owner";
     const bool close_room=std::string_view(argv[3])=="close";
     const bool full=std::string_view(argv[3]).starts_with("full");
+    if (mode=="invite-stale") {
+        tb::rpcn::BasicMessage message;message.communication_id="NPWR00718_00";
+        message.features=1;message.data.resize(24);
+        std::fill_n(message.data.begin(),8,0xff);
+        auto response=tb::rpcn::submit(tb::rpcn::Request::send_message,
+            tb::rpcn::encode_basic_message(message,{argv[3]}));
+        assert(response.valid() && response.wait_for(6s)==std::future_status::ready);
+        const auto reply=response.get().body;assert(reply.size()==1 && !reply.front());
+        puts("PASS: stale-room invitation delivered for native recovery test");
+        tb::rpcn::stop();return 0;
+    }
+    if (mode=="inbox") {
+        for (unsigned i=0;i<1800;++i) {
+            for (const auto& notice:tb::rpcn::take_basic_notifications()) {
+                const auto msg=tb::rpcn::decode_basic_notification(notice.body);
+                assert(msg.sender==argv[3]);
+                printf("PASS: invitation sender=%s communication=%s type=%u subtype=%u flags=0x%x attachment=%zu bytes\n",
+                    msg.sender.c_str(),msg.communication_id.c_str(),msg.type,msg.subtype,msg.features,msg.data.size());
+                tb::rpcn::stop();return 0;
+            }
+            std::this_thread::sleep_for(100ms);
+        }
+        fprintf(stderr,"Timed out waiting for invitation\n");tb::rpcn::stop();return 1;
+    }
+    if (mode=="friend") {
+        std::string peer=argv[3];
+        std::vector<unsigned char> body(peer.begin(),peer.end());body.push_back(0);
+        auto response=tb::rpcn::submit(tb::rpcn::Request::add_friend,std::move(body));
+        assert(response.valid() && response.wait_for(6s)==std::future_status::ready);
+        const auto reply=response.get().body;
+        if (reply.empty()) return 1;
+        printf("AddFriend result=%u (0 accepted; 28 already requested/friends)\n",reply.front());
+        tb::rpcn::stop();return reply.front()==0 || reply.front()==28?0:1;
+    }
     if (mode=="signal" || mode=="peer") {
         const auto identity=tb::rpcn::status();
         std::memset(memory.data()+payload,0,36);

@@ -3,6 +3,7 @@
 #include "offline_network.h"
 #include "stubs.h"
 #include "rpcn/client.h"
+#include "rpcn/basic.h"
 #include "rpcn/matching.h"
 #include "ppu_recomp.h"
 #include "ps3emu/nid.h"
@@ -63,7 +64,7 @@ void reset_np_services() {
     score.clear();tus.clear();np2=false;clear_matching();manager_callback={};
     voice_pending=false;++voice_generation;signaling.fill(0);
     std::erase_if(completions,[](const auto& e){return e.owner!=Owner::net;});
-    if (tb::rpcn::enabled()) tb::rpcn::reset_matching();
+    if (tb::rpcn::enabled()) { tb::rpcn::reset_matching(); tb::rpcn::reset_basic(); }
 }
 void delegate(const char* name, ppu_context* c) {
     tb_sdk_ps3_hle_call(ps3_compute_nid(name),c);
@@ -401,7 +402,7 @@ void check_callbacks(ppu_context* c) {
         }
         completions=std::move(retry);
     }
-    if (tb::rpcn::enabled()) tb::rpcn::pump_matching();
+    if (tb::rpcn::enabled()) { tb::rpcn::pump_matching(); tb::rpcn::pump_basic(); }
     delegate("cellSysutilCheckCallback",c);
     if(!c->gpr[3] && queue_error)c->gpr[3]=queue_error;
     if (queued && offline_trace_enabled()) {
@@ -470,6 +471,7 @@ void tank_battles_init_offline_network(bool use_rpcn){
 void tank_battles_register_offline_network(){
     for(const auto& binding:bindings)tank_battles_register_override(ps3_compute_nid(binding.name),binding.fn);
     if (tb::rpcn::enabled()) {
+        tb::rpcn::register_basic();
         tb::rpcn::register_matching();
         // The NPUB30154 data_receiver publishes its socket before its first
         // recvfrom. The creator immediately tries the peer handshake.

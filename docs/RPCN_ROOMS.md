@@ -57,3 +57,11 @@ matching_rooms /private/this-player.ini peer OTHER_PLAYER_NPID
 The fixture waits up to two minutes for the other account's UDP registration, then checks real peer activation, the primary/extended callback arguments, the reported peer address and shared-context cleanup. Close any game using that account first. The Windows runtime bundle includes `bin/matching_rooms.exe`, `peer_udp_fixture.exe` and `sysnet_fixture.exe`, so this check needs no game or separate fixture build. Run `matching_rooms PROFILE signal UNUSED_NPID` to verify bounded failure for an unreachable peer.
 
 Local checks cover malformed discovery responses, real loopback challenge/ack exchanges, nonce rejection and guest socket handoff/filtering through the production SDK. The LAN service has confirmed the Linux player's registration. Lobby agreement, actual game traffic and synchronized movement/hits on two computers remain unverified.
+
+## Friend invitations
+
+With both accounts signed in, the host can leave the lobby private and choose **Invite Friends**. A small native panel shows one online friend at a time. Use Up/Down to choose, Cross or keyboard Z to send, and Circle or keyboard X to cancel. The recipient chooses **Online Battle → Accept Invitation**, selects the sender in the same panel and confirms. The original game attachment supplies the room ID to Matching2.
+
+Accounts must be mutual friends. With the relevant game closed, run `matching_rooms PROFILE friend OTHER_NPID` once for each account, using its own profile. The first request is pending until the other account reciprocates. These commands use stock RPCN and change the accounts' friend relationship. The test accounts used for the LAN validation are now mutual friends.
+
+The Linux sender has delivered its original type-3, subtype-0, flags-1 invitation and 24-byte attachment through stock RPCN. The Linux recipient has read a test invitation through the game's real receive/event/attachment calls and displayed “The game room is unavailable” for a deliberately nonexistent room. Cross-machine private-room invitations and physical controller acceptance remain pending. Enable `TB_OFFLINE_TRACE=1` for guest menu/network traces. `[rpcn-basic]` lines record invitation fields, callback results and attachment reads, without passwords or tokens.

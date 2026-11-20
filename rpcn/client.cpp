@@ -134,7 +134,27 @@ struct Pending {
 std::mutex state_lock;
 Status session_status;
 std::deque<Pending> requests;
-std::vector<Notification> notifications;
+std::vector<Notification> notifications, basic_notifications;
+std::vector<Friend> friend_list;
+
+// RPCN login/presence fields are length bounded even when sent by a private server.
+struct Reader {
+    std::span<const unsigned char> bytes;
+    uint64_t integer(size_t count) {
+        if (count>8 || bytes.size()<count) throw std::runtime_error("Truncated RPCN friend data");
+        const auto value=read_le(bytes.first(count)); bytes=bytes.subspan(count); return value;
+    }
+    std::string string(size_t limit) {
+        const auto end=std::find(bytes.begin(),bytes.end(),0);
+        const auto size=static_cast<size_t>(end-bytes.begin());
+        if (end==bytes.end() || size>limit) throw std::runtime_error("Invalid RPCN friend string");
+        std::string result(bytes.begin(),end); bytes=bytes.subspan(size+1); return result;
+    }
+    void skip(size_t count) {
+        if (bytes.size()<count) throw std::runtime_error("Truncated RPCN friend presence");
+        bytes=bytes.subspan(count);
+    }
+};
 bool requested = false;
 std::mutex worker_lock;
 std::optional<Profile> active_profile;
@@ -260,9 +280,30 @@ public:
 
 private:
     void notify(Frame frame) {
-        // Room membership, room-data and room-message notifications.
-        if (frame.command>3 && frame.command!=9) return;
+        if (frame.command>3 && frame.command!=9 && frame.command!=6 && frame.command!=7 &&
+            frame.command!=8 && frame.command!=10) return;
         std::lock_guard guard(state_lock);
+        if (frame.command>=6 && frame.command<=8) {
+            Reader input{frame.body};
+            Friend update;
+            if (frame.command!=7) update.online=input.integer(1)!=0;
+            if (frame.command==8) update.timestamp=input.integer(8);
+            update.npid=input.string(16);
+            if (update.npid.empty() || !input.bytes.empty()) throw std::runtime_error("Malformed RPCN friend notification");
+            auto found=std::find_if(friend_list.begin(),friend_list.end(),[&](const Friend& f){return f.npid==update.npid;});
+            if (frame.command==7) {
+                if (found!=friend_list.end()) friend_list.erase(found);
+            } else if (found!=friend_list.end()) {
+                if (update.timestamp>=found->timestamp) *found=std::move(update);
+            } else if (frame.command==6 && friend_list.size()<1024) friend_list.push_back(std::move(update));
+            return;
+        }
+        if (frame.command==10) {
+            if (basic_notifications.size()>=64 || frame.body.size()>8192)
+                throw std::runtime_error("RPCN invitation notification limit exceeded");
+            basic_notifications.push_back({frame.command,std::move(frame.body)});
+            return;
+        }
         if (notifications.size()>=128 || frame.body.size()>256*1024)
             throw std::runtime_error("RPCN room notification limit exceeded");
         notifications.push_back({frame.command,std::move(frame.body)});
@@ -359,6 +400,19 @@ uint64_t login(Connection& connection, const Profile& profile) {
     const auto avatar = std::find(name + 1, reply.end(), 0);
     if (avatar == reply.end() || reply.end() - avatar < 25 || !read_le(std::span(avatar + 1, 8)))
         throw std::runtime_error("Incomplete RPCN login identity");
+    Reader input{std::span(avatar+9,reply.end())};
+    std::vector<Friend> snapshot;
+    const auto count=input.integer(4);
+    if (count>1024) throw std::runtime_error("RPCN friend count limit exceeded");
+    for (size_t i=0;i<count;++i) {
+        Friend f; f.npid=input.string(16); f.online=input.integer(1)!=0;
+        if (f.npid.empty()) throw std::runtime_error("Empty RPCN friend identity");
+        input.skip(12); input.string(128); input.string(192); input.string(64);
+        const auto size=input.integer(4);
+        if (size>128) throw std::runtime_error("RPCN presence limit exceeded");
+        input.skip(size); snapshot.push_back(std::move(f));
+    }
+    { std::lock_guard guard(state_lock); friend_list=std::move(snapshot); }
     return read_le(std::span(avatar + 1, 8));
 }
 
@@ -396,6 +450,8 @@ void set_status(State state, std::string npid = {}, uint64_t user_id = 0, std::s
         for (auto& pending : requests) pending.completion.set_value({});
         requests.clear();
         notifications.clear();
+        basic_notifications.clear();
+        friend_list.clear();
     }
 }
 
@@ -480,6 +536,18 @@ std::vector<Notification> take_notifications() {
     std::vector<Notification> result;
     result.swap(notifications);
     return result;
+}
+
+std::vector<Notification> take_basic_notifications() {
+    std::lock_guard guard(state_lock);
+    std::vector<Notification> result;
+    result.swap(basic_notifications);
+    return result;
+}
+
+std::vector<Friend> friends() {
+    std::lock_guard guard(state_lock);
+    return friend_list;
 }
 
 int account_command(const char* profile_path, bool create) {

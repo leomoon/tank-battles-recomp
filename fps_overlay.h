@@ -18,3 +18,9 @@ struct FpsSample {
         ready=true;start=ns;guest=flips;presents=refreshes;
     }
 };
+
+// A small native selection panel shares the window-only overlay surface.
+void tb_panel_show(const char* title, const char* choice, const char* action);
+void tb_panel_close();
+bool tb_panel_input(uint32_t buttons);
+uint32_t tb_panel_take_input();

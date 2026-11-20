@@ -8,7 +8,7 @@ find_package(CURL 7.77 REQUIRED)
 find_package(Threads REQUIRED)
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${PORT_ROOT}/scripts/runtime_abi.py"
     --sdk "${SDK}" --output "${CMAKE_CURRENT_BINARY_DIR}/abi" COMMAND_ERROR_IS_FATAL ANY)
-add_executable(matching_rooms rooms.cpp "${PORT_ROOT}/rpcn/client.cpp"
+add_executable(matching_rooms rooms.cpp "${PORT_ROOT}/rpcn/client.cpp" "${PORT_ROOT}/rpcn/basic_wire.cpp"
     "${PORT_ROOT}/rpcn/matching.cpp" "${PORT_ROOT}/rpcn/matching_room.cpp"
     "${PORT_ROOT}/rpcn/signaling.cpp" "${PORT_ROOT}/rpcn/peer_udp.cpp")
 target_include_directories(matching_rooms PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/abi" "${PORT_ROOT}" "${SDK}/include")
@@ -39,3 +39,23 @@ else()
 endif()
 add_test(NAME peer_udp_handshake COMMAND peer_udp)
 set_tests_properties(peer_udp_handshake PROPERTIES TIMEOUT 10)
+
+add_executable(basic_wire basic_wire.cpp "${PORT_ROOT}/rpcn/basic_wire.cpp")
+target_include_directories(basic_wire PRIVATE "${PORT_ROOT}")
+if(MSVC)
+    target_compile_options(basic_wire PRIVATE /UNDEBUG)
+else()
+    target_compile_options(basic_wire PRIVATE -UNDEBUG)
+endif()
+add_test(NAME basic_invitation_wire COMMAND basic_wire)
+
+add_executable(basic_adapter basic_adapter.cpp "${PORT_ROOT}/rpcn/basic.cpp"
+    "${PORT_ROOT}/rpcn/basic_wire.cpp")
+target_include_directories(basic_adapter PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/abi" "${PORT_ROOT}" "${SDK}/include")
+target_compile_definitions(basic_adapter PRIVATE PPU_NO_INLINE_LOADS NOMINMAX)
+if(MSVC)
+    target_compile_options(basic_adapter PRIVATE /UNDEBUG)
+else()
+    target_compile_options(basic_adapter PRIVATE -UNDEBUG)
+endif()
+add_test(NAME basic_invitation_adapter COMMAND basic_adapter)

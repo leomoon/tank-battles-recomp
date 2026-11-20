@@ -22,6 +22,7 @@ struct Reply {
 };
 
 enum class Request : uint16_t {
+    add_friend = 8, send_message = 29,
     server_list = 12, world_list = 13, create_room = 14, join_room = 15,
     leave_room = 16, search_room = 17, get_room_data = 20, set_room_data = 21,
     ping_room_owner = 25, send_room_message = 26,
@@ -35,6 +36,9 @@ struct Notification {
 
 std::future<Reply> submit(Request command, std::vector<unsigned char> body);
 std::vector<Notification> take_notifications();
+std::vector<Notification> take_basic_notifications();
+struct Friend { std::string npid; bool online=false; uint64_t timestamp=0; };
+std::vector<Friend> friends();
 
 bool start(const char* profile_path);
 void retry_sign_in();

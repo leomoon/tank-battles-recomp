@@ -33,6 +33,14 @@ int main(){
  assert(!tb_fps_overlay(pixels.data(),1,h,pitch,1));assert(pixels==original);
  tb_fps_toggle();assert(!tb_fps_overlay(pixels.data(),w,h,pitch,1));assert(pixels==original);
  tb_fps_toggle();assert(tb_fps_overlay(pixels.data(),w,h,pitch,1));
+ tb_fps_toggle();
+ tb_panel_show("INVITE FRIEND","PlayerB","ARROWS Z OK X BACK");
+ assert(tb_fps_overlay(pixels.data(),w,h,pitch,1));
+ assert(tb_panel_input(0x4000));assert(!tb_panel_take_input()); // Opening button is still held.
+ assert(tb_panel_input(0));assert(tb_panel_input(0x4000));assert(tb_panel_take_input()==0x4000);
+ assert(tb_panel_input(0x4000));assert(!tb_panel_take_input());
+ tb_panel_close();assert(!tb_panel_input(0x4000));
+ assert(!tb_fps_overlay(pixels.data(),w,h,pitch,1));
 }
 ''')
 subprocess.run(['c++','-std=c++20','-O2','-I'+str(ROOT),str(out/'test.cpp'),str(ROOT/'fps_overlay.cpp'),str(ROOT/'player_settings.cpp'),str(ROOT/'rendering_profile.cpp'),'-pthread','-o',str(out/'test')],check=True)
