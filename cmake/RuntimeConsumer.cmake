@@ -53,7 +53,7 @@ if(WIN32)
     endif()
     target_link_options(TankBattlesRuntime INTERFACE "/WHOLEARCHIVE:${TB_RUNTIME_ROOT}/lib/${tb_host}")
     target_link_libraries(TankBattlesRuntime INTERFACE "${TB_RUNTIME_ROOT}/lib/${tb_boot}" "${TB_RUNTIME_ROOT}/lib/${tb_host}" "${TB_RUNTIME_ROOT}/lib/${tb_runtime}"
-        ${tb_dependency_libraries} ws2_32 ole32 bcrypt crypt32 dbghelp user32 gdi32 winmm imm32 oleaut32 version setupapi shell32 advapi32 uuid d3d12 dxgi dxguid cfgmgr32 hid)
+        ${tb_dependency_libraries} ws2_32 iphlpapi ole32 bcrypt crypt32 dbghelp user32 gdi32 winmm imm32 oleaut32 version setupapi shell32 advapi32 uuid d3d12 dxgi dxguid cfgmgr32 hid)
     target_compile_definitions(TankBattlesRuntime INTERFACE NOMINMAX _CRT_SECURE_NO_WARNINGS)
 else()
     find_package(SDL2 CONFIG REQUIRED)

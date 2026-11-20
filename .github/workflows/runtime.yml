@@ -1,0 +1,75 @@
+name: Test and build Windows and Linux runtimes
+on:
+  push:
+    tags: ['*']
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: windows-runtime-static-0df93a05-llvm22-v2
+      - name: Set up Windows dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install -r external/ps3recomp/requirements.txt
+          git -C "$env:VCPKG_INSTALLATION_ROOT" fetch origin 0df93a05b9de080129e653ec4776d7e14a1b2e4f --depth 1
+          git -C "$env:VCPKG_INSTALLATION_ROOT" checkout --detach 0df93a05b9de080129e653ec4776d7e14a1b2e4f
+          & "$env:VCPKG_INSTALLATION_ROOT/bootstrap-vcpkg.bat" -disableMetrics
+          cmake -S . -B build-runtime-windows -A x64 -T ClangCL `
+            -DTB_BUILD_RUNTIME_BUNDLE=ON -DPS3RECOMP_RSX_VULKAN=ON `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            "-DVCPKG_MANIFEST_DIR=$pwd/ci/windows-runtime" -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - name: Set up Linux dependencies in WSL
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          wsl --set-default-version 1
+          wsl --install --distribution Ubuntu-24.04 --no-launch --web-download
+          wsl --set-version Ubuntu-24.04 1
+          $workspace = (wsl -d Ubuntu-24.04 -u root -- wslpath -u "$env:GITHUB_WORKSPACE").Trim()
+          "WSL_WORKSPACE=$workspace" >> $env:GITHUB_ENV
+          wsl -d Ubuntu-24.04 -u root -- bash "$workspace/ci/runtime-linux.sh" setup "$workspace" "$env:GITHUB_SHA"
+      # Tests need compiled fixtures. The test steps compile those first;
+      # neither release bundle is produced until every test step succeeds.
+      - name: Test Windows runtime, host services, entitlement and decoder
+        run: ./ci/runtime-windows.ps1 -Phase test
+      - name: Test Linux runtime, host services, entitlement and decoder
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          wsl -d Ubuntu-24.04 -u root -- bash "$env:WSL_WORKSPACE/ci/runtime-linux.sh" test
+      - name: Build Windows runtime
+        run: ./ci/runtime-windows.ps1 -Phase build
+      - name: Build Linux runtime
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          wsl -d Ubuntu-24.04 -u root -- bash "$env:WSL_WORKSPACE/ci/runtime-linux.sh" build "$env:WSL_WORKSPACE" "$env:GITHUB_SHA"
+      - name: Upload Windows runtime
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: windows-runtime-${{ github.sha }}
+          path: build-runtime-windows/runtime-bundle/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Linux runtime
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: linux-runtime-${{ github.sha }}
+          path: linux-runtime.tar.gz
+          if-no-files-found: error
+          retention-days: 14
