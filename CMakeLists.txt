@@ -330,6 +330,8 @@ set(TB_HOST_SOURCES
     rpcn/client.cpp
     rpcn/matching.cpp
     rpcn/matching_room.cpp
+    rpcn/signaling.cpp
+    rpcn/peer_udp.cpp
     offline_network_probe.cpp
     entitlement_edat.c
     asset_probe.cpp

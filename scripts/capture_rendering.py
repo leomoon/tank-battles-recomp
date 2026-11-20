@@ -287,7 +287,9 @@ def main():
     worker.start()
     try:
         status, session = run_session(command,
-            cwd=ROOT, env=env, timeout=args.timeout, log_path=output / 'startup.log', request_snapshot=True, on_start=process_started)
+            cwd=ROOT, env=env, timeout=args.timeout, log_path=output / 'startup.log',
+            request_snapshot=True, on_start=process_started,
+            shutdown_grace=5 if args.rpcn_profile else 2)
     finally:
         stop.set()
         worker.join(timeout=5)

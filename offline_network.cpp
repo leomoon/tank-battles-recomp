@@ -17,6 +17,8 @@ int np_is_initialized();
 int32_t cellSysutilQueueGuestCallbackArgs(uint32_t, const uint64_t*);
 void cellSysutilQueueEvent(int, uint32_t, uint32_t);
 void tb_sdk_ps3_hle_call(uint32_t, ppu_context*);
+void ppu_thread_set_startup_wait_entry(uint64_t);
+void ppu_thread_note_block(uint64_t);
 }
 namespace {
 constexpr uint32_t np_not_init=0x8002aa01, np_already=0x8002aa02, np_argument=0x8002aa03;
@@ -261,6 +263,9 @@ uint32_t perform(Op op,ppu_context* c) {
     case Op::voice_init:
         if(!ea(c->gpr[4],132))return avc_argument;
         if(a!=100 && a!=110 && a!=120 && a!=130 && a!=140)return avc_argument;
+        // The title starts a chat worker as soon as initialization succeeds.
+        // Reject unavailable voice before it can start and retry that worker.
+        if (tb::rpcn::enabled()) return avc_not_supported;
         for(unsigned i=0;i<132;++i)vm_write8(b+i,0);
         vm_write16(b,a);return 0;
     case Op::voice_load:
@@ -450,9 +455,11 @@ const Binding bindings[]={
 }
 void tank_battles_init_offline_network(bool use_rpcn){
 #ifdef _WIN32
-    _putenv_s("PS3_NET_ONLINE","");_putenv_s("PSNR_SERVER","");
+    _putenv_s("PS3_NET_ONLINE",use_rpcn?"1":"");_putenv_s("PSNR_SERVER","");
 #else
-    unsetenv("PS3_NET_ONLINE");unsetenv("PSNR_SERVER");
+    if (use_rpcn) setenv("PS3_NET_ONLINE","1",1);
+    else unsetenv("PS3_NET_ONLINE");
+    unsetenv("PSNR_SERVER");
 #endif
     if (use_rpcn)
         fprintf(stderr,"[rpcn] Tank Battles profile: connecting to the selected server\n");
@@ -463,6 +470,24 @@ void tank_battles_register_offline_network(){
     for(const auto& binding:bindings)tank_battles_register_override(ps3_compute_nid(binding.name),binding.fn);
     if (tb::rpcn::enabled()) {
         tb::rpcn::register_matching();
+        // The NPUB30154 data_receiver publishes its socket before its first
+        // recvfrom. The creator immediately tries the peer handshake.
+        ppu_thread_set_startup_wait_entry(0x00AB6880);
+        tank_battles_register_override(ps3_compute_nid("recvfrom"),
+            [](ppu_context* c){
+                if (c->lr==0x001D178C) ppu_thread_note_block(c->thread_id);
+                delegate("recvfrom",c);
+            });
+        tank_battles_register_override(ps3_compute_nid("cellMsgDialogOpen2"),
+            [](ppu_context* c){
+                // The empty-search notice uses a buttonless dialog, but the
+                // Join Game screen only exits on the dialog's OK or Cancel.
+                // Identify its caller through the dialog wrapper's saved LR.
+                const auto caller_slot = c->gpr[1] + 0x2B0;
+                if (c->lr==0x001D6D7C && ea(caller_slot,8) && vm_read64(caller_slot)==0x000DB778)
+                    c->gpr[3]=(c->gpr[3] & ~0x30ull) | 0x20ull; // BUTTON_TYPE_OK
+                delegate("cellMsgDialogOpen2",c);
+            });
         tank_battles_register_override(ps3_compute_nid("sceNpManagerGetNpId"),
             [](ppu_context* c){handler<Op::manager_id>(c,"sceNpManagerGetNpId");});
         tank_battles_register_override(ps3_compute_nid("cellNetCtlAddHandler"),

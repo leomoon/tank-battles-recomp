@@ -1,4 +1,5 @@
 #include "matching.h"
+#include "signaling.h"
 #include "client.h"
 #include "matching_data.h"
 #include "stubs.h"
@@ -108,6 +109,7 @@ void leave(const Bytes& communication_id,uint64_t room) {
 }
 
 void clear_matching() {
+    reset_signaling();
     initialized=false;
     discovery_event_pending=false;
     discovery_event_node=0;
@@ -363,6 +365,7 @@ void reset_matching() {
 }
 
 void pump_matching() {
+    pump_signaling();
     std::lock_guard guard(lock);
     for (auto& [id,ctx]:contexts)
         if (ctx.discovery.valid() && ctx.discovery.wait_for(0ms)==std::future_status::ready)
@@ -467,6 +470,7 @@ void pump_matching() {
 }
 
 void register_matching() {
+    register_signaling();
     struct Binding {const char* name; tank_battles_override_fn handler;};
     static constexpr Binding bindings[]={
         {"sceNpMatching2Init",handler<Op::init>},

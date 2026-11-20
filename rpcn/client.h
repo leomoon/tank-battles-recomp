@@ -12,6 +12,8 @@ enum class State { offline, connecting, online };
 struct Status {
     State state = State::offline;
     std::string npid;
+    uint64_t user_id = 0;
+    std::string endpoint;
 };
 
 struct Reply {
@@ -23,6 +25,7 @@ enum class Request : uint16_t {
     server_list = 12, world_list = 13, create_room = 14, join_room = 15,
     leave_room = 16, search_room = 17, get_room_data = 20, set_room_data = 21,
     ping_room_owner = 25, send_room_message = 26,
+    signaling_info = 27,
 };
 
 struct Notification {

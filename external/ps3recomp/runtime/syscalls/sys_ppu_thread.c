@@ -125,6 +125,13 @@ static ppu_thread_info* find_thread(uint64_t thread_id)
 #define PRIO_START_TIMEOUT_MS  200
 #define PRIO_START_SPIN_MS     2      /* yield instead of sleeping for this long: Sleep(1) is ~15 ms on Windows */
 
+static uint64_t s_startup_wait_entry;
+
+void ppu_thread_set_startup_wait_entry(uint64_t entry)
+{
+    s_startup_wait_entry = entry;
+}
+
 static int prio_start_enabled(void)
 {
     static int on = -1;
@@ -632,9 +639,10 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
     if (!t->joinable) pthread_detach(t->host_thread);   /* nobody pthread_joins it */
 #endif
 
-    const int preempts = prio_start_enabled() && priority < creator_priority(ctx->thread_id);
+    const int wait_for_block = (entry != 0 && entry == s_startup_wait_entry) ||
+                               (prio_start_enabled() && priority < creator_priority(ctx->thread_id));
     table_unlock();
-    if (preempts) wait_first_block(t, thread_id);
+    if (wait_for_block) wait_first_block(t, thread_id);
     return CELL_OK;
 }
 

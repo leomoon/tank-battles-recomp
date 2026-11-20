@@ -245,7 +245,8 @@ def launch(args, config) -> int:
     if args.rpcn_profile:
         command.extend(["--rpcn-profile", str(resolve(args.rpcn_profile))])
     status, _ = run_session(command, cwd=ROOT, env=env,
-                            timeout=args.timeout, log_path=log_path, request_snapshot=True)
+                            timeout=args.timeout, log_path=log_path, request_snapshot=True,
+                            shutdown_grace=5 if args.rpcn_profile else 2)
     return status
 
 

@@ -51,8 +51,11 @@
 #include "../../runtime/ppu/ppu_context.h"
 #include "../../runtime/ppu/ppu_memory.h"
 #include "../../include/ps3emu/nid.h"
+#include "np_peer_transport.h"
 #include "np_psnr.h"   /* np_psnr_p2p_port, NAT traversal on the P2P socket */
+#include "../../runtime/platform/win32_compat.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -83,6 +86,8 @@ typedef struct {
     int           stream;   /* SOCK_STREAM or SOCK_STREAM_P2P */
     uint16_t      vport;    /* the P2P vport it was bound to */
     int           listening;
+    atomic_int    abort_receive;
+    uint64_t      receive_timeout_ms;
 } net_socket_slot;
 
 static net_socket_slot s_sockets[SYS_NET_MAX_SOCKETS];
@@ -179,6 +184,8 @@ static int alloc_slot(host_socket_t fd)
             s_sockets[i].stream = 0;
             s_sockets[i].vport = 0;
             s_sockets[i].listening = 0;
+            atomic_store(&s_sockets[i].abort_receive, 0);
+            s_sockets[i].receive_timeout_ms = 0;
             return i;
         }
     return -1;
@@ -268,10 +275,7 @@ int32_t sys_net_initialize_network_ex(void* param)
 int32_t sys_net_finalize_network(void)
 {
     for (int i = 1; i < SYS_NET_MAX_SOCKETS; i++)
-        if (s_sockets[i].in_use) {
-            host_closesocket(s_sockets[i].host_fd);
-            s_sockets[i].in_use = 0;
-        }
+        if (s_sockets[i].in_use) sys_net_bnet_close(i);
     return CELL_OK;
 }
 
@@ -358,6 +362,22 @@ static int relayed_pending(int32_t s)
  * it (np_psnr.h), so they leave through the same router mapping as the
  * title's own traffic. ponytail: the first one bound; titles have one. */
 static int s_p2p_dgram = -1;
+static const np_peer_transport* s_peer_transport;
+void np_set_peer_transport(const np_peer_transport* transport) { s_peer_transport=transport; }
+
+static int uses_native_peer_udp(int32_t s)
+{
+    return s_peer_transport && s_sockets[s].p2p && !s_sockets[s].stream;
+}
+
+static int32_t abort_peer_receive(int32_t s, uint32_t flags)
+{
+    if (!valid_socket(s)) return fail(SYS_NET_EBADF);
+    if (flags) return fail(SYS_NET_EINVAL);
+    if (!uses_native_peer_udp(s)) return fail(SYS_NET_EOPNOTSUPP);
+    atomic_store(&s_sockets[s].abort_receive, 1);
+    return 0;
+}
 
 static int p2p_send(const void* buf, uint32_t len, const uint8_t ip[4], uint16_t port)
 {
@@ -375,6 +395,7 @@ int32_t sys_net_bnet_close(int32_t s)
 {
     if (!valid_socket(s)) return fail(SYS_NET_EBADF);
     if (s == s_p2p_dgram) {
+        if (s_peer_transport) s_peer_transport->closed();
         s_p2p_dgram = -1;
         np_psnr_set_p2p_sender(NULL);
     }
@@ -414,7 +435,20 @@ int32_t sys_net_bnet_bind(int32_t s, const sys_net_sockaddr* addr, uint32_t addr
 #endif
         }
     }
-    if (bind(s_sockets[s].host_fd, (struct sockaddr*)&a, sizeof(a)) == HOST_SOCKET_ERROR) {
+    int transferred = 0;
+    if (s_peer_transport && s_sockets[s].p2p)
+        fprintf(stderr,"[rpcn-p2p] bind socket=%d stream=%d vport=%u port=%u\n",
+                s,s_sockets[s].stream,s_sockets[s].vport,ntohs(a.sin_port));
+    if (s_peer_transport && s_sockets[s].p2p && !s_sockets[s].stream && s_p2p_dgram < 0) {
+        int64_t shared = s_peer_transport->take_socket();
+        if (shared >= 0) {
+            host_closesocket(s_sockets[s].host_fd);
+            s_sockets[s].host_fd = (host_socket_t)shared;
+            set_nonblocking(s_sockets[s].host_fd, s_sockets[s].nonblocking);
+            transferred = 1;
+        }
+    }
+    if (!transferred && bind(s_sockets[s].host_fd, (struct sockaddr*)&a, sizeof(a)) == HOST_SOCKET_ERROR) {
         /* Last resort for a P2P stream socket that still can't share the
          * port: an ephemeral one. It connects, but titles that check the
          * source port will ignore what it sends. */
@@ -632,10 +666,34 @@ int32_t sys_net_bnet_sendto(int32_t s, const void* buf, uint32_t len, int32_t fl
 int32_t sys_net_bnet_recv(int32_t s, void* buf, uint32_t len, int32_t flags)
 {
     if (!valid_socket(s)) return fail(SYS_NET_EBADF);
+    if (uses_native_peer_udp(s))
+        return sys_net_bnet_recvfrom(s, buf, len, flags, NULL, NULL);
     if (would_block(s, flags, POLLIN)) return fail(SYS_NET_EWOULDBLOCK);
     int n = recv(s_sockets[s].host_fd, GUEST_PTR(EA(buf), char*), (int)len, host_recv_flags(flags));
     if (net_trace() && n != HOST_SOCKET_ERROR) trace("recv", s, n, NULL);
     return n == HOST_SOCKET_ERROR ? host_fail() : n;
+}
+
+/* An unconnected datagram socket cannot be interrupted with shutdown() on
+ * Winsock. Poll in bounded waits so the guest can abort its receiver and
+ * join the thread before that receiver closes its own socket. */
+static int32_t wait_peer_receive(net_socket_slot* slot, int32_t flags, uint64_t deadline)
+{
+    host_pollfd pollfd = { slot->host_fd, POLLIN, 0 };
+    for (;;) {
+        if (atomic_exchange(&slot->abort_receive, 0)) return fail(SYS_NET_EINTR);
+        if (slot->nonblocking) return 0;
+        int wait_ms = (flags & SYS_NET_MSG_DONTWAIT) ? 0 : 25;
+        if (wait_ms && deadline) {
+            const uint64_t now = GetTickCount64();
+            if (now >= deadline) return fail(SYS_NET_EWOULDBLOCK);
+            if (deadline - now < (uint64_t)wait_ms) wait_ms = (int)(deadline - now);
+        }
+        const int ready = host_poll(&pollfd, 1, wait_ms);
+        if (ready < 0) return host_fail();
+        if (ready > 0) return atomic_exchange(&slot->abort_receive, 0) ? fail(SYS_NET_EINTR) : 0;
+        if (!wait_ms) return fail(SYS_NET_EWOULDBLOCK);
+    }
 }
 
 int32_t sys_net_bnet_recvfrom(int32_t s, void* buf, uint32_t len, int32_t flags,
@@ -644,17 +702,41 @@ int32_t sys_net_bnet_recvfrom(int32_t s, void* buf, uint32_t len, int32_t flags,
     struct sockaddr_in a;
     socklen_t alen;
     int n;
+    static _Thread_local char transport_packet[65536];
     if (!valid_socket(s)) return fail(SYS_NET_EBADF);
+    if (len && !buf) return fail(SYS_NET_EFAULT);
+    net_socket_slot* slot = &s_sockets[s];
+    const int native_transport = uses_native_peer_udp(s);
+    const uint64_t deadline = native_transport && slot->receive_timeout_ms
+        ? GetTickCount64() + slot->receive_timeout_ms : 0;
 
     /* psnr's own packets (probe replies, peers' punches) are consumed here;
      * the title only ever sees its own traffic. */
     do {
-        if (would_block(s, flags, POLLIN)) return fail(SYS_NET_EWOULDBLOCK);
+        if (native_transport) {
+            const int32_t ready = wait_peer_receive(slot, flags, deadline);
+            if (ready) return ready;
+        } else if (would_block(s, flags, POLLIN)) return fail(SYS_NET_EWOULDBLOCK);
         memset(&a, 0, sizeof(a));
         alen = sizeof(a);
-        n = recvfrom(s_sockets[s].host_fd, GUEST_PTR(EA(buf), char*), (int)len,
+        n = recvfrom(s_sockets[s].host_fd, native_transport ? transport_packet : GUEST_PTR(EA(buf), char*),
+                     native_transport ? (int)sizeof(transport_packet) : (int)len,
                      host_recv_flags(flags), (struct sockaddr*)&a, &alen);
         if (n == HOST_SOCKET_ERROR) return host_fail();
+        if (native_transport && n > 0) {
+            if (s_peer_transport->filter(transport_packet, (uint32_t)n,
+                                        (const uint8_t*)&a.sin_addr, ntohs(a.sin_port))) {
+                if (host_recv_flags(flags) & MSG_PEEK) {
+                    alen=sizeof(a);
+                    recvfrom(s_sockets[s].host_fd, transport_packet, sizeof(transport_packet),
+                             host_recv_flags(flags) & ~MSG_PEEK, (struct sockaddr*)&a, &alen);
+                }
+                n=0;
+                continue;
+            }
+            if ((uint32_t)n>len) n=(int)len;
+            if (n > 0) memcpy(vm_base + EA(buf), transport_packet, (size_t)n);
+        }
         if (s_sockets[s].p2p && n > 0) {
             uint32_t un = (uint32_t)n;
             uint16_t port = ntohs(a.sin_port);
@@ -676,10 +758,15 @@ int32_t sys_net_bnet_recvfrom(int32_t s, void* buf, uint32_t len, int32_t flags,
  * -----------------------------------------------------------------------*/
 
 /* Timeouts arrive as a PS3 timeval {s64 sec, s64 usec}. */
+static uint64_t timeout_us(uint32_t val_ea, uint32_t len)
+{
+    return len >= 16 ? vm_read64(val_ea) * 1000000ull + vm_read64(val_ea + 8)
+                     : (uint64_t)vm_read32(val_ea) * 1000ull;
+}
+
 static int set_timeout(host_socket_t fd, int name, uint32_t val_ea, uint32_t len)
 {
-    uint64_t us = (len >= 16) ? vm_read64(val_ea) * 1000000ull + vm_read64(val_ea + 8)
-                              : (uint64_t)vm_read32(val_ea) * 1000ull;
+    uint64_t us = timeout_us(val_ea, len);
 #ifdef _WIN32
     DWORD ms = (DWORD)(us / 1000);
     return setsockopt(fd, SOL_SOCKET, name, (const char*)&ms, sizeof(ms));
@@ -716,7 +803,13 @@ int32_t sys_net_bnet_setsockopt(int32_t s, int32_t level, int32_t optname,
             case SYS_NET_SO_RCVBUF:
                 ret = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (const char*)&val, sizeof(val)); break;
             case SYS_NET_SO_SNDTIMEO: ret = set_timeout(fd, SO_SNDTIMEO, v_ea, optlen); break;
-            case SYS_NET_SO_RCVTIMEO: ret = set_timeout(fd, SO_RCVTIMEO, v_ea, optlen); break;
+            case SYS_NET_SO_RCVTIMEO:
+                ret = set_timeout(fd, SO_RCVTIMEO, v_ea, optlen);
+                if (!ret) {
+                    const uint64_t us = timeout_us(v_ea, optlen);
+                    s_sockets[s].receive_timeout_ms = us / 1000 + (us % 1000 != 0);
+                }
+                break;
             case SYS_NET_SO_LINGER: {
                 struct linger l;
                 l.l_onoff  = (unsigned short)vm_read32(v_ea);
@@ -1057,6 +1150,7 @@ static void h_errno_loc(ppu_context* ctx)   { RET_U(sys_net_errno_loc()); }
 static void h_h_errno_loc(ppu_context* ctx) { RET_U(scratch(&s_h_errno_ea, 4)); }
 static void h_init(ppu_context* ctx)        { RET_S(sys_net_initialize_network_ex(PTR(3))); }
 static void h_finalize(ppu_context* ctx)    { RET_S(sys_net_finalize_network()); }
+static void h_abort_socket(ppu_context* ctx) { RET_S(abort_peer_receive(S32(3), R32(4))); }
 static void h_ok(ppu_context* ctx)          { RET_S(0); }
 
 void ps3_net_host_register(unsigned int (*guest_alloc)(unsigned int size, unsigned int align))
@@ -1079,6 +1173,7 @@ void ps3_net_host_register(unsigned int (*guest_alloc)(unsigned int size, unsign
         { "sys_net_initialize_network_ex", h_init },
         { "sys_net_finalize_network", h_finalize },
         { "sys_net_free_thread_context", h_ok },
+        { "sys_net_abort_socket", h_abort_socket },
         { "sys_net_abort_resolver", h_ok },
     };
     s_alloc = guest_alloc;

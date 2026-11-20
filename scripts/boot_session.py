@@ -10,7 +10,8 @@ import sys
 import time
 from diagnostic_logs import open_log, normalize_log_permissions
 
-def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snapshot=False, on_start=None):
+def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snapshot=False,
+                on_start=None, shutdown_grace=2):
     env = dict(env, TB_SESSION_CAPTURED="1")  # This parent owns the child's stdio.
     if log_path:
         log_path = Path(log_path)
@@ -34,7 +35,7 @@ def run_session(command, *, cwd, env, timeout=None, log_path=None, request_snaps
         elif process.poll() is None:
             process.terminate()
         try:
-            process.wait(timeout=2)
+            process.wait(timeout=shutdown_grace)
         except subprocess.TimeoutExpired:
             if os.name == "posix":
                 try: os.killpg(process.pid, signal.SIGKILL)

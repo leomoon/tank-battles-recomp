@@ -611,4 +611,19 @@ RoomNotice room_notice(const Notification& notification,std::string_view npid) {
     return output;
 }
 
+PeerAddress signaling_address(const Reply& reply) {
+    const auto bytes=std::span(reply.body);
+    if (bytes.empty() || bytes[0]) throw std::runtime_error("RPCN peer endpoint unavailable");
+    const Fields fields(unpack(bytes.subspan(1)));
+    const auto ip=fields.bytes(1);
+    const auto port=fields.wrapped(2);
+    if (ip.size()!=4 || !port || port>65535)
+        throw std::runtime_error("RPCN peer endpoint requires a valid IPv4 address and port");
+    PeerAddress result;
+    std::copy(ip.begin(),ip.end(),result.ip.begin());
+    result.port=static_cast<uint16_t>(port);
+    if (result.ip==std::array<unsigned char,4>{}) throw std::runtime_error("RPCN peer has not registered its endpoint");
+    return result;
+}
+
 }

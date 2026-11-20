@@ -43,7 +43,8 @@ class RpcnClientTests(unittest.TestCase):
         cls.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         cls.tls.load_cert_chain(cls.directory / "cert.pem", cls.directory / "key.pem")
 
-    def run_client(self, action, exchange, *, expected_error=None, trust_fixture=True, version=34):
+    def run_client(self, action, exchange, *, expected_error=None, trust_fixture=True, version=34,
+                   stale_login_attempts=0):
         errors = []
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -53,14 +54,20 @@ class RpcnClientTests(unittest.TestCase):
 
             def serve():
                 try:
-                    with listener.accept()[0] as tcp:
-                        tcp.settimeout(6)
-                        with self.tls.wrap_socket(tcp, server_side=True) as stream:
-                            for byte in packet(3, 0, 0, struct.pack("<I", version)):
-                                stream.sendall(bytes([byte]))
-                            if exchange:
-                                with stream.makefile("rb") as reader:
-                                    exchange(stream, reader)
+                    for attempt in range(stale_login_attempts + 1):
+                        with listener.accept()[0] as tcp:
+                            tcp.settimeout(6)
+                            with self.tls.wrap_socket(tcp, server_side=True) as stream:
+                                for byte in packet(3, 0, 0, struct.pack("<I", version)):
+                                    stream.sendall(bytes([byte]))
+                                if exchange:
+                                    with stream.makefile("rb") as reader:
+                                        if attempt < stale_login_attempts:
+                                            command, request_id, _ = request(reader)
+                                            self.assertEqual(command, 0)
+                                            stream.sendall(packet(1, command, request_id, b"\x06"))
+                                        else:
+                                            exchange(stream, reader)
                 except (ssl.SSLError, ConnectionError) as error:
                     if trust_fixture:
                         errors.append(error)
@@ -87,7 +94,7 @@ class RpcnClientTests(unittest.TestCase):
             else:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_login_notification_and_logout(self):
+    def login_notification_and_logout(self, stale_login_attempts=0):
         def exchange(stream, reader):
             self.assertEqual(request(reader), (0, 1, b"FixturePlayer\0fixture-secret\0\0"))
             stream.sendall(packet(2, 0, 0, b"ignored notification"))
@@ -95,7 +102,13 @@ class RpcnClientTests(unittest.TestCase):
             stream.sendall(packet(1, 0, 1, login))
             self.assertEqual(request(reader), (1, 2, b""))
             stream.sendall(packet(1, 1, 2, b"\0"))
-        self.run_client("--rpcn-check", exchange)
+        self.run_client("--rpcn-check", exchange, stale_login_attempts=stale_login_attempts)
+
+    def test_login_notification_and_logout(self):
+        self.login_notification_and_logout()
+
+    def test_quick_relaunch_retries_login_on_a_fresh_connection(self):
+        self.login_notification_and_logout(stale_login_attempts=2)
 
     def test_account_create(self):
         def exchange(stream, reader):

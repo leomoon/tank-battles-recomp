@@ -112,6 +112,7 @@ add_custom_target(runtime_bundle
       --tool "$<TARGET_FILE:hle_fixture>" --tool "$<TARGET_FILE:positions_fixture>" --tool "$<TARGET_FILE:hotplug_fixture>"
       --tool "$<TARGET_FILE:keyboard_fixture>" --tool "$<TARGET_FILE:audio_fixture>" --tool "$<TARGET_FILE:cache_fixture>"
       --tool "$<TARGET_FILE:timeline_fixture>" --tool "$<TARGET_FILE:entitlement_fixture>"
+      --tool "$<TARGET_FILE:matching_rooms>" --tool "$<TARGET_FILE:peer_udp_fixture>" --tool "$<TARGET_FILE:sysnet_fixture>"
       ${tb_audio_burst_tools}
       $<$<BOOL:${WIN32}>:--dependencies> $<$<BOOL:${WIN32}>:${TB_BUNDLE_DEPENDENCIES}>
     DEPENDS tank_battles_host_archive tank_battles_boot_archive tank_battles_cpu_boot ps3recomp_runtime
@@ -119,6 +120,7 @@ add_custom_target(runtime_bundle
       runtime_shader_check
       ${tb_audio_burst_dependency}
       hle_fixture positions_fixture hotplug_fixture keyboard_fixture audio_fixture cache_fixture timeline_fixture entitlement_fixture
+      matching_rooms peer_udp_fixture sysnet_fixture
     COMMAND_EXPAND_LISTS VERBATIM)
 add_test(NAME runtime_bundle_integrity COMMAND "${Python3_EXECUTABLE}" -m unittest discover
     -s "${CMAKE_CURRENT_SOURCE_DIR}/scripts" -p test_runtime_bundle.py)

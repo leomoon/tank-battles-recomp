@@ -30,6 +30,10 @@ constexpr size_t max_body = 0x800000 - header_size;
 enum class Packet : unsigned char { request, reply, notification, server_info };
 enum class Command : uint16_t { login, terminate, create };
 
+struct LoginBusy : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 struct Profile {
     std::string endpoint, ca, npid, password, token, email;
 };
@@ -138,6 +142,11 @@ void require_ok(CURLcode code) {
     if (code != CURLE_OK) throw std::runtime_error(curl_easy_strerror(code));
 }
 
+void initialize_curl() {
+    static const CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
+    require_ok(result);
+}
+
 int cancel_transfer(void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
     return static_cast<const std::stop_token*>(context)->stop_requested() ? 1 : 0;
 }
@@ -145,8 +154,6 @@ int cancel_transfer(void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_
 class Connection {
 public:
     Connection(const Profile& profile, std::stop_token stop) : stop_(stop) {
-        static const CURLcode init = curl_global_init(CURL_GLOBAL_DEFAULT);
-        require_ok(init);
         handle_.reset(curl_easy_init());
         if (!handle_) throw std::runtime_error("Could not allocate RPCN TLS connection");
         CURL* easy = handle_.get();
@@ -191,6 +198,8 @@ public:
         auto reply = exchange(static_cast<uint16_t>(command), data);
         if (reply.front()) {
             const auto reason = reply.front();
+            if (command == Command::login && reason == 6)
+                throw LoginBusy("RPCN account already signed in (code 6). Close the other session and retry.");
             const char* description = "request rejected";
             if (reason == 6) description = "account already signed in";
             if (reason == 7) description = "unknown NP ID";
@@ -237,6 +246,14 @@ public:
                 throw std::runtime_error("Unexpected RPCN packet while signed in");
             notify(std::move(frame));
         }
+        // On orderly shutdown the server can start releasing the login and
+        // room before the TLS connection closes. Never hold up game exit.
+        stop_ = {};
+        try {
+            exchange(static_cast<uint16_t>(Command::terminate), {}, 500ms);
+        } catch (const std::exception&) {
+            // Closing the connection also triggers server cleanup.
+        }
     }
 
 private:
@@ -249,14 +266,14 @@ private:
         notifications.push_back({frame.command,std::move(frame.body)});
     }
 
-    Bytes exchange(uint16_t command, const Bytes& data) {
+    Bytes exchange(uint16_t command, const Bytes& data, Clock::duration timeout = 5s) {
         Bytes packet{static_cast<unsigned char>(Packet::request)};
         append_le(packet, command, 2);
         append_le(packet, header_size + data.size(), 4);
         const auto id = next_id_++;
         append_le(packet, id, 8);
         packet.insert(packet.end(), data.begin(), data.end());
-        const auto deadline = Clock::now() + 5s;
+        const auto deadline = Clock::now() + timeout;
         write(packet, deadline);
         for (;;) {
             auto reply = receive(deadline);
@@ -332,7 +349,7 @@ private:
     uint64_t next_id_ = 1;
 };
 
-void login(Connection& connection, const Profile& profile) {
+uint64_t login(Connection& connection, const Profile& profile) {
     const auto reply = connection.request(Command::login, {profile.npid, profile.password, profile.token});
     auto name = std::find(reply.begin() + 1, reply.end(), 0);
     if (name == reply.end() || name == reply.begin() + 1)
@@ -340,11 +357,39 @@ void login(Connection& connection, const Profile& profile) {
     const auto avatar = std::find(name + 1, reply.end(), 0);
     if (avatar == reply.end() || reply.end() - avatar < 25 || !read_le(std::span(avatar + 1, 8)))
         throw std::runtime_error("Incomplete RPCN login identity");
+    return read_le(std::span(avatar + 1, 8));
 }
 
-void set_status(State state, std::string npid = {}) {
+struct Login {
+    std::unique_ptr<Connection> connection;
+    uint64_t user_id;
+};
+
+Login connect_and_login(const Profile& profile, const std::stop_token& stop) {
+    const auto retry_until = Clock::now() + 6s;
+    bool retrying = false;
+    for (;;) {
+        if (stop.stop_requested()) throw std::runtime_error("RPCN operation cancelled");
+        try {
+            auto connection = std::make_unique<Connection>(profile, stop);
+            const auto user_id = login(*connection, profile);
+            return {std::move(connection), user_id};
+        } catch (const LoginBusy&) {
+            // RPCN closes a rejected login connection. A quick restart can
+            // see this reply while the old connection's room cleanup runs.
+            if (Clock::now() + 500ms >= retry_until) throw;
+            if (!retrying) {
+                fprintf(stderr, "[rpcn] Waiting for the previous sign-in to clear\n");
+                retrying = true;
+            }
+            std::this_thread::sleep_for(500ms);
+        }
+    }
+}
+
+void set_status(State state, std::string npid = {}, uint64_t user_id = 0, std::string endpoint = {}) {
     std::lock_guard guard(state_lock);
-    session_status = {state, std::move(npid)};
+    session_status = {state, std::move(npid), user_id, std::move(endpoint)};
     if (state == State::offline) {
         for (auto& pending : requests) pending.completion.set_value({});
         requests.clear();
@@ -357,15 +402,15 @@ void set_status(State state, std::string npid = {}) {
 bool start(const char* profile_path) {
     try {
         auto profile = read_profile(profile_path, false);
+        initialize_curl();
         requested = true; // Set once before guest threads start.
         set_status(State::connecting);
         worker = std::jthread([profile = std::move(profile)](std::stop_token stop) {
             try {
-                Connection connection(profile, stop);
-                login(connection, profile);
-                set_status(State::online, profile.npid);
+                auto [connection, user_id] = connect_and_login(profile, stop);
+                set_status(State::online, profile.npid, user_id, profile.endpoint);
                 fprintf(stderr, "[rpcn] Signed in to %s as %s\n", profile.endpoint.c_str(), profile.npid.c_str());
-                connection.serve();
+                connection->serve();
             } catch (const std::exception& error) {
                 if (!stop.stop_requested()) fprintf(stderr, "[rpcn] %s\n", error.what());
             }
@@ -412,15 +457,16 @@ std::vector<Notification> take_notifications() {
 int account_command(const char* profile_path, bool create) {
     try {
         const auto profile = read_profile(profile_path, create);
-        Connection connection(profile, {});
+        initialize_curl();
         if (create) {
+            Connection connection(profile, {});
             connection.request(Command::create, {profile.npid, profile.password, profile.npid,
                                                   "https://example.invalid/avatar", profile.email});
             printf("[rpcn] Created account %s\n", profile.npid.c_str());
         } else {
-            login(connection, profile);
+            auto session = connect_and_login(profile, {});
             printf("[rpcn] Signed in as %s\n", profile.npid.c_str());
-            connection.request(Command::terminate, {});
+            session.connection->request(Command::terminate, {});
         }
         return 0;
     } catch (const std::exception& error) {
