@@ -51,6 +51,7 @@
 #include "../../runtime/ppu/ppu_context.h"
 #include "../../runtime/ppu/ppu_memory.h"
 #include "../../include/ps3emu/nid.h"
+#include "np_peer_transport.h"
 #include "np_psnr.h"   /* np_psnr_p2p_port, NAT traversal on the P2P socket */
 
 #include <stdio.h>
@@ -268,10 +269,7 @@ int32_t sys_net_initialize_network_ex(void* param)
 int32_t sys_net_finalize_network(void)
 {
     for (int i = 1; i < SYS_NET_MAX_SOCKETS; i++)
-        if (s_sockets[i].in_use) {
-            host_closesocket(s_sockets[i].host_fd);
-            s_sockets[i].in_use = 0;
-        }
+        if (s_sockets[i].in_use) sys_net_bnet_close(i);
     return CELL_OK;
 }
 
@@ -358,6 +356,8 @@ static int relayed_pending(int32_t s)
  * it (np_psnr.h), so they leave through the same router mapping as the
  * title's own traffic. ponytail: the first one bound; titles have one. */
 static int s_p2p_dgram = -1;
+static const np_peer_transport* s_peer_transport;
+void np_set_peer_transport(const np_peer_transport* transport) { s_peer_transport=transport; }
 
 static int p2p_send(const void* buf, uint32_t len, const uint8_t ip[4], uint16_t port)
 {
@@ -375,6 +375,7 @@ int32_t sys_net_bnet_close(int32_t s)
 {
     if (!valid_socket(s)) return fail(SYS_NET_EBADF);
     if (s == s_p2p_dgram) {
+        if (s_peer_transport) s_peer_transport->closed();
         s_p2p_dgram = -1;
         np_psnr_set_p2p_sender(NULL);
     }
@@ -414,7 +415,20 @@ int32_t sys_net_bnet_bind(int32_t s, const sys_net_sockaddr* addr, uint32_t addr
 #endif
         }
     }
-    if (bind(s_sockets[s].host_fd, (struct sockaddr*)&a, sizeof(a)) == HOST_SOCKET_ERROR) {
+    int transferred = 0;
+    if (s_peer_transport && s_sockets[s].p2p)
+        fprintf(stderr,"[rpcn-p2p] bind socket=%d stream=%d vport=%u port=%u\n",
+                s,s_sockets[s].stream,s_sockets[s].vport,ntohs(a.sin_port));
+    if (s_peer_transport && s_sockets[s].p2p && !s_sockets[s].stream && s_p2p_dgram < 0) {
+        int64_t shared = s_peer_transport->take_socket();
+        if (shared >= 0) {
+            host_closesocket(s_sockets[s].host_fd);
+            s_sockets[s].host_fd = (host_socket_t)shared;
+            set_nonblocking(s_sockets[s].host_fd, s_sockets[s].nonblocking);
+            transferred = 1;
+        }
+    }
+    if (!transferred && bind(s_sockets[s].host_fd, (struct sockaddr*)&a, sizeof(a)) == HOST_SOCKET_ERROR) {
         /* Last resort for a P2P stream socket that still can't share the
          * port: an ephemeral one. It connects, but titles that check the
          * source port will ignore what it sends. */
@@ -632,6 +646,8 @@ int32_t sys_net_bnet_sendto(int32_t s, const void* buf, uint32_t len, int32_t fl
 int32_t sys_net_bnet_recv(int32_t s, void* buf, uint32_t len, int32_t flags)
 {
     if (!valid_socket(s)) return fail(SYS_NET_EBADF);
+    if (s_peer_transport && s_sockets[s].p2p && !s_sockets[s].stream)
+        return sys_net_bnet_recvfrom(s, buf, len, flags, NULL, NULL);
     if (would_block(s, flags, POLLIN)) return fail(SYS_NET_EWOULDBLOCK);
     int n = recv(s_sockets[s].host_fd, GUEST_PTR(EA(buf), char*), (int)len, host_recv_flags(flags));
     if (net_trace() && n != HOST_SOCKET_ERROR) trace("recv", s, n, NULL);
@@ -644,7 +660,10 @@ int32_t sys_net_bnet_recvfrom(int32_t s, void* buf, uint32_t len, int32_t flags,
     struct sockaddr_in a;
     socklen_t alen;
     int n;
+    static _Thread_local char transport_packet[65536];
     if (!valid_socket(s)) return fail(SYS_NET_EBADF);
+    if (len && !buf) return fail(SYS_NET_EFAULT);
+    const int native_transport = s_peer_transport && s_sockets[s].p2p && !s_sockets[s].stream;
 
     /* psnr's own packets (probe replies, peers' punches) are consumed here;
      * the title only ever sees its own traffic. */
@@ -652,9 +671,24 @@ int32_t sys_net_bnet_recvfrom(int32_t s, void* buf, uint32_t len, int32_t flags,
         if (would_block(s, flags, POLLIN)) return fail(SYS_NET_EWOULDBLOCK);
         memset(&a, 0, sizeof(a));
         alen = sizeof(a);
-        n = recvfrom(s_sockets[s].host_fd, GUEST_PTR(EA(buf), char*), (int)len,
+        n = recvfrom(s_sockets[s].host_fd, native_transport ? transport_packet : GUEST_PTR(EA(buf), char*),
+                     native_transport ? (int)sizeof(transport_packet) : (int)len,
                      host_recv_flags(flags), (struct sockaddr*)&a, &alen);
         if (n == HOST_SOCKET_ERROR) return host_fail();
+        if (native_transport && n > 0) {
+            if (s_peer_transport->filter(transport_packet, (uint32_t)n,
+                                        (const uint8_t*)&a.sin_addr, ntohs(a.sin_port))) {
+                if (host_recv_flags(flags) & MSG_PEEK) {
+                    alen=sizeof(a);
+                    recvfrom(s_sockets[s].host_fd, transport_packet, sizeof(transport_packet),
+                             host_recv_flags(flags) & ~MSG_PEEK, (struct sockaddr*)&a, &alen);
+                }
+                n=0;
+                continue;
+            }
+            if ((uint32_t)n>len) n=(int)len;
+            if (n > 0) memcpy(vm_base + EA(buf), transport_packet, (size_t)n);
+        }
         if (s_sockets[s].p2p && n > 0) {
             uint32_t un = (uint32_t)n;
             uint16_t port = ntohs(a.sin_port);

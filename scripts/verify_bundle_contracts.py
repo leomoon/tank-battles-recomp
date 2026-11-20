@@ -13,6 +13,9 @@ env=dict(os.environ,SDL_VIDEODRIVER='dummy',SDL_AUDIODRIVER='dummy',SDL_JOYSTICK
 def run(*command,extra=None):
     subprocess.run([str(value) for value in command],env=dict(env,**(extra or {})),check=True,timeout=120)
 run(binary/('runtime_shader_check'+ext))
+run(binary/('peer_udp_fixture'+ext))
+run(binary/('sysnet_fixture'+ext))
+run(binary/('matching_rooms'+ext),'--wire')
 for name in ('hle','positions','hotplug','keyboard','audio'):
     run(binary/(name+'_fixture'+ext))
 run(binary/('audio_fixture'+ext),'no-device',extra={'SDL_AUDIODRIVER':'nonexistent-test-driver'})

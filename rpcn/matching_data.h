@@ -1,6 +1,7 @@
 #pragma once
 
 #include "client.h"
+#include "peer_udp.h"
 #include <algorithm>
 #include <span>
 #include <stdexcept>
@@ -63,5 +64,6 @@ struct RoomNotice {
 };
 
 RoomNotice room_notice(const Notification& notification, std::string_view npid);
+PeerAddress signaling_address(const Reply& reply);
 
 }

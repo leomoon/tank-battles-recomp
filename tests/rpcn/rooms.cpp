@@ -4,6 +4,7 @@
 #include "rpcn/client.h"
 #include "rpcn/matching.h"
 #include "rpcn/matching_data.h"
+#include "external/ps3recomp/libs/network/np_peer_transport.h"
 
 #include <array>
 #include <cassert>
@@ -235,13 +236,21 @@ void wire_checks() {
     assert(msg.result.image.read(16,4)==3);
     const auto pointer=msg.result.image.read(12,4);
     assert(!std::memcmp(msg.result.image.bytes.data()+pointer,"foo",3));
+    const auto peer=signaling_address(Reply{{0,11,0,0,0,10,4,192,168,50,20,18,3,8,202,28}});
+    assert((peer.ip==std::array<unsigned char,4>{192,168,50,20}) && peer.port==3658);
+    for (const Reply bad:{Reply{},Reply{{1}},Reply{{0,0,0,0,0}},Reply{{0,11,0,0,0,10,4,0,0,0,0,18,3,8,202,28}}}) {
+        bool rejected=false;
+        try {signaling_address(bad);} catch (const std::runtime_error&) {rejected=true;}
+        assert(rejected);
+    }
     printf("wire format and malformed replies passed\n");
 }
 
 int main(int argc,char** argv) {
     if (argc==2 && std::string_view(argv[1])=="--wire") { wire_checks(); return 0; }
     if (argc!=4) {
-        fprintf(stderr,"Usage: matching_rooms PROFILE host|join normal|fullROOM|owner\n");
+        fprintf(stderr,"Usage: matching_rooms PROFILE host|join normal|fullROOM|owner\n"
+                       "       matching_rooms PROFILE peer|signal PEER_NPID\n");
         return 2;
     }
     setvbuf(stdout,nullptr,_IONBF,0);
@@ -249,7 +258,103 @@ int main(int argc,char** argv) {
     std::string mode=argv[2];
     const bool owner=std::string_view(argv[3])=="owner";
     const bool full=std::string_view(argv[3]).starts_with("full");
-    if (mode=="cancel") {
+    if (mode=="signal" || mode=="peer") {
+        const auto identity=tb::rpcn::status();
+        std::memset(memory.data()+payload,0,36);
+        std::memcpy(memory.data()+payload,identity.npid.data(),identity.npid.size());
+        assert(!call("sceNpSignalingCreateCtx",{payload,opd,0x1234,ids+400}));
+        const auto signaling=vm_read32(ids+400);
+        bool registered=false;
+        for (unsigned attempt=0;attempt<10 && !registered;++attempt) {
+            tb::rpcn::pump_matching();
+            std::this_thread::sleep_for(100ms);
+            tb::rpcn::Bytes self(identity.npid.begin(),identity.npid.end());self.push_back(0);
+            auto query=tb::rpcn::submit(tb::rpcn::Request::signaling_info,std::move(self));
+            assert(query.valid() && query.wait_for(3s)==std::future_status::ready);
+            try {
+                const auto address=tb::rpcn::signaling_address(query.get());
+                registered=address.port==3658;
+            } catch (const std::runtime_error&) {}
+        }
+        assert(registered);
+        puts("RPCN confirmed the login user ID and registered local signaling address");
+        assert(!call("sceNpSignalingAddExtendedHandler",{signaling,opd+8,0x5678}));
+        std::memset(memory.data()+payload,0,36);
+        assert(std::strlen(argv[3])<=16);
+        std::memcpy(memory.data()+payload,argv[3],std::strlen(argv[3]));
+        if (mode=="peer") {
+            puts("Waiting up to 120 seconds for the other player's UDP registration");
+            const auto deadline=std::chrono::steady_clock::now()+120s;
+            bool available=false;
+            while (!available && std::chrono::steady_clock::now()<deadline) {
+                tb::rpcn::pump_matching();
+                tb::rpcn::Bytes target(argv[3],argv[3]+std::strlen(argv[3])+1);
+                auto query=tb::rpcn::submit(tb::rpcn::Request::signaling_info,std::move(target));
+                assert(query.valid() && query.wait_for(3s)==std::future_status::ready);
+                try { available=tb::rpcn::signaling_address(query.get()).port!=0; }
+                catch (const std::runtime_error&) {}
+                std::this_thread::sleep_for(100ms);
+            }
+            assert(available);
+        }
+        assert(!call("sceNpSignalingActivateConnection",{signaling,payload,ids+404}));
+        const auto connection=vm_read32(ids+404);
+        assert(!call("sceNpSignalingGetConnectionStatus",{signaling,connection,result,result+4,result+8}));
+        assert(vm_read32(result)==1);
+        if (mode=="peer") {
+            const auto deadline=std::chrono::steady_clock::now()+10s;
+            while (std::chrono::steady_clock::now()<deadline && vm_read32(result)!=2) {
+                tb::rpcn::pump_matching();
+                assert(!call("sceNpSignalingGetConnectionStatus",{signaling,connection,result,result+4,result+8}));
+                std::this_thread::sleep_for(10ms);
+            }
+            assert(vm_read32(result)==2 && vm_read32(result+4) && vm_read16(result+8));
+            const auto peer_ip=vm_read32(result+4);
+            const auto peer_port=vm_read16(result+8);
+            for (const auto [event,arg]:std::array<std::pair<unsigned,unsigned>,4>{{{1,0x1234},{1,0x5678},{10,0x5678},{12,0x5678}}}) {
+                assert(std::count_if(callbacks.begin(),callbacks.end(),[&](const auto& cb){
+                    return cb[0]==signaling && cb[1]==connection && cb[2]==event && cb[3]==0 && cb[4]==arg;
+                })==1);
+            }
+            assert(!call("sceNpSignalingGetConnectionInfo",{signaling,connection,4,result}));
+            assert(vm_read32(result)==peer_ip && vm_read16(result+4)==peer_port);
+            assert(!call("sceNpSignalingGetConnectionInfo",{signaling,connection,3,result}));
+            assert(!std::memcmp(memory.data()+result,argv[3],std::strlen(argv[3])));
+            // A second context shares the verified peer without removing the
+            // first context's transport when that second context is destroyed.
+            assert(!call("sceNpSignalingCreateCtx",{payload,opd,0x1234,ids+408}));
+            const auto second=vm_read32(ids+408);
+            assert(!call("sceNpSignalingActivateConnection",{second,payload,ids+412}));
+            assert(!call("sceNpSignalingGetConnectionStatus",{second,vm_read32(ids+412),result,0,0}));
+            assert(vm_read32(result)==2);
+            assert(!call("sceNpSignalingDestroyCtx",{second}));
+            for (unsigned i=0;i<200;++i) {tb::rpcn::pump_matching();std::this_thread::sleep_for(10ms);}
+            assert(!call("sceNpSignalingGetConnectionStatus",{signaling,connection,result,0,0}));
+            assert(vm_read32(result)==2);
+            printf("PASS: HLE peer active at %u.%u.%u.%u:%u, exact primary/extended callbacks and shared context cleanup\n",
+                   peer_ip>>24,(peer_ip>>16)&255,(peer_ip>>8)&255,peer_ip&255,peer_port);
+            assert(!call("sceNpSignalingDestroyCtx",{signaling}));
+            tb::rpcn::reset_matching();tb::rpcn::stop();
+            return 0;
+        }
+        const auto deadline=std::chrono::steady_clock::now()+10s;
+        bool dead=false;
+        while (std::chrono::steady_clock::now()<deadline && !dead) {
+            tb::rpcn::pump_matching();
+            dead=std::any_of(callbacks.begin(),callbacks.end(),[&](const auto& cb){return cb[0]==signaling && cb[1]==connection && cb[2]==0 && cb[3]==0x8002a80f;});
+            std::this_thread::sleep_for(10ms);
+        }
+        assert(dead);
+        assert(!call("sceNpSignalingGetConnectionStatus",{signaling,connection,result,0,0}));
+        assert(vm_read32(result)==0);
+        assert(!call("sceNpSignalingDestroyCtx",{signaling}));
+        assert(!call("sceNpSignalingCreateCtx",{payload,0,0,ids+400}));
+        assert(vm_read32(ids+400)!=signaling);
+        assert(!call("sceNpSignalingDestroyCtx",{vm_read32(ids+400)}));
+        tb::rpcn::reset_matching();tb::rpcn::stop();
+        puts("PASS: signaling pending, bounded unreachable callback, inactive status and context/port reuse");
+        return 0;
+    } else if (mode=="cancel") {
         std::memset(memory.data()+request,0,108);
         vm_write32(request,world); vm_write32(request+16,2);
         assert(!call("sceNpMatching2CreateJoinRoom",{context,request,options,reqid}));
@@ -317,3 +422,5 @@ int main(int argc,char** argv) {
     assert(!call("sceNpMatching2DestroyContext",{context}));
     tb::rpcn::stop();
 }
+
+extern "C" void np_set_peer_transport(const np_peer_transport*) {}

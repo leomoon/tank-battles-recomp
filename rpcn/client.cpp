@@ -332,7 +332,7 @@ private:
     uint64_t next_id_ = 1;
 };
 
-void login(Connection& connection, const Profile& profile) {
+uint64_t login(Connection& connection, const Profile& profile) {
     const auto reply = connection.request(Command::login, {profile.npid, profile.password, profile.token});
     auto name = std::find(reply.begin() + 1, reply.end(), 0);
     if (name == reply.end() || name == reply.begin() + 1)
@@ -340,11 +340,12 @@ void login(Connection& connection, const Profile& profile) {
     const auto avatar = std::find(name + 1, reply.end(), 0);
     if (avatar == reply.end() || reply.end() - avatar < 25 || !read_le(std::span(avatar + 1, 8)))
         throw std::runtime_error("Incomplete RPCN login identity");
+    return read_le(std::span(avatar + 1, 8));
 }
 
-void set_status(State state, std::string npid = {}) {
+void set_status(State state, std::string npid = {}, uint64_t user_id = 0, std::string endpoint = {}) {
     std::lock_guard guard(state_lock);
-    session_status = {state, std::move(npid)};
+    session_status = {state, std::move(npid), user_id, std::move(endpoint)};
     if (state == State::offline) {
         for (auto& pending : requests) pending.completion.set_value({});
         requests.clear();
@@ -362,8 +363,8 @@ bool start(const char* profile_path) {
         worker = std::jthread([profile = std::move(profile)](std::stop_token stop) {
             try {
                 Connection connection(profile, stop);
-                login(connection, profile);
-                set_status(State::online, profile.npid);
+                const auto user_id = login(connection, profile);
+                set_status(State::online, profile.npid, user_id, profile.endpoint);
                 fprintf(stderr, "[rpcn] Signed in to %s as %s\n", profile.endpoint.c_str(), profile.npid.c_str());
                 connection.serve();
             } catch (const std::exception& error) {

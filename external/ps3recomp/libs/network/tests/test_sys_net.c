@@ -107,6 +107,80 @@ static void put_sockaddr(uint32_t ea, uint32_t ip_be, uint16_t port)
     vm_write32(ea + 4, ip_be);
 }
 
+static host_socket_t shared_udp = HOST_INVALID_SOCKET;
+static unsigned native_filtered, native_closed;
+static int64_t take_native_socket(void)
+{
+    host_socket_t fd = shared_udp;
+    shared_udp = HOST_INVALID_SOCKET;
+    return fd == HOST_INVALID_SOCKET ? -1 : (int64_t)fd;
+}
+static int native_filter(const void* packet, uint32_t size, const uint8_t ip[4], uint16_t port)
+{
+    assert(ip[0] == 127 && ip[3] == 1 && port != 0);
+    if (size != 45 || memcmp(packet, "TBP1", 4)) return 0;
+    ++native_filtered;
+    return 1;
+}
+static void native_close(void) { ++native_closed; }
+
+static void test_native_transport(void)
+{
+    static const np_peer_transport transport = {take_native_socket, native_filter, native_close};
+    np_set_peer_transport(&transport);
+    for (unsigned finalizing = 0; finalizing < 2; ++finalizing) {
+        struct sockaddr_in local = {0};
+        local.sin_family = AF_INET;
+        local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        shared_udp = socket(AF_INET, SOCK_DGRAM, 0);
+        assert(shared_udp != HOST_INVALID_SOCKET);
+        assert(bind(shared_udp, (struct sockaddr*)&local, sizeof(local)) == 0);
+        socklen_t length = sizeof(local);
+        assert(getsockname(shared_udp, (struct sockaddr*)&local, &length) == 0);
+        const host_socket_t original = shared_udp;
+        s_p2p_port = ntohs(local.sin_port);
+        const int32_t guest = C3("socket", SYS_NET_AF_INET, SYS_NET_SOCK_DGRAM_P2P, 0);
+        put_sockaddr(ADDR_A, 0x7F000001u, 3658);
+        vm_write16(ADDR_A + 8, 1000);
+        vm_write32(OPT, 1);
+        assert(C5("setsockopt", guest, SYS_NET_SOL_SOCKET, SYS_NET_SO_NBIO, OPT, 4) == 0);
+        assert(C3("bind", guest, ADDR_A, 16) == 0);
+        assert(s_sockets[guest].host_fd == original && shared_udp == HOST_INVALID_SOCKET);
+
+        host_socket_t remote = socket(AF_INET, SOCK_DGRAM, 0);
+        assert(remote != HOST_INVALID_SOCKET);
+        char control[45] = "TBP1";
+        assert(sendto(remote, control, sizeof(control), 0, (struct sockaddr*)&local, sizeof(local)) == sizeof(control));
+        assert(sendto(remote, "game", 4, 0, (struct sockaddr*)&local, sizeof(local)) == 4);
+        host_pollfd ready = {original, POLLIN, 0};
+        assert(host_poll(&ready, 1, 1000) == 1);
+        memset(vm_base + BUF, 0xA5, 8);
+        const unsigned before = native_filtered;
+        // A small guest buffer must not truncate the control datagram before
+        // filtering. Peek consumes controls once and preserves guest bytes.
+        assert(call("recvfrom", guest, BUF, 2, SYS_NET_MSG_PEEK, ADDR_B, LEN) == 2);
+        assert(native_filtered == before + 1);
+        assert(!memcmp(vm_base + BUF, "ga", 2) && vm_base[BUF + 2] == 0xA5);
+        assert(vm_read16(ADDR_B + 8) == 1000 && vm_read32(ADDR_B + 4) == 0x7F000001u);
+        assert(call("recv", guest, BUF, 64, 0, 0, 0) == 4);
+        assert(!memcmp(vm_base + BUF, "game", 4));
+        assert((uint32_t)call("recv", guest, BUF, 64, 0, 0, 0) == 0x80010223u);
+
+        memcpy(vm_base + BUF, "reply", 5);
+        assert(call("sendto", guest, BUF, 5, 0, ADDR_B, 16) == 5);
+        ready.fd = remote;
+        assert(host_poll(&ready, 1, 1000) == 1);
+        char reply[16];
+        assert(recv(remote, reply, sizeof(reply), 0) == 5 && !memcmp(reply, "reply", 5));
+        host_closesocket(remote);
+        if (finalizing) assert(sys_net_finalize_network() == 0);
+        else assert(C1("socketclose", guest) == 0);
+        assert(native_closed == finalizing + 1 && s_p2p_dgram == -1 && !s_sender);
+        assert(!s_sockets[guest].in_use);
+    }
+    np_set_peer_transport(NULL);
+}
+
 int main(void)
 {
     vm_base = (uint8_t*)calloc(1, 1u << 20);
@@ -359,6 +433,7 @@ int main(void)
     assert(C1("socketclose", a) == 0 && C1("socketclose", b) == 0);
     assert(C1("socketclose", c) == 0 && C1("socketclose", srv) == 0 && C1("socketclose", l) == 0);
 
+    test_native_transport();
     printf("test_sys_net: all passed\n");
     return 0;
 }
