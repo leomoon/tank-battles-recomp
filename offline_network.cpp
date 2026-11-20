@@ -181,6 +181,7 @@ uint32_t perform(Op op,ppu_context* c) {
         if(dialog || completions.size()>60)return net_unavailable;
         dialog=true;++net_generation;
         net_dialog_event(0x801u);
+        tb::rpcn::retry_sign_in();
         dialog_waiting=tb::rpcn::enabled() && tb::rpcn::status().state==tb::rpcn::State::connecting;
         if (!dialog_waiting) net_dialog_event(0x802u);
         return 0;

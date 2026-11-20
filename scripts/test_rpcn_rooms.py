@@ -11,6 +11,7 @@ def check(runner, host, peer):
     with tempfile.TemporaryDirectory(prefix="tb-rpcn-rooms-") as directory:
         for index, (first, second, scenario) in enumerate([
                 (host, peer, "normal"), (peer, host, "normal"), (host, peer, "owner"),
+                (host, peer, "close"),
                 (host, peer, "full")]):
             path = Path(directory) / f"host-{index}.log"
             with path.open("w") as log, subprocess.Popen(

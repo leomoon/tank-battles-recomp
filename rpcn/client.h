@@ -37,6 +37,7 @@ std::future<Reply> submit(Request command, std::vector<unsigned char> body);
 std::vector<Notification> take_notifications();
 
 bool start(const char* profile_path);
+void retry_sign_in();
 void stop();
 bool enabled();
 Status status();

@@ -8,6 +8,7 @@ import struct
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 
 
@@ -44,7 +45,7 @@ class RpcnClientTests(unittest.TestCase):
         cls.tls.load_cert_chain(cls.directory / "cert.pem", cls.directory / "key.pem")
 
     def run_client(self, action, exchange, *, expected_error=None, trust_fixture=True, version=34,
-                   stale_login_attempts=0):
+                   stale_login_attempts=0, busy_seconds=0, runner=None):
         errors = []
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -54,7 +55,9 @@ class RpcnClientTests(unittest.TestCase):
 
             def serve():
                 try:
-                    for attempt in range(stale_login_attempts + 1):
+                    first_login = None
+                    attempt = 0
+                    while True:
                         with listener.accept()[0] as tcp:
                             tcp.settimeout(6)
                             with self.tls.wrap_socket(tcp, server_side=True) as stream:
@@ -62,12 +65,18 @@ class RpcnClientTests(unittest.TestCase):
                                     stream.sendall(bytes([byte]))
                                 if exchange:
                                     with stream.makefile("rb") as reader:
-                                        if attempt < stale_login_attempts:
+                                        now = time.monotonic()
+                                        if first_login is None:
+                                            first_login = now
+                                        if attempt < stale_login_attempts or now < first_login + busy_seconds:
                                             command, request_id, _ = request(reader)
                                             self.assertEqual(command, 0)
                                             stream.sendall(packet(1, command, request_id, b"\x06"))
+                                            attempt += 1
+                                            continue
                                         else:
                                             exchange(stream, reader)
+                        break
                 except (ssl.SSLError, ConnectionError) as error:
                     if trust_fixture:
                         errors.append(error)
@@ -82,7 +91,7 @@ class RpcnClientTests(unittest.TestCase):
             )
             server = threading.Thread(target=serve, daemon=True)
             server.start()
-            result = subprocess.run([str(self.runner), action, str(profile)], text=True,
+            result = subprocess.run([str(runner or self.runner), action, str(profile)], text=True,
                                     capture_output=True, timeout=17)
             server.join(timeout=7)
             self.assertFalse(server.is_alive())
@@ -94,7 +103,7 @@ class RpcnClientTests(unittest.TestCase):
             else:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def login_notification_and_logout(self, stale_login_attempts=0):
+    def login_notification_and_logout(self, stale_login_attempts=0, *, retry_runner=None):
         def exchange(stream, reader):
             self.assertEqual(request(reader), (0, 1, b"FixturePlayer\0fixture-secret\0\0"))
             stream.sendall(packet(2, 0, 0, b"ignored notification"))
@@ -102,13 +111,20 @@ class RpcnClientTests(unittest.TestCase):
             stream.sendall(packet(1, 0, 1, login))
             self.assertEqual(request(reader), (1, 2, b""))
             stream.sendall(packet(1, 1, 2, b"\0"))
-        self.run_client("--rpcn-check", exchange, stale_login_attempts=stale_login_attempts)
+        self.run_client("--login-retry" if retry_runner else "--rpcn-check", exchange,
+                        stale_login_attempts=stale_login_attempts,
+                        busy_seconds=6 if retry_runner else 0, runner=retry_runner)
 
     def test_login_notification_and_logout(self):
         self.login_notification_and_logout()
 
     def test_quick_relaunch_retries_login_on_a_fresh_connection(self):
         self.login_notification_and_logout(stale_login_attempts=2)
+
+    def test_in_game_retry_after_initial_login_expires(self):
+        if self.matching_runner is None:
+            self.skipTest("Run with --matching-runner to exercise the in-game worker")
+        self.login_notification_and_logout(retry_runner=self.matching_runner)
 
     def test_account_create(self):
         def exchange(stream, reader):
@@ -142,8 +158,10 @@ class RpcnClientTests(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runner", required=True, type=Path)
+    parser.add_argument("--matching-runner", type=Path)
     parser.add_argument("--openssl", default="openssl")
     args = parser.parse_args()
     RpcnClientTests.runner = args.runner.resolve()
+    RpcnClientTests.matching_runner = args.matching_runner.resolve() if args.matching_runner else None
     RpcnClientTests.openssl = args.openssl
     unittest.main(argv=[__file__], verbosity=2)

@@ -9,6 +9,7 @@
 namespace tb::rpcn {
 
 using Bytes = std::vector<unsigned char>;
+constexpr uint32_t room_owner_auto_grant = 0x80000000;
 
 struct Image {
     Bytes bytes;
@@ -48,6 +49,7 @@ uint64_t read_le(std::span<const unsigned char> bytes);
 struct RoomResult {
     Image image;
     uint64_t room=0;
+    uint32_t flags=0;
     uint16_t owner=0;
     uint16_t member=0;
     uint16_t count=0;

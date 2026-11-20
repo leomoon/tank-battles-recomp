@@ -48,6 +48,7 @@ struct Context {
     std::future<Reply> discovery;
     std::vector<uint16_t> servers;
     uint64_t room=0;
+    uint32_t room_flags=0;
     uint16_t owner=0;
     bool started=false;
 };
@@ -399,10 +400,15 @@ void pump_matching() {
                 if (joined && (item.cancelled || ctx==contexts.end()))
                     leave(item.communication_id,result.room);
                 else if (ctx!=contexts.end() && !item.cancelled) {
-                    if (joined) { ctx->second.room=result.room; ctx->second.owner=result.owner; }
+                    if (joined) {
+                        ctx->second.room=result.room;
+                        ctx->second.owner=result.owner;
+                        ctx->second.room_flags=result.flags;
+                    }
                     if (item.command==Request::leave_room && ctx->second.room==result.room) {
                         ctx->second.room=0;
                         ctx->second.owner=0;
+                        ctx->second.room_flags=0;
                     }
                     if (item.command==Request::get_room_data && ctx->second.room==result.room) {
                         ctx->second.owner=result.owner;
@@ -439,8 +445,26 @@ void pump_matching() {
             const auto id=ctx->first;
             const bool message=notice.event==0x2102;
             const auto cb=message?ctx->second.room_message:ctx->second.room_event;
-            if (notice.event==0x1104) ctx->second.room=0;
-            if (notice.event==0x1102 && notice.result.member==ctx->second.owner) {
+            auto& room=ctx->second;
+            const bool owner_left=notice.event==0x1102 && notice.result.member==room.owner;
+            if (owner_left && !(room.room_flags & room_owner_auto_grant)) {
+                // Stock RPCN elects a successor even when automatic transfer is disabled.
+                // Leave its migrated room and deliver the original departure cause to the game.
+                leave(room.communication_id,notice.room);
+                const auto& member_update=notice.result.image;
+                Image closure{Bytes(28),{}};
+                closure.write(0,member_update.read(4,1),1);
+                closure.copy(8,std::span(member_update.bytes).subspan(8,20));
+                notice.event=0x1104;
+                notice.result.image=std::move(closure);
+            }
+            if (notice.event==0x1104) {
+                room.room=0;
+                room.owner=0;
+                room.room_flags=0;
+            }
+            if (notice.event==0x1106) room.room_flags=notice.result.flags;
+            if (owner_left && notice.event==0x1102) {
                 // RPCN elects the successor. Fetch that result instead of guessing from member IDs.
                 Bytes room_id{8};
                 auto value=notice.room;

@@ -136,6 +136,8 @@ Status session_status;
 std::deque<Pending> requests;
 std::vector<Notification> notifications;
 bool requested = false;
+std::mutex worker_lock;
+std::optional<Profile> active_profile;
 std::jthread worker;
 
 void require_ok(CURLcode code) {
@@ -397,15 +399,10 @@ void set_status(State state, std::string npid = {}, uint64_t user_id = 0, std::s
     }
 }
 
-}
-
-bool start(const char* profile_path) {
+bool launch_worker(const Profile& profile) {
     try {
-        auto profile = read_profile(profile_path, false);
-        initialize_curl();
-        requested = true; // Set once before guest threads start.
         set_status(State::connecting);
-        worker = std::jthread([profile = std::move(profile)](std::stop_token stop) {
+        worker = std::jthread([profile](std::stop_token stop) {
             try {
                 auto [connection, user_id] = connect_and_login(profile, stop);
                 set_status(State::online, profile.npid, user_id, profile.endpoint);
@@ -418,12 +415,43 @@ bool start(const char* profile_path) {
         });
         return true;
     } catch (const std::exception& error) {
+        set_status(State::offline);
         fprintf(stderr, "[rpcn] %s\n", error.what());
         return false;
     }
 }
 
+}
+
+bool start(const char* profile_path) {
+    std::lock_guard guard(worker_lock);
+    if (active_profile) return false;
+    try {
+        auto profile = read_profile(profile_path, false);
+        initialize_curl();
+        active_profile.emplace(std::move(profile));
+        if (!launch_worker(*active_profile)) {
+            active_profile.reset();
+            return false;
+        }
+        requested = true; // Set before guest threads start.
+        return true;
+    } catch (const std::exception& error) {
+        fprintf(stderr, "[rpcn] %s\n", error.what());
+        return false;
+    }
+}
+
+void retry_sign_in() {
+    std::lock_guard guard(worker_lock);
+    if (!active_profile || status().state != State::offline) return;
+    if (worker.joinable()) worker.join();
+    launch_worker(*active_profile);
+}
+
 void stop() {
+    std::lock_guard guard(worker_lock);
+    active_profile.reset();
     if (worker.joinable()) {
         worker.request_stop();
         worker.join();

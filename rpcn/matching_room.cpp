@@ -319,6 +319,7 @@ uint32_t room_internal(RoomResult& result,const Fields& fields,std::string_view 
     image.pointer(ptr,at);
     result.room=fields.value(4);
     result.owner=fields.wrapped(8);
+    result.flags=fields.value(10);
     image.write(at,fields.wrapped(1),2);
     constexpr unsigned sizes[]={4,8,8,8,4};
     constexpr unsigned offsets[]={4,8,16,24,32};
@@ -340,7 +341,7 @@ uint32_t room_internal(RoomResult& result,const Fields& fields,std::string_view 
     }
     image.write(at+40,result.count,4);
     groups(image,at+52,fields.each(9));
-    image.write(at+60,fields.value(10),4);
+    image.write(at+60,result.flags,4);
     image_attrs(image,at+64,fields.each(11),Attribute::internal);
     return at;
 }

@@ -126,10 +126,11 @@ void connect(const char* profile) {
     assert(vm_read32(reqid)==0xdeadbeef);
 }
 
-uint64_t create(unsigned slots) {
+uint64_t create(unsigned slots, bool auto_grant) {
     std::memset(memory.data()+request,0,108);
     vm_write32(request,world);
     vm_write32(request+16,slots);
+    if (auto_grant) vm_write32(request+20,tb::rpcn::room_owner_auto_grant);
     assert(!call("sceNpMatching2CreateJoinRoom",{context,request,options,reqid}));
     const auto cb=answer(0x101);
     assert(cb[4]==0);
@@ -246,10 +247,36 @@ void wire_checks() {
     printf("wire format and malformed replies passed\n");
 }
 
+void check_login_retry(const char* profile) {
+    using namespace tb::rpcn;
+    const auto start_time=std::chrono::steady_clock::now();
+    assert(start(profile));
+    while (status().state==State::connecting && std::chrono::steady_clock::now()<start_time+8s)
+        std::this_thread::sleep_for(10ms);
+    assert(status().state==State::offline);
+
+    // The fixture holds the old login beyond the initial retry window.
+    std::this_thread::sleep_until(start_time+7s);
+    retry_sign_in();
+    retry_sign_in();
+    const auto deadline=std::chrono::steady_clock::now()+3s;
+    while (status().state==State::connecting && std::chrono::steady_clock::now()<deadline)
+        std::this_thread::sleep_for(10ms);
+    assert(status().state==State::online && status().user_id==42);
+    retry_sign_in();
+    stop();
+    retry_sign_in();
+    assert(status().state==State::offline);
+}
+
 int main(int argc,char** argv) {
     if (argc==2 && std::string_view(argv[1])=="--wire") { wire_checks(); return 0; }
+    if (argc==3 && std::string_view(argv[1])=="--login-retry") {
+        check_login_retry(argv[2]);
+        return 0;
+    }
     if (argc!=4) {
-        fprintf(stderr,"Usage: matching_rooms PROFILE host|join normal|fullROOM|owner\n"
+        fprintf(stderr,"Usage: matching_rooms PROFILE host|join normal|fullROOM|owner|close\n"
                        "       matching_rooms PROFILE peer|signal PEER_NPID\n");
         return 2;
     }
@@ -257,6 +284,7 @@ int main(int argc,char** argv) {
     connect(argv[1]);
     std::string mode=argv[2];
     const bool owner=std::string_view(argv[3])=="owner";
+    const bool close_room=std::string_view(argv[3])=="close";
     const bool full=std::string_view(argv[3]).starts_with("full");
     if (mode=="signal" || mode=="peer") {
         const auto identity=tb::rpcn::status();
@@ -382,7 +410,7 @@ int main(int argc,char** argv) {
     } else if (mode=="empty") {
         search(true);
     } else if (mode=="host") {
-        const auto id=create(full?1:2);
+        const auto id=create(full?1:2,owner);
         if (full) {
             std::this_thread::sleep_for(3s);
         } else {
@@ -395,7 +423,7 @@ int main(int argc,char** argv) {
             receive(id,"host lobby"); // RPCN broadcasts also reach the sender.
             update(id);
             receive(id,"guest lobby");
-            if (owner) {
+            if (owner || close_room) {
                 leave(id);
                 printf("owner left\n");
                 tb::rpcn::stop();
@@ -429,7 +457,15 @@ int main(int argc,char** argv) {
                 assert(vm_read16(result)!=vm_read16(result+2));
                 printf("server elected new owner %u\n",vm_read16(result+2));
             }
-            leave(id);
+            if (close_room) {
+                const auto closed=wait_for(2,0x1104);
+                assert(closed[1]==id && closed[4]==0 && closed[5]==28);
+                assert(call("sceNpMatching2GetEventData",{context,closed[3],result,28})==28);
+                assert(vm_read8(result)==1);
+                search(true);
+            } else {
+                leave(id);
+            }
         }
     }
     assert(!call("sceNpMatching2ContextStop",{context}));
