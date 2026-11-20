@@ -138,6 +138,11 @@ void require_ok(CURLcode code) {
     if (code != CURLE_OK) throw std::runtime_error(curl_easy_strerror(code));
 }
 
+void initialize_curl() {
+    static const CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
+    require_ok(result);
+}
+
 int cancel_transfer(void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
     return static_cast<const std::stop_token*>(context)->stop_requested() ? 1 : 0;
 }
@@ -145,8 +150,6 @@ int cancel_transfer(void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_
 class Connection {
 public:
     Connection(const Profile& profile, std::stop_token stop) : stop_(stop) {
-        static const CURLcode init = curl_global_init(CURL_GLOBAL_DEFAULT);
-        require_ok(init);
         handle_.reset(curl_easy_init());
         if (!handle_) throw std::runtime_error("Could not allocate RPCN TLS connection");
         CURL* easy = handle_.get();
@@ -358,6 +361,7 @@ void set_status(State state, std::string npid = {}, uint64_t user_id = 0, std::s
 bool start(const char* profile_path) {
     try {
         auto profile = read_profile(profile_path, false);
+        initialize_curl();
         requested = true; // Set once before guest threads start.
         set_status(State::connecting);
         worker = std::jthread([profile = std::move(profile)](std::stop_token stop) {
@@ -413,6 +417,7 @@ std::vector<Notification> take_notifications() {
 int account_command(const char* profile_path, bool create) {
     try {
         const auto profile = read_profile(profile_path, create);
+        initialize_curl();
         Connection connection(profile, {});
         if (create) {
             connection.request(Command::create, {profile.npid, profile.password, profile.npid,

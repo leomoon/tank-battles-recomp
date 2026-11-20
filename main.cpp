@@ -759,6 +759,11 @@ int tb_player_main(int argc, char** argv)
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
     tb_settings_init();
 
+    // Registration-only and probe returns can occur while TLS is connecting.
+    // Join the worker before entering the process's static teardown.
+    const struct RpcnShutdown {
+        ~RpcnShutdown() { tb::rpcn::stop(); }
+    } rpcn_shutdown;
     tank_battles_init_offline_network(rpcn_profile != nullptr);
     if (rpcn_profile) {
         if (!tb::rpcn::start(rpcn_profile)) return 2;
