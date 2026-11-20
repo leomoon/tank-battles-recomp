@@ -109,13 +109,9 @@ static int msg_offers_to_abort(const char* msg)
     return 0;
 }
 
-s32 cellMsgDialogOpen2(CellMsgDialogType type, const char* msgString,
-                        CellMsgDialogCallback callback, void* userdata,
-                        void* extParam)
+static s32 open_dialog(CellMsgDialogType type, const char* message,
+                       CellMsgDialogCallback callback, void* userdata)
 {
-    printf("[cellMsgDialog] Open2(type=0x%08X, msg='%s')\n",
-           type, guest_str(msgString));
-
     if (s_dialog_open) {
         printf("[cellMsgDialog] WARNING: dialog already open, closing previous\n");
     }
@@ -127,9 +123,9 @@ s32 cellMsgDialogOpen2(CellMsgDialogType type, const char* msgString,
     memset(s_progress, 0, sizeof(s_progress));
 
     /* Print the message so developers can see it */
-    if (msgString) {
+    if (message) {
         printf("========================================\n");
-        printf("[DIALOG] %s\n", guest_str(msgString));
+        printf("[DIALOG] %s\n", message);
         printf("========================================\n");
     }
 
@@ -219,7 +215,7 @@ s32 cellMsgDialogOpen2(CellMsgDialogType type, const char* msgString,
                 else if (e && (e[0] == 'a' || e[0] == 'A')) forced = 2;   /* heuristic */
                 else                                        forced = 0;   /* always YES (default) */
             }
-            int auto_no = (forced == 2) ? msg_offers_to_abort(guest_str(msgString)) : 0;
+            int auto_no = (forced == 2) ? msg_offers_to_abort(message) : 0;
             int no_ = (forced == 2) ? auto_no : forced;
             result = no_ ? CELL_MSGDIALOG_BUTTON_NO : CELL_MSGDIALOG_BUTTON_YES;
             printf("[cellMsgDialog] Auto-responding: %s%s\n", no_ ? "NO" : "YES",
@@ -247,6 +243,25 @@ s32 cellMsgDialogOpen2(CellMsgDialogType type, const char* msgString,
     }
 
     return CELL_OK;
+}
+
+s32 cellMsgDialogOpen2(CellMsgDialogType type, const char* msgString,
+                       CellMsgDialogCallback callback, void* userdata, void* extParam)
+{
+    (void)extParam;
+    const char* message = guest_str(msgString);
+    printf("[cellMsgDialog] Open2(type=0x%08X, msg='%s')\n", type, message);
+    return open_dialog(type, msgString ? message : NULL, callback, userdata);
+}
+
+s32 cellMsgDialogOpenErrorCode(u32 errorCode, CellMsgDialogCallback callback,
+                               void* userdata, void* extParam)
+{
+    (void)extParam;
+    char message[32];
+    snprintf(message, sizeof(message), "System error 0x%08X", errorCode);
+    return open_dialog(CELL_MSGDIALOG_TYPE_SE_TYPE_ERROR | CELL_MSGDIALOG_TYPE_BUTTON_TYPE_OK,
+                       message, callback, userdata);
 }
 
 /* cellMsgDialogOpen -- the pre-3.40 entry point, identical arguments and

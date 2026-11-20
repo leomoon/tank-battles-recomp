@@ -69,6 +69,15 @@ int main(void)
     cellSysutilCheckCallback();
     assert(calls == 4 && last_result == CELL_MSGDIALOG_BUTTON_YES);
 
+    assert(cellMsgDialogOpenErrorCode(0x8002a80f, (void*)0x100,
+                                     (void*)0x1234, NULL) == CELL_OK);
+    assert(calls == 4);
+    cellSysutilCheckCallback();
+    assert(calls == 5 && last_result == CELL_MSGDIALOG_BUTTON_OK);
+    assert(cellMsgDialogOpenErrorCode(0x8002a80f, NULL, NULL, NULL) == CELL_OK);
+    cellSysutilCheckCallback();
+    assert(calls == 5);
+
     /* The heuristic =auto would use, tested directly: the decision is cached on
      * first use so the env cannot be flipped mid-run, but the predicate is the
      * whole of the logic and it is right here in this translation unit. */
