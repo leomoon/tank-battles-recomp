@@ -20,6 +20,9 @@ namespace {
 constexpr uint32_t not_initialized=0x8002a801, bad_context=0x8002a805;
 constexpr uint32_t bad_connection=0x8002a80e, unreachable=0x8002a80f, invalid_argument=0x8002a815;
 constexpr uint32_t own_np_id=0x8002a816, too_many_connections=0x8002a817;
+// Match the reference signaling API's nominal rate for a verified peer.
+// The control handshake checks reachability and does not measure throughput.
+constexpr uint32_t nominal_bandwidth_bps=100'000'000;
 struct Handler {uint32_t opd=0,arg=0;};
 struct Context {Handler handler,extended;};
 struct Connection {
@@ -162,6 +165,7 @@ uint32_t execute(Op op,ppu_context& c) {
         if (!guest_range(destination,size)) return invalid_argument;
         if (connection.status!=2) return bad_connection;
         if (out==1) {vm_write32(destination,connection.latency);return 0;}
+        if (out==2) {vm_write32(destination,nominal_bandwidth_bps);return 0;}
         if (out==3) {
             for (unsigned i=0;i<36;++i) vm_write8(destination+i,i<connection.peer.size()?connection.peer[i]:0);
             return 0;

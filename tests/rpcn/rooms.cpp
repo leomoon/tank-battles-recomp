@@ -283,7 +283,7 @@ int main(int argc,char** argv) {
         assert(std::strlen(argv[3])<=16);
         std::memcpy(memory.data()+payload,argv[3],std::strlen(argv[3]));
         if (mode=="peer") {
-            puts("Waiting up to 120 seconds for the other player's UDP registration");
+            printf("Waiting up to 120 seconds for %s to register a UDP endpoint\n",argv[3]);
             const auto deadline=std::chrono::steady_clock::now()+120s;
             bool available=false;
             while (!available && std::chrono::steady_clock::now()<deadline) {
@@ -295,12 +295,18 @@ int main(int argc,char** argv) {
                 catch (const std::runtime_error&) {}
                 std::this_thread::sleep_for(100ms);
             }
-            assert(available);
+            if (!available) {
+                fprintf(stderr,"RPCN did not return a UDP endpoint for %s before the deadline\n",argv[3]);
+                tb::rpcn::reset_matching();
+                tb::rpcn::stop();
+                return 1;
+            }
         }
         assert(!call("sceNpSignalingActivateConnection",{signaling,payload,ids+404}));
         const auto connection=vm_read32(ids+404);
         assert(!call("sceNpSignalingGetConnectionStatus",{signaling,connection,result,result+4,result+8}));
         assert(vm_read32(result)==1);
+        assert(call("sceNpSignalingGetConnectionInfo",{signaling,connection,2,result+12})==0x8002a80e);
         if (mode=="peer") {
             const auto deadline=std::chrono::steady_clock::now()+10s;
             while (std::chrono::steady_clock::now()<deadline && vm_read32(result)!=2) {
@@ -308,7 +314,13 @@ int main(int argc,char** argv) {
                 assert(!call("sceNpSignalingGetConnectionStatus",{signaling,connection,result,result+4,result+8}));
                 std::this_thread::sleep_for(10ms);
             }
-            assert(vm_read32(result)==2 && vm_read32(result+4) && vm_read16(result+8));
+            if (vm_read32(result)!=2) {
+                fprintf(stderr,"UDP activation with %s did not complete\n",argv[3]);
+                tb::rpcn::reset_matching();
+                tb::rpcn::stop();
+                return 1;
+            }
+            assert(vm_read32(result+4) && vm_read16(result+8));
             const auto peer_ip=vm_read32(result+4);
             const auto peer_port=vm_read16(result+8);
             for (const auto [event,arg]:std::array<std::pair<unsigned,unsigned>,4>{{{1,0x1234},{1,0x5678},{10,0x5678},{12,0x5678}}}) {
@@ -318,6 +330,8 @@ int main(int argc,char** argv) {
             }
             assert(!call("sceNpSignalingGetConnectionInfo",{signaling,connection,4,result}));
             assert(vm_read32(result)==peer_ip && vm_read16(result+4)==peer_port);
+            assert(!call("sceNpSignalingGetConnectionInfo",{signaling,connection,2,result}));
+            assert(vm_read32(result)==100'000'000);
             assert(!call("sceNpSignalingGetConnectionInfo",{signaling,connection,3,result}));
             assert(!std::memcmp(memory.data()+result,argv[3],std::strlen(argv[3])));
             // A second context shares the verified peer without removing the

@@ -14,6 +14,8 @@ Each computer needs its own RPCN account and UDP port 3658 available for the nat
 
 The signaling adapter retains the server-issued login user ID and registers its bound UDP socket with RPCN. It requests the other account's endpoint, then exchanges native-only `TBP1` challenge/ack packets. A connection becomes active only after the expected account and endpoint acknowledge the matching challenge. The adapter delivers established and extended activation events through the guest callback queue. Activation fails after eight seconds; an active peer that stops acknowledging fails after five seconds. This native protocol does not provide RPCS3 interoperability.
 
+Tank Battles reads the signaling bandwidth field when a peer activates. The adapter reports the same nominal 100 Mbps value used by RPCS3 for an established connection. The UDP handshake verifies reachability and leaves throughput unmeasured.
+
 When the guest binds its first P2P datagram socket, `sysNet` adopts the discovery socket. The guest's receive path consumes signaling control packets before copying game data into guest memory. Peek reads preserve game packets, and close/finalize notify the signaling adapter. The existing SDK supports one P2P datagram virtual port; additional framing or demultiplexing remains dependent on the live gameplay trace.
 
 For a bounded socket trace, launch each player with its private profile and enable `TB_OFFLINE_TRACE=1` and `PS3_NET_TRACE=1`. Retain both session logs. Signaling entries report context, connection, event and error; `sys_net` entries report socket, direction, endpoint and byte count. These are diagnostic logs and should stay private. Normal offline launch does not register the RPCN transport.
