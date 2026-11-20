@@ -65,6 +65,7 @@ struct PeerUdp::Impl {
         uint64_t challenge=nonce();
         Clock::time_point begin=Clock::now(), sent{}, heard=Clock::now();
         bool active=false, failed=false;
+        bool answered_hello=false, received_ack=false;
         uint32_t latency_us=0;
     };
     std::map<std::string,Peer> peers;
@@ -74,19 +75,19 @@ struct PeerUdp::Impl {
         if (winsock) WSACleanup();
 #endif
     }
-    void send(const void* bytes,size_t size,PeerAddress to) {
+    bool send(const void* bytes,size_t size,PeerAddress to) {
         const auto dest=address(to);
-        sendto(fd,static_cast<const char*>(bytes),static_cast<int>(size),0,
-               reinterpret_cast<const sockaddr*>(&dest),sizeof(dest));
+        return sendto(fd,static_cast<const char*>(bytes),static_cast<int>(size),0,
+                      reinterpret_cast<const sockaddr*>(&dest),sizeof(dest))==static_cast<int>(size);
     }
-    void control(const std::string& peer,PeerAddress to,unsigned kind,uint64_t challenge) {
+    bool control(const std::string& peer,PeerAddress to,unsigned kind,uint64_t challenge) {
         std::array<unsigned char,45> packet{};
         std::memcpy(packet.data(),"TBP1",4);
         packet[4]=static_cast<unsigned char>(kind);
         std::memcpy(packet.data()+5,npid.data(),npid.size());
         std::memcpy(packet.data()+21,peer.data(),peer.size());
         for (unsigned i=0;i<8;++i) packet[37+i]=challenge>>(56-i*8);
-        send(packet.data(),packet.size(),to);
+        return send(packet.data(),packet.size(),to);
     }
     bool consume(const void* data,uint32_t received,PeerAddress source) {
         const auto now=Clock::now();
@@ -107,12 +108,25 @@ struct PeerUdp::Impl {
         if (target!=npid || found==peers.end() || found->second.failed || !(found->second.address==source)) return true;
         auto& peer=found->second;uint64_t challenge=0;
         for (unsigned i=0;i<8;++i) challenge=challenge<<8 | packet[37+i];
-        if (packet[4]==1) control(sender,source,2,challenge);
-        if (packet[4]!=2 || challenge!=peer.challenge) return true;
-        peer.heard=now;
-        if (!peer.active) {
+        if (packet[4]==1) {
+            if (!peer.answered_hello) {
+                // The initial probe may have arrived before the remote
+                // client installed this peer. Send one with the reply.
+                control(sender,source,1,peer.challenge);
+                peer.sent=now;
+            }
+            peer.answered_hello=control(sender,source,2,challenge) || peer.answered_hello;
+        } else if (packet[4]==2 && challenge==peer.challenge) {
+            peer.heard=now;
+            if (!peer.received_ack) {
+                peer.received_ack=true;
+                peer.latency_us=static_cast<uint32_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(now-peer.begin).count());
+            }
+        }
+        if (!peer.active && peer.answered_hello && peer.received_ack) {
             peer.active=true;
-            peer.latency_us=static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(now-peer.begin).count());
+            peer.heard=now;
             events.push_back({sender,true,peer.latency_us});
         }
         return true;

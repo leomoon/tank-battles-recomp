@@ -28,6 +28,7 @@ extern "C" {
  * cell _sys_net_errno_loc points at. A failing call also returns them in-band
  * as 0x80010200 | errno (0x80010223 for EWOULDBLOCK), which titles compare
  * against directly. */
+#define SYS_NET_EINTR               4
 #define SYS_NET_EBADF               9
 #define SYS_NET_ENOMEM              12
 #define SYS_NET_EFAULT              14
@@ -38,6 +39,7 @@ extern "C" {
 #define SYS_NET_EALREADY            37
 #define SYS_NET_ENOTSOCK            38
 #define SYS_NET_EMSGSIZE            40
+#define SYS_NET_EOPNOTSUPP          45
 #define SYS_NET_EAFNOSUPPORT        47
 #define SYS_NET_EADDRINUSE          48
 #define SYS_NET_EADDRNOTAVAIL       49

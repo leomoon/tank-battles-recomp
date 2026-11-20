@@ -124,6 +124,18 @@ static int native_filter(const void* packet, uint32_t size, const uint8_t ip[4],
 }
 static void native_close(void) { ++native_closed; }
 
+#ifdef _WIN32
+static DWORD WINAPI delayed_abort(LPVOID argument)
+#else
+static void* delayed_abort(void* argument)
+#endif
+{
+    Sleep(50);
+    const int32_t socket_id = *(const int32_t*)argument;
+    assert(C1("sys_net_abort_socket", socket_id) == 0);
+    return 0;
+}
+
 static void test_native_transport(void)
 {
     static const np_peer_transport transport = {take_native_socket, native_filter, native_close};
@@ -172,6 +184,28 @@ static void test_native_transport(void)
         assert(host_poll(&ready, 1, 1000) == 1);
         char reply[16];
         assert(recv(remote, reply, sizeof(reply), 0) == 5 && !memcmp(reply, "reply", 5));
+
+        vm_write32(OPT, 0);
+        assert(C5("setsockopt", guest, SYS_NET_SOL_SOCKET, SYS_NET_SO_NBIO, OPT, 4) == 0);
+        vm_write32(OPT, 750);
+        assert(C5("setsockopt", guest, SYS_NET_SOL_SOCKET, SYS_NET_SO_RCVTIMEO, OPT, 4) == 0);
+#ifdef _WIN32
+        HANDLE abort_thread = CreateThread(NULL, 0, delayed_abort, (void*)&guest, 0, NULL);
+        assert(abort_thread != NULL);
+#else
+        pthread_t abort_thread;
+        assert(pthread_create(&abort_thread, NULL, delayed_abort, (void*)&guest) == 0);
+#endif
+        assert((uint32_t)call("recv", guest, BUF, 64, 0, 0, 0) == (SYS_NET_RET_BASE | SYS_NET_EINTR));
+#ifdef _WIN32
+        assert(WaitForSingleObject(abort_thread, 1000) == WAIT_OBJECT_0);
+        CloseHandle(abort_thread);
+#else
+        assert(pthread_join(abort_thread, NULL) == 0);
+#endif
+        assert(sendto(remote, "again", 5, 0, (struct sockaddr*)&local, sizeof(local)) == 5);
+        assert(call("recv", guest, BUF, 64, 0, 0, 0) == 5);
+        assert(!memcmp(vm_base + BUF, "again", 5));
         host_closesocket(remote);
         if (finalizing) assert(sys_net_finalize_network() == 0);
         else assert(C1("socketclose", guest) == 0);

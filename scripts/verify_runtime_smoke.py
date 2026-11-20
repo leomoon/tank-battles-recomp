@@ -17,5 +17,21 @@ def main():
         text=result.stdout+result.stderr
         if '[smoke] static SPU PASS' not in text or '[smoke] PASS' not in text or '[smoke] FAIL' in text or result.returncode!=0:
             raise SystemExit('Synthetic boot failed: '+str(result.returncode))
+        socket_marker = '[sys_net] PS3_NET_ONLINE: host sockets registered'
+        if socket_marker in text:
+            raise SystemExit('Offline synthetic boot enabled host sockets')
+
+        # Run the actual game's registration path with an explicit profile.
+        # The audit exits before guest dispatch and needs no RPCN service.
+        profile = root / 'host-sockets.ini'
+        profile.write_text('endpoint=127.0.0.1:1\nnpid=SmokeFixture\npassword=fixture-only\n',
+                           encoding='utf-8')
+        audit = subprocess.run([str(Path(args.runner).resolve()), str(data/'smoke.elf'),
+                                '--rpcn-profile', str(profile)],
+                               env=dict(env, TB_HLE_AUDIT_ONLY='1'), capture_output=True,
+                               text=True, timeout=15)
+        audit_log = audit.stdout + audit.stderr
+        if audit.returncode or socket_marker not in audit_log:
+            raise SystemExit('RPCN synthetic boot failed to register host sockets:\n'+audit_log)
 
 if __name__=='__main__':main()

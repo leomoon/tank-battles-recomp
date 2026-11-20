@@ -450,9 +450,11 @@ const Binding bindings[]={
 }
 void tank_battles_init_offline_network(bool use_rpcn){
 #ifdef _WIN32
-    _putenv_s("PS3_NET_ONLINE","");_putenv_s("PSNR_SERVER","");
+    _putenv_s("PS3_NET_ONLINE",use_rpcn?"1":"");_putenv_s("PSNR_SERVER","");
 #else
-    unsetenv("PS3_NET_ONLINE");unsetenv("PSNR_SERVER");
+    if (use_rpcn) setenv("PS3_NET_ONLINE","1",1);
+    else unsetenv("PS3_NET_ONLINE");
+    unsetenv("PSNR_SERVER");
 #endif
     if (use_rpcn)
         fprintf(stderr,"[rpcn] Tank Battles profile: connecting to the selected server\n");
