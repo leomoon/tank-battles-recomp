@@ -93,6 +93,10 @@ class Builder:
         # (X11, ALSA, PulseAudio, udev) and never links them; only for it may
         # find_library see the build machine. Headers and glibc stay Zig's.
         roots = f"{self.prefix};/" if system_libraries else str(self.prefix)
+        if system_libraries and Path("/usr/lib/x86_64-linux-gnu").is_dir():
+            # Debian/Ubuntu keep them in the multiarch directory, which CMake
+            # searches only when the compiler reports an architecture; Zig does not.
+            options = [*options, "-DCMAKE_LIBRARY_ARCHITECTURE=x86_64-linux-gnu"]
         run([self.cmake, "-S", source, "-B", build, "-G", "Ninja",
              f"-DCMAKE_MAKE_PROGRAM={self.ninja}", f"-DCMAKE_TOOLCHAIN_FILE={self.toolchain_file}",
              "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_INSTALL_PREFIX={self.prefix}",
