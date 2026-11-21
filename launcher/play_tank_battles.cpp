@@ -1,124 +1,163 @@
-// Play Tank Battles: starts the private player from its own folder.
+// Play Tank Battles: the movable player folder's launcher.
 //
-// The folder is self-contained and movable (see scripts/player_folder.py):
 //   Play Tank Battles[.exe]      this launcher
 //   player/TankBattlesRecomp     the user's locally built executable
 //   game/                        installed content plus saves and settings.ini
-//   online/                      optional RPCN profiles; online/active selects one
+//   online/                      saved RPCN accounts; online/active selects one
 //   logs/                        session logs
-// No Python, source checkout or builder workspace is needed. Without a selected
-// profile, or with --offline, the game starts offline.
+//
+// With no arguments it opens a small window: Play (online when signed in),
+// Play Offline, Sign In and Create Account. No Python, source checkout or
+// builder workspace is needed.
+//
+//   --offline                 start the game offline now
+//   --play                    start now, online if the selected account's password is remembered
+//   --account ACTION ...      scriptable account management, password on stdin:
+//       sign-in --server HOST:PORT --user NAME [--token T] [--ca FILE] [--remember]
+//       create  --server HOST:PORT --user NAME --email ADDRESS [--ca FILE] [--remember]
+//       status | sign-out | forget --server HOST:PORT --user NAME
+#include "accounts.h"
 #include "launcher_paths.h"
+#include "platform.h"
+#include "ui.h"
 
 #include <cstdio>
+#include <cstring>
+#include <iostream>
 #include <string>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
-#else
-#include <cerrno>
-#include <cstring>
-#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
+using namespace tb::launcher;
 
 namespace {
 
-#ifdef _WIN32
-void report(const std::wstring& message) {
-    MessageBoxW(nullptr, message.c_str(), L"Tank Battles", MB_OK | MB_ICONERROR);
-}
-
-std::wstring quote(const std::wstring& argument) {
-    // CommandLineToArgvW rules: backslashes double only before a quote.
-    std::wstring result = L"\"";
-    size_t slashes = 0;
-    for (const wchar_t c : argument) {
-        if (c == L'\\') { ++slashes; continue; }
-        if (c == L'"') result.append(slashes * 2 + 1, L'\\');
-        else result.append(slashes, L'\\');
-        slashes = 0;
-        result.push_back(c);
-    }
-    result.append(slashes * 2, L'\\');
-    return result + L"\"";
-}
-#else
 void report(const std::string& message) {
+#ifdef _WIN32
+    MessageBoxW(nullptr, from_utf8(message).wstring().c_str(), L"Tank Battles", MB_OK | MB_ICONERROR);
+#endif
     fprintf(stderr, "Tank Battles: %s\n", message.c_str());
 }
-#endif
+
+std::string option(const std::vector<std::string>& arguments, const char* name) {
+    for (size_t i = 0; i + 1 < arguments.size(); ++i)
+        if (arguments[i] == name) return arguments[i + 1];
+    return {};
+}
+
+bool flag(const std::vector<std::string>& arguments, const char* name) {
+    for (const auto& argument : arguments)
+        if (argument == name) return true;
+    return false;
+}
+
+int account_cli(Accounts& accounts, const std::vector<std::string>& arguments) {
+    const std::string action = option(arguments, "--account");
+    auto print = [](const Result& result) {
+        printf("result=%s\nmessage=%s\n", result.code.c_str(), result.message.c_str());
+        return result.ok() ? 0 : 1;
+    };
+    if (action == "status") {
+        const auto active = accounts.active();
+        printf("active=%s\n", active ? active->id().c_str() : "");
+        for (const auto& account : accounts.saved())
+            printf("saved=%s remembered=%d\n", account.id().c_str(), account.remembered ? 1 : 0);
+        return 0;
+    }
+    if (action == "sign-out") {
+        accounts.sign_out();
+        return print({"signed_out", "Signed out."});
+    }
+    Account account{option(arguments, "--server"), option(arguments, "--user"), option(arguments, "--token")};
+    if (account.endpoint.empty()) account.endpoint = default_server;
+    if (action == "forget") {
+        accounts.forget(account);
+        return print({"forgotten", "Removed the saved account."});
+    }
+    for (const auto& saved : accounts.saved())   // A saved account keeps its server certificate.
+        if (saved.id() == account.id()) account.ca = saved.ca;
+    if (const auto ca = option(arguments, "--ca"); !ca.empty()) {
+        try {
+            account.ca = accounts.import_ca(from_utf8(ca), account.endpoint);
+        } catch (const std::exception& error) {
+            return print({"invalid_input", error.what()});
+        }
+    }
+    std::string password;
+    std::getline(std::cin, password);   // Never on the command line.
+    if (!password.empty() && password.back() == '\r') password.pop_back();
+    const bool remember = flag(arguments, "--remember");
+    if (action == "sign-in") return print(accounts.sign_in(account, password, remember));
+    if (action == "create") return print(accounts.create(account, option(arguments, "--email"), password, remember));
+    fprintf(stderr, "Unknown --account action %s\n", action.c_str());
+    return 2;
+}
+
+void remove_stale_sessions(const Folder& folder) {
+    // Profiles from a run that crashed; each is erased after a normal run.
+    std::error_code error;
+    for (const auto& directory : {private_temporary_directory(folder.online() / ".session"), folder.online() / ".session"})
+        for (const auto& entry : fs::directory_iterator(directory, error))
+            if (entry.path().filename().string().rfind("session-", 0) == 0) erase_private(entry.path());
+}
+
+int launch(const std::vector<std::string>& arguments) {
+    Folder folder;
+    try {
+        folder = locate();
+    } catch (const std::exception& error) {
+        report(error.what());
+        return 2;
+    }
+    Accounts accounts(folder);
+    if (flag(arguments, "--account")) return account_cli(accounts, arguments);
+    remove_stale_sessions(folder);
+
+    std::optional<std::pair<Account, std::string>> online;
+    if (flag(arguments, "--offline")) {
+    } else if (flag(arguments, "--play")) {
+        if (const auto active = accounts.active())
+            if (auto password = accounts.remembered_password(*active)) online = std::make_pair(*active, *password);
+    } else {
+        const auto choice = run_ui(accounts);
+        if (!choice) {
+            report("Could not open the launcher window; starting offline.");
+        } else if (choice->kind == Choice::quit) {
+            return 0;
+        } else if (choice->kind == Choice::online) {
+            online = choice->session;
+        }
+    }
+    const int status = accounts.play(online);
+    if (status < 0) {
+        report("Could not start " + utf8(folder.player()));
+        return 2;
+    }
+    return status;
+}
 
 }  // namespace
 
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+    // A GUI program; scripted use from a console still gets its output.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
+    }
     int count = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &count);
-    std::vector<std::wstring> arguments(argv + (count ? 1 : 0), argv + count);
+    std::vector<std::string> arguments;
+    for (int i = 1; i < count; ++i) arguments.push_back(utf8(fs::path(argv[i])));
     LocalFree(argv);
-    bool offline = false;
-    for (const auto& argument : arguments) offline |= argument == L"--offline";
-    tb::launcher::Folder folder;
-    try {
-        folder = tb::launcher::locate();
-    } catch (const std::exception& error) {
-        report(tb::launcher::from_utf8(error.what()).wstring());
-        return 2;
-    }
-    for (const auto& [name, value] : folder.environment())
-        SetEnvironmentVariableW(tb::launcher::from_utf8(name).wstring().c_str(), value.wstring().c_str());
-    std::wstring command = quote(folder.player().wstring()) + L" " + quote(folder.executable().wstring());
-    if (!offline) {
-        if (const auto profile = folder.selected_profile())
-            command += L" --rpcn-profile " + quote(profile->wstring());
-    }
-    STARTUPINFOW startup{sizeof startup};
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(folder.player().wstring().c_str(), command.data(), nullptr, nullptr, FALSE,
-                        CREATE_NO_WINDOW, nullptr, folder.root.wstring().c_str(), &startup, &process)) {
-        report(L"Could not start " + folder.player().wstring() + L" (error " + std::to_wstring(GetLastError()) + L")");
-        return 2;
-    }
-    WaitForSingleObject(process.hProcess, INFINITE);
-    DWORD status = 1;
-    GetExitCodeProcess(process.hProcess, &status);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    return static_cast<int>(status);
+    return launch(arguments);
 }
 #else
 int main(int argc, char** argv) {
-    bool offline = false;
-    for (int i = 1; i < argc; ++i) offline |= std::strcmp(argv[i], "--offline") == 0;
-    tb::launcher::Folder folder;
-    try {
-        folder = tb::launcher::locate();
-    } catch (const std::exception& error) {
-        report(error.what());
-        return 2;
-    }
-    for (const auto& [name, value] : folder.environment())
-        setenv(name.c_str(), value.c_str(), 1);
-    const std::string player = folder.player().string(), executable = folder.executable().string();
-    std::string profile;
-    if (!offline) {
-        if (const auto selected = folder.selected_profile()) profile = selected->string();
-    }
-    std::vector<char*> command{const_cast<char*>(player.c_str()), const_cast<char*>(executable.c_str())};
-    if (!profile.empty()) {
-        command.push_back(const_cast<char*>("--rpcn-profile"));
-        command.push_back(profile.data());
-    }
-    command.push_back(nullptr);
-    if (chdir(folder.root.c_str()) != 0) {
-        report("Cannot enter the player folder: " + folder.root.string());
-        return 2;
-    }
-    execv(player.c_str(), command.data());
-    report("Could not start " + player + ": " + std::strerror(errno));
-    return 2;
+    return launch(std::vector<std::string>(argv + 1, argv + argc));
 }
 #endif

@@ -30,7 +30,22 @@ constexpr size_t max_body = 0x800000 - header_size;
 enum class Packet : unsigned char { request, reply, notification, server_info };
 enum class Command : uint16_t { login, terminate, create };
 
-struct LoginBusy : std::runtime_error {
+// The server's reason code, for front ends that explain it (account_command).
+struct Rejected : std::runtime_error {
+    Rejected(const std::string& message, int reason) : std::runtime_error(message), reason(reason) {}
+    int reason;
+};
+
+struct LoginBusy : Rejected {
+    explicit LoginBusy(const std::string& message) : Rejected(message, 6) {}
+};
+
+struct TransportError : std::runtime_error {
+    TransportError(const char* message, CURLcode code) : std::runtime_error(message), code(code) {}
+    CURLcode code;
+};
+
+struct ProfileError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
@@ -68,7 +83,7 @@ Profile read_profile(const char* name, bool create) {
         if (line.empty() || line.starts_with('#')) continue;
         const size_t equals = line.find('=');
         if (equals == std::string_view::npos)
-            throw std::runtime_error("Expected key=value in RPCN profile");
+            throw ProfileError("Expected key=value in RPCN profile");
         const auto key = line.substr(0, equals);
         const auto value = line.substr(equals + 1);
         std::string* target = nullptr;
@@ -79,7 +94,7 @@ Profile read_profile(const char* name, bool create) {
         else if (key == "token") target = &profile.token;
         else if (key == "email") target = &profile.email;
         if (!target || !target->empty() || value.empty())
-            throw std::runtime_error("Unknown, repeated or empty RPCN profile setting");
+            throw ProfileError("Unknown, repeated or empty RPCN profile setting");
         *target = value;
     }
     const auto colon = profile.endpoint.rfind(':');
@@ -87,19 +102,19 @@ Profile read_profile(const char* name, bool create) {
     if (colon == std::string::npos || colon == 0 ||
         endpoint.substr(0, colon).find_first_not_of(
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-") != std::string_view::npos)
-        throw std::runtime_error("RPCN endpoint must use hostname:port or IPv4:port");
+        throw ProfileError("RPCN endpoint must use hostname:port or IPv4:port");
     const auto port = endpoint.substr(colon + 1);
     unsigned port_number = 0;
     const auto parsed = std::from_chars(port.data(), port.data() + port.size(), port_number);
     if (parsed.ec != std::errc() || parsed.ptr != port.data() + port.size() ||
         port_number == 0 || port_number > 65535)
-        throw std::runtime_error("Invalid RPCN endpoint port");
+        throw ProfileError("Invalid RPCN endpoint port");
     if (profile.npid.size() < 3 || profile.npid.size() > 16 ||
         profile.npid.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
             std::string::npos)
-        throw std::runtime_error("RPCN NP ID must be 3 to 16 letters, digits, hyphens or underscores");
+        throw ProfileError("RPCN NP ID must be 3 to 16 letters, digits, hyphens or underscores");
     if (profile.password.empty() || (create && profile.email.empty()))
-        throw std::runtime_error("RPCN profile needs a password and account creation also needs an email");
+        throw ProfileError("RPCN profile needs a password and account creation also needs an email");
     if (!ca_path.empty())
         profile.ca = read_small_file(path.parent_path() / utf8_path(ca_path), 256 * 1024);
     return profile;
@@ -161,8 +176,26 @@ std::optional<Profile> active_profile;
 std::jthread worker;
 
 void require_ok(CURLcode code) {
-    if (code != CURLE_OK) throw std::runtime_error(curl_easy_strerror(code));
+    if (code != CURLE_OK) throw TransportError(curl_easy_strerror(code), code);
 }
+
+#ifndef _WIN32
+// The standalone builders' OpenSSL looks under /etc/ssl, but distributions keep
+// their public CA bundle in different places. A system-built curl knows its
+// own; naming the distribution's bundle is equally right for both.
+const char* system_ca_bundle() {
+    static const char* const found = [] () -> const char* {
+        for (const char* path : {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+                                 "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", "/etc/ssl/ca-bundle.pem",
+                                 "/etc/ssl/cert.pem"}) {
+            std::error_code error;
+            if (std::filesystem::is_regular_file(path, error)) return path;
+        }
+        return nullptr;
+    }();
+    return found;
+}
+#endif
 
 void initialize_curl() {
     static const CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -202,6 +235,10 @@ public:
         else {
             require_ok(curl_easy_setopt(easy, CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_NATIVE_CA)));
         }
+#else
+        else if (const char* bundle = system_ca_bundle()) {
+            require_ok(curl_easy_setopt(easy, CURLOPT_CAINFO, bundle));
+        }
 #endif
         require_ok(curl_easy_perform(easy));
         const auto hello = receive(Clock::now() + 5s);
@@ -229,8 +266,7 @@ public:
             if (reason == 9) description = "invalid token";
             if (reason == 11) description = "NP ID already exists";
             if (reason == 13) description = "email already registered";
-            throw std::runtime_error(std::string("RPCN ") + description + " (code " +
-                                     std::to_string(reason) + ")");
+            throw Rejected(std::string("RPCN ") + description + " (code " + std::to_string(reason) + ")", reason);
         }
         return reply;
     }
@@ -556,6 +592,35 @@ std::vector<Friend> friends() {
     return friend_list;
 }
 
+// One stable word per outcome on stdout, for the launcher's account screens.
+const char* account_result(const std::exception& error, bool create) {
+    if (dynamic_cast<const ProfileError*>(&error)) return "invalid_profile";
+    if (const auto* rejected = dynamic_cast<const Rejected*>(&error)) {
+        switch (rejected->reason) {
+            case 6: return "already_signed_in";
+            case 7: return "unknown_user";
+            case 8: return "wrong_password";
+            case 9: return "token_required";
+            case 11: return "name_taken";
+            case 13: return "email_taken";
+            default: return create ? "creation_rejected" : "rejected";
+        }
+    }
+    if (const auto* transport = dynamic_cast<const TransportError*>(&error)) {
+        switch (transport->code) {
+            case CURLE_PEER_FAILED_VERIFICATION: case CURLE_SSL_CACERT_BADFILE: case CURLE_SSL_CERTPROBLEM:
+            case CURLE_SSL_CONNECT_ERROR: case CURLE_SSL_ISSUER_ERROR: case CURLE_SSL_PINNEDPUBKEYNOTMATCH:
+                return "certificate";
+            default: return "unreachable";
+        }
+    }
+    const std::string_view text = error.what();
+    if (text.find("protocol mismatch") != std::string_view::npos) return "protocol";
+    if (text.find("timed out") != std::string_view::npos || text.find("closed the connection") != std::string_view::npos)
+        return "unreachable";
+    return "failed";
+}
+
 int account_command(const char* profile_path, bool create) {
     try {
         const auto profile = read_profile(profile_path, create);
@@ -565,14 +630,17 @@ int account_command(const char* profile_path, bool create) {
             connection.request(Command::create, {profile.npid, profile.password, profile.npid,
                                                   "https://example.invalid/avatar", profile.email});
             printf("[rpcn] Created account %s\n", profile.npid.c_str());
+            printf("[rpcn-result] created\n");
         } else {
             auto session = connect_and_login(profile, {});
             printf("[rpcn] Signed in as %s\n", profile.npid.c_str());
+            printf("[rpcn-result] signed_in\n");
             session.connection->request(Command::terminate, {});
         }
         return 0;
     } catch (const std::exception& error) {
         fprintf(stderr, "[rpcn] %s\n", error.what());
+        printf("[rpcn-result] %s\n", account_result(error, create));
         return 1;
     }
 }

@@ -71,20 +71,6 @@ struct Folder {
                 {"TB_EXPECTED_TITLE_ID", title_id}, {"PS3_STDIO_UNBUFFERED", "1"}, {"PS3_VERBOSE", "0"},
                 {"TB_LOG_DIR", logs()}};
     }
-
-    // online/active holds the file name of the selected profile in online/.
-    std::optional<fs::path> selected_profile() const {
-        std::ifstream active(online() / "active");
-        std::string name;
-        if (!active || !std::getline(active, name)) return std::nullopt;
-        while (!name.empty() && (name.back() == '\r' || name.back() == ' ')) name.pop_back();
-        const fs::path file = from_utf8(name);
-        if (name.empty() || file.has_parent_path() || file.is_absolute()) return std::nullopt;
-        const auto profile = online() / file;
-        std::error_code error;
-        if (!fs::is_regular_file(profile, error)) return std::nullopt;
-        return profile;
-    }
 };
 
 inline Folder locate(fs::path root = {}) {

@@ -1,6 +1,7 @@
 """Movable player folder: staged updates that keep user state, refusal of
-foreign folders, non-destructive migration, and the native launcher's
-folder-relative environment, offline default and profile selection."""
+foreign folders, non-destructive migration; and the native launcher: folder-
+relative environment, accounts (sign-in, remember, tokens, creation, errors,
+per-server records), private temporary profiles and its window."""
 import json
 import os
 from pathlib import Path
@@ -97,14 +98,50 @@ class FolderTests(unittest.TestCase):
         self.assertEqual((self.output / "game/dev_hdd0/home/00000001/savedata/AUTOSAVE/DATA").read_text(), "old progress")
 
 
-@unittest.skipIf(os.name == "nt" or not shutil.which("c++"), "builds the POSIX launcher with the host compiler")
+FAKE_PLAYER = r"""
+import json, os, stat, sys
+args = sys.argv[1:]
+if args and args[0] in ("--rpcn-check", "--rpcn-create-account"):
+    path = args[1]
+    profile = dict(line.split("=", 1) for line in open(path).read().splitlines())
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    log = os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), "calls.jsonl")
+    with open(log, "a") as stream:
+        stream.write(json.dumps({"args": args, "profile": profile, "mode": mode}) + "\n")
+    if profile["password"] != "secret pw":
+        print("[rpcn-result] wrong_password")
+    elif args[0] == "--rpcn-create-account":
+        print("[rpcn-result] created" if "email" in profile else "[rpcn-result] invalid_profile")
+    elif profile["npid"] == "NeedsToken" and profile.get("token") != "T123":
+        print("[rpcn-result] token_required")
+    else:
+        print("[rpcn-result] signed_in")
+    sys.exit(0)
+seen = {"argv": args, "cwd": os.getcwd(), "env": {k: v for k, v in os.environ.items() if k.startswith(("PS3_", "TB_"))}}
+if "--rpcn-profile" in args:
+    path = args[args.index("--rpcn-profile") + 1]
+    seen["profile"] = dict(line.split("=", 1) for line in open(path).read().splitlines())
+    seen["profile_mode"] = stat.S_IMODE(os.stat(path).st_mode)
+print(json.dumps(seen))
+"""
+
+
+def sdl_flags():
+    if not shutil.which("pkg-config"):
+        return None
+    result = subprocess.run(["pkg-config", "--cflags", "--libs", "sdl2"], capture_output=True, text=True)
+    return result.stdout.split() if result.returncode == 0 else None
+
+
+@unittest.skipIf(os.name == "nt" or not shutil.which("c++") or not sdl_flags(), "builds the POSIX launcher with the host compiler and SDL2")
 class LauncherTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temporary = Path(tempfile.mkdtemp(prefix="tb launcher "))
         cls.launcher = cls.temporary / "Play Tank Battles"
-        subprocess.run(["c++", "-std=c++20", "-O1", "-I", str(ROOT / "launcher"), str(ROOT / "launcher/play_tank_battles.cpp"),
-                        "-o", str(cls.launcher)], check=True)
+        sources = [str(ROOT / "launcher" / name) for name in ("play_tank_battles.cpp", "accounts.cpp", "platform.cpp", "ui.cpp")]
+        subprocess.run(["c++", "-std=c++20", "-O1", "-I", str(ROOT / "launcher"), *sources, "-o", str(cls.launcher),
+                        *sdl_flags(), "-pthread"], check=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -116,22 +153,31 @@ class LauncherTests(unittest.TestCase):
         shutil.copy2(self.launcher, root / "Play Tank Battles")
         write(root / "game/dev_hdd0/game/NPUB30154/PARAM.SFO", "sfo")
         write(root / "game/dev_hdd0/game/NPUB30154/USRDIR/EBOOT.elf", "elf")
-        player = write(root / "player/TankBattlesRecomp",
-                       f"#!{sys.executable}\nimport json,os,sys\n"
-                       "print(json.dumps({'argv':sys.argv[1:],'cwd':os.getcwd(),"
-                       "'env':{k:v for k,v in os.environ.items() if k.startswith(('PS3_','TB_'))}}))\n")
+        player = write(root / "player/TankBattlesRecomp", f"#!{sys.executable}\n" + FAKE_PLAYER)
         player.chmod(0o755)
+        self.runtime = self.temporary / (name + " runtime")
+        self.runtime.mkdir(mode=0o700)
         return root
 
-    def run_launcher(self, root, *arguments):
+    def run_launcher(self, root, *arguments, stdin=None, check=True):
         result = subprocess.run([str(root / "Play Tank Battles"), *arguments], capture_output=True, text=True,
-                                env={"PATH": "/nonexistent"}, cwd="/")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout)
+                                input=stdin, cwd="/",
+                                env={"PATH": "/nonexistent", "XDG_RUNTIME_DIR": str(self.runtime)})
+        if check:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
 
-    def test_paths_are_relative_to_the_launcher_and_offline_by_default(self):
+    def account(self, root, *arguments, password="secret pw"):
+        result = self.run_launcher(root, "--account", *arguments, stdin=password + "\n", check=False)
+        return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+    def calls(self, root):
+        path = root / "player/calls.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_paths_are_relative_to_the_launcher_and_offline_is_explicit(self):
         root = self.folder("moved ü folder")
-        seen = self.run_launcher(root)
+        seen = json.loads(self.run_launcher(root, "--offline").stdout)
         title = root / "game/dev_hdd0/game/NPUB30154"
         self.assertEqual(seen["argv"], [str(title / "USRDIR/EBOOT.elf")])
         self.assertEqual(seen["cwd"], str(root))
@@ -139,22 +185,78 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(seen["env"]["PS3_GAMEDATA_ROOT"], str(root / "game"))
         self.assertEqual(seen["env"]["TB_LOG_DIR"], str(root / "logs"))
         self.assertTrue((root / "game/dev_hdd1").is_dir())
+        # --play with no account starts offline too.
+        self.assertEqual(json.loads(self.run_launcher(root, "--play").stdout)["argv"], [str(title / "USRDIR/EBOOT.elf")])
 
-    def test_a_selected_profile_goes_online_unless_offline_is_requested(self):
+    def test_sign_in_remember_and_play_online_with_a_private_temporary_profile(self):
         root = self.folder("online")
-        write(root / "online/me.profile", "endpoint=example.org:31313\n")
-        write(root / "online/active", "me.profile\n")
-        self.assertEqual(self.run_launcher(root)["argv"][1:], ["--rpcn-profile", str(root / "online/me.profile")])
-        self.assertEqual(self.run_launcher(root, "--offline")["argv"][1:], [])
-        write(root / "online/active", "../outside.profile\n")
-        self.assertEqual(self.run_launcher(root)["argv"][1:], [])
+        result = self.account(root, "sign-in", "--server", "example.org:31313", "--user", "Player1", "--remember")
+        self.assertEqual(result["result"], "signed_in")
+        call = self.calls(root)[-1]
+        self.assertEqual(call["mode"], 0o600)
+        self.assertNotIn("secret pw", " ".join(call["args"]), "password on a command line")
+        account = root / "online/Player1@example.org_31313.account"
+        self.assertEqual(stat_mode(account), 0o600)
+        self.assertEqual(self.run_launcher(root, "--account", "status").stdout.splitlines()[0],
+                         "active=Player1@example.org_31313")
+        seen = json.loads(self.run_launcher(root, "--play").stdout)
+        self.assertEqual(seen["profile"]["password"], "secret pw")
+        self.assertEqual(seen["profile_mode"], 0o600)
+        self.assertNotIn("secret pw", " ".join(seen["argv"]))
+        self.assertEqual(list(self.runtime.rglob("session-*")), [], "temporary profile left behind")
+        self.assertEqual(json.loads(self.run_launcher(root, "--offline").stdout)["argv"][1:], [])
+
+    def test_a_password_that_is_not_remembered_is_not_stored(self):
+        root = self.folder("session only")
+        self.assertEqual(self.account(root, "sign-in", "--server", "example.org:31313", "--user", "Player2")["result"], "signed_in")
+        self.assertNotIn("password=", (root / "online/Player2@example.org_31313.account").read_text())
+        # Without a remembered password, --play cannot go online and starts offline.
+        self.assertEqual(json.loads(self.run_launcher(root, "--play").stdout)["argv"][1:], [])
+
+    def test_errors_tokens_creation_and_servers(self):
+        root = self.folder("errors")
+        wrong = self.account(root, "sign-in", "--server", "example.org:31313", "--user", "Player3", password="bad")
+        self.assertEqual(wrong["result"], "wrong_password")
+        self.assertIn("not correct", wrong["message"])
+        self.assertFalse((root / "online/active").exists())
+        needs = self.account(root, "sign-in", "--server", "example.org:31313", "--user", "NeedsToken")
+        self.assertEqual(needs["result"], "token_required")
+        self.assertIn("token", needs["message"])
+        done = self.account(root, "sign-in", "--server", "example.org:31313", "--user", "NeedsToken", "--token", "T123")
+        self.assertEqual(done["result"], "signed_in")
+        created = self.account(root, "create", "--server", "other.example:4000", "--user", "Player4", "--email", "p4@example.invalid")
+        self.assertEqual(created["result"], "signed_in")
+        self.assertEqual([c["args"][0] for c in self.calls(root)[-2:]], ["--rpcn-create-account", "--rpcn-check"])
+        self.assertEqual(self.calls(root)[-2]["profile"]["email"], "p4@example.invalid")
+        status = self.run_launcher(root, "--account", "status").stdout
+        self.assertIn("saved=NeedsToken@example.org_31313", status)
+        self.assertIn("saved=Player4@other.example_4000", status)
+        bad = self.account(root, "sign-in", "--server", "no port", "--user", "Player5")
+        self.assertEqual(bad["result"], "invalid_input")
+        injected = self.account(root, "sign-in", "--server", "example.org:31313", "--user", "Player6", password="pw\nnpid=x")
+        self.assertEqual(injected["result"], "wrong_password")   # Only the first line is the password.
+        self.assertEqual(self.account(root, "forget", "--server", "other.example:4000", "--user", "Player4")["result"], "forgotten")
+        self.assertNotIn("Player4", self.run_launcher(root, "--account", "status").stdout)
+
+    def test_the_window_draws_its_screens(self):
+        root = self.folder("window")
+        shots = self.temporary / "shots"
+        shots.mkdir()
+        result = subprocess.run([str(root / "Play Tank Battles")], capture_output=True, text=True,
+                                env={"PATH": "/nonexistent", "SDL_VIDEODRIVER": "dummy", "TB_LAUNCHER_UI_SMOKE": str(shots)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(list(shots.glob("screen-*.bmp"))), 3)
 
     def test_a_missing_player_is_explained(self):
         root = self.folder("broken")
         (root / "player/TankBattlesRecomp").unlink()
-        result = subprocess.run([str(root / "Play Tank Battles")], capture_output=True, text=True)
+        result = subprocess.run([str(root / "Play Tank Battles"), "--offline"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn("Build it again", result.stderr)
+
+
+def stat_mode(path):
+    return os.stat(path).st_mode & 0o777
 
 
 if __name__ == "__main__":
