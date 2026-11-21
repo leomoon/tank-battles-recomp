@@ -65,7 +65,7 @@ jobs:
           done
       - name: Game-free contract suites
         env:
-          TB_TEST_RUNTIME_BUNDLE: build-zig/linux/runtime-bundle
+          TB_TEST_RUNTIME_BUNDLE: ${{ github.workspace }}/build-zig/linux/runtime-bundle
         run: |
           export TB_TEST_TOOLCHAIN="$RUNNER_TEMP/tc-linux"
           cd scripts
