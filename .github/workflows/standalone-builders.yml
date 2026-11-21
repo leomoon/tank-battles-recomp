@@ -150,7 +150,7 @@ jobs:
             for path in $(which -a $tool 2>/dev/null); do sudo chmod 000 "$(readlink -f "$path")" || true; done
           done
       - name: Window opens
-        run: xvfb-run -a env -i HOME="$HOME" PATH=/usr/bin:/bin "$RUNNER_TEMP/down load ü/squashfs-root/AppRun" --self-test
+        run: xvfb-run -a sh -c 'env -i HOME="$HOME" PATH=/usr/bin:/bin DISPLAY="$DISPLAY" "$RUNNER_TEMP/down load ü/squashfs-root/AppRun" --self-test'
       - name: Build and start a synthetic player offline with only the builder's tools
         run: |
           B="$RUNNER_TEMP/down load ü/squashfs-root"
@@ -184,8 +184,15 @@ jobs:
       - name: A damaged download is refused
         shell: pwsh
         run: |
-          $bytes = [IO.File]::ReadAllBytes("download/Builder.exe"); $bytes[600000] = $bytes[600000] -bxor 1
-          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\damaged.exe", $bytes)
+          $damaged = "$env:RUNNER_TEMP\damaged.exe"
+          Copy-Item download/Builder.exe $damaged
+          $stream = [IO.File]::Open($damaged, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite)
+          try {
+            $stream.Seek(-64, [IO.SeekOrigin]::End) | Out-Null
+            $value = $stream.ReadByte()
+            $stream.Seek(-1, [IO.SeekOrigin]::Current) | Out-Null
+            $stream.WriteByte($value -bxor 1)
+          } finally { $stream.Dispose() }
           $p = Start-Process "$env:RUNNER_TEMP\damaged.exe" -ArgumentList '--extract', "`"$env:RUNNER_TEMP\damaged out`"" -Wait -PassThru
           if ($p.ExitCode -eq 0 -or (Test-Path "$env:RUNNER_TEMP\damaged out\package.json")) { throw "damaged Builder.exe was extracted" }
       - name: Relocate into a path with spaces and extract

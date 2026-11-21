@@ -20,9 +20,14 @@ namespace {
 
 constexpr char magic[8] = {'T', 'B', 'B', 'U', 'I', 'L', 'D', '1'};
 constexpr size_t trailer_size = 8 + 8 + 32 + 8;
+bool extract_only = false;
 
 void fail(const std::wstring& message) {
-    MessageBoxW(nullptr, message.c_str(), L"Tank Battles Builder", MB_OK | MB_ICONERROR);
+    if (extract_only) {
+        fwprintf(stderr, L"Tank Battles Builder: %ls\n", message.c_str());
+    } else {
+        MessageBoxW(nullptr, message.c_str(), L"Tank Battles Builder", MB_OK | MB_ICONERROR);
+    }
 }
 
 std::wstring own_path() {
@@ -159,7 +164,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     int count = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &count);
     std::wstring chosen;
-    if (count == 3 && std::wstring(argv[1]) == L"--extract") chosen = argv[2];
+    if (count == 3 && std::wstring(argv[1]) == L"--extract") {
+        chosen = argv[2];
+        extract_only = true;
+    }
     LocalFree(argv);
 
     HANDLE self = CreateFileW(own_path().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
