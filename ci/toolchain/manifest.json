@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "tools": {
+    "zig": {
+      "version": "0.17.1",
+      "licence": "MIT",
+      "linux": {
+        "url": "https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz",
+        "sha256": "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a"
+      },
+      "windows": {
+        "url": "https://ziglang.org/download/0.17.1/zig-x86_64-windows-0.17.1.zip",
+        "sha256": "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e"
+      }
+    },
+    "cmake": {
+      "version": "4.5.1",
+      "licence": "BSD-3-Clause",
+      "linux": {
+        "url": "https://github.com/Kitware/CMake/releases/download/v4.5.1/cmake-4.5.1-linux-x86_64.tar.gz",
+        "sha256": "83b71181fb62b4fe8f26067a9321448572e7a43bd04ff6c7f54a24c33698f16d"
+      },
+      "windows": {
+        "url": "https://github.com/Kitware/CMake/releases/download/v4.5.1/cmake-4.5.1-windows-x86_64.zip",
+        "sha256": "bfe6eadb245dc8213e0d3feea316b520cb2aae92f5667ffd76059ba6b05c430c"
+      }
+    },
+    "ninja": {
+      "version": "1.13.2",
+      "licence": "Apache-2.0",
+      "linux": {
+        "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip",
+        "sha256": "5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6"
+      },
+      "windows": {
+        "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip",
+        "sha256": "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65"
+      }
+    },
+    "python": {
+      "version": "3.13.18+20261110",
+      "licence": "PSF-2.0 and bundled notices",
+      "linux": {
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "f2d2199eb25880e07863b391cf7124e7ffa1338b0d65600dfcec117c4223a7fb"
+      },
+      "windows": {
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "sha256": "2e0fed09d48989f64c9305da9ff2d37a41c0d13ab2aa6283405b2b620dfbf805"
+      }
+    }
+  },
+  "wheels": {
+    "capstone": {
+      "version": "5.0.9",
+      "linux": {
+        "file": "capstone-5.0.9-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/d1/39/17747862222bb062e86b501f1f148d5ff589b77908b080d30f7f085cbfb7/capstone-5.0.9-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "273fd8d747d2e35c88f91450be51a603ecfaafb00d96d9f315dcb8689c86193e"
+      },
+      "windows": {
+        "file": "capstone-5.0.9-py3-none-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/50/e6/6f06fdb6a9ed32b2f7cd9c036b92d5324112c3ef7080f2c71efc367d40dd/capstone-5.0.9-py3-none-win_amd64.whl",
+        "sha256": "732cedbbb56d42e723f14d7af6387f1454194a820b4b96b56d1e53f865ef85d0"
+      }
+    },
+    "pycryptodome": {
+      "version": "4.5.0",
+      "linux": {
+        "file": "pycryptodome-4.5.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/41/2d/e4d8e0ac2e1192c05ac7078fc37aaeb2bd21083af7c0561092ff3268e19f/pycryptodome-4.5.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "sha256": "3afbe7ecd62357203a588d451c604a61af7d7c9d3f0aa0b792de0612cffb8f8d"
+      },
+      "windows": {
+        "file": "pycryptodome-4.5.0-cp39-abi3-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/61/04/471045179e76295f5da06e8d1f167054a360d418a90cd3218ed10f99975f/pycryptodome-4.5.0-cp39-abi3-win_amd64.whl",
+        "sha256": "b05fed07d07d69c5205689293c3b71a21b8bb4c6f4bb964d1c2d24dfdf22433d"
+      }
+    },
+    "construct": {
+      "version": "2.10.70",
+      "any": {
+        "file": "construct-2.10.70-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/b2/fb/08b3f4bf05da99aba8ffea52a558758def16e8516bc75ca94ff73587e7d3/construct-2.10.70-py3-none-any.whl",
+        "sha256": "c80be81ef595a1a821ec69dc16099550ed22197615f4320b57cc9ce2a672cb30"
+      }
+    },
+    "tabulate": {
+      "version": "0.10.0",
+      "any": {
+        "file": "tabulate-0.10.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/99/55/db07de81b5c630da5cbf5c7df646580ca26dfaefa593667fc6f2fe016d2e/tabulate-0.10.0-py3-none-any.whl",
+        "sha256": "f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3"
+      }
+    },
+    "tqdm": {
+      "version": "4.70.1",
+      "any": {
+        "file": "tqdm-4.70.1-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/a7/03/921a3d3c75785aca9ebfbfcabfbc3a1be12e2ab5265deb026d55a5a3f83e/tqdm-4.70.1-py3-none-any.whl",
+        "sha256": "c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73"
+      }
+    },
+    "colorama": {
+      "version": "0.4.6",
+      "any": {
+        "file": "colorama-0.4.6-py2.py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl",
+        "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"
+      }
+    }
+  },
+  "sources": {
+    "sdl2": {
+      "version": "2.32.10",
+      "licence": "Zlib",
+      "url": "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz",
+      "sha256": "5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165"
+    },
+    "vulkan_headers": {
+      "version": "vulkan-sdk-1.4.363.0",
+      "licence": "Apache-2.0 / BSD-3 / MIT per upstream",
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz",
+      "sha256": "4a078be12bef21cfebc09d878b77a63cff9d68f899254a0b00d0e37ef73e7f7e",
+      "pinned": "digest recorded at pin time"
+    },
+    "spirv_headers": {
+      "version": "vulkan-sdk-1.4.363.0",
+      "licence": "Apache-2.0 / BSD-3 / MIT per upstream",
+      "url": "https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz",
+      "sha256": "5b3a0d099f5c7649e29c0938476c462e71d66ad89a0bde42fa1ba3eb476956c9",
+      "pinned": "digest recorded at pin time"
+    },
+    "spirv_tools": {
+      "version": "vulkan-sdk-1.4.363.0",
+      "licence": "Apache-2.0 / BSD-3 / MIT per upstream",
+      "url": "https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz",
+      "sha256": "e6c83a215538fbfd265ccf398d3877985055df1273dbed73912bd05307664688",
+      "pinned": "digest recorded at pin time"
+    },
+    "glslang": {
+      "version": "vulkan-sdk-1.4.363.0",
+      "licence": "Apache-2.0 / BSD-3 / MIT per upstream",
+      "url": "https://github.com/KhronosGroup/glslang/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz",
+      "sha256": "cda24ec765e6d2845d106b7caa593f34127195a88524cf87821ff0088fb6edec",
+      "pinned": "digest recorded at pin time"
+    },
+    "curl": {
+      "version": "8.23.0",
+      "licence": "curl",
+      "url": "https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.xz",
+      "sha256": "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5"
+    },
+    "openssl": {
+      "version": "3.6.5",
+      "licence": "Apache-2.0",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.6.5/openssl-3.6.5.tar.gz",
+      "sha256": "a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98"
+    },
+    "libiconv": {
+      "version": "1.18",
+      "licence": "LGPL-2.1-or-later",
+      "url": "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.18.tar.gz",
+      "sha256": "3b08f5f4f9b4eb82f151a7040bfd6fe6c6fb922efe4b1659c66ea933276965e8",
+      "pinned": "digest recorded at pin time",
+      "targets": [
+        "windows"
+      ]
+    }
+  }
+}

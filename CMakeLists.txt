@@ -424,6 +424,11 @@ if(WIN32)
         gdi32
         winmm
     )
+    if(NOT MSVC)
+        # MinGW (the standalone builders' Zig toolchain) ignores #pragma
+        # comment(lib), so name the D3D12 backend's imports explicitly.
+        target_link_libraries(ps3recomp_runtime PRIVATE d3d12 dxgi d3dcompiler_47 dxguid)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

@@ -64,7 +64,9 @@ foreach(fixture IN ITEMS draw_groups depth16 nv3089)
     else()
         target_compile_options(vulkan_${fixture} PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
         target_link_options(vulkan_${fixture} PRIVATE -Wl,--gc-sections)
-        target_link_libraries(vulkan_${fixture} PRIVATE m ${CMAKE_DL_LIBS} Threads::Threads)
+        if(NOT WIN32)
+            target_link_libraries(vulkan_${fixture} PRIVATE m ${CMAKE_DL_LIBS} Threads::Threads)
+        endif()
     endif()
 endforeach()
 
@@ -83,7 +85,7 @@ endforeach()
 list(APPEND tb_archive_sources "\"${CMAKE_CURRENT_SOURCE_DIR}/main.cpp\"")
 list(JOIN tb_archive_sources ",\n" tb_archive_sources_json)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/runtime-build.json" CONTENT
-"{\"schema\":1,\"compiler_id\":\"${CMAKE_CXX_COMPILER_ID}\",\"compiler_version\":\"${CMAKE_CXX_COMPILER_VERSION}\",\"compiler_frontend\":\"${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}\",\"msvc_version\":\"${MSVC_VERSION}\",\"windows_sdk\":\"${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}\",\"architecture\":\"${CMAKE_SYSTEM_PROCESSOR}\",\"system\":\"${CMAKE_SYSTEM_NAME}\",\"crt\":\"${CMAKE_MSVC_RUNTIME_LIBRARY}\",\"archive_sources\":[${tb_archive_sources_json}]}\n")
+"{\"schema\":1,\"compiler_id\":\"${CMAKE_CXX_COMPILER_ID}\",\"compiler_version\":\"${CMAKE_CXX_COMPILER_VERSION}\",\"compiler_frontend\":\"${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}\",\"msvc_version\":\"${MSVC_VERSION}\",\"windows_sdk\":\"${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}\",\"architecture\":\"${CMAKE_SYSTEM_PROCESSOR}\",\"system\":\"${CMAKE_SYSTEM_NAME}\",\"crt\":\"${CMAKE_MSVC_RUNTIME_LIBRARY}\",\"toolchain\":\"${TB_TOOLCHAIN}\",\"target\":\"${TB_ZIG_TARGET}\",\"archive_sources\":[${tb_archive_sources_json}]}\n")
 
 set(tb_audio_burst_tools "")
 set(tb_audio_burst_dependency "")
@@ -98,10 +100,17 @@ endif()
 set(tb_bundle_dependency_default "")
 if(VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
     set(tb_bundle_dependency_default "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+elseif(TB_TOOLCHAIN)
+    # Standalone-builder route: the scripts/build_runtime_deps.py prefix (deps.json) on either OS.
+    foreach(prefix IN LISTS CMAKE_PREFIX_PATH)
+        if(EXISTS "${prefix}/deps.json")
+            set(tb_bundle_dependency_default "${prefix}")
+        endif()
+    endforeach()
 endif()
 set(TB_BUNDLE_DEPENDENCIES "${tb_bundle_dependency_default}" CACHE PATH
     "Windows: installed dependency tree packed into the runtime bundle (default: the vcpkg triplet directory)")
-if(WIN32 AND NOT EXISTS "${TB_BUNDLE_DEPENDENCIES}/../vcpkg/status")
+if(WIN32 AND NOT TB_TOOLCHAIN AND NOT EXISTS "${TB_BUNDLE_DEPENDENCIES}/../vcpkg/status")
     message(WARNING "runtime_bundle needs TB_BUNDLE_DEPENDENCIES (a vcpkg triplet directory with ../vcpkg/status); "
                     "configure with the vcpkg toolchain and VCPKG_MANIFEST_DIR=ci/windows-runtime as README describes.")
 endif()
@@ -118,7 +127,7 @@ add_custom_target(runtime_bundle
       --tool "$<TARGET_FILE:timeline_fixture>" --tool "$<TARGET_FILE:entitlement_fixture>"
       --tool "$<TARGET_FILE:matching_rooms>" --tool "$<TARGET_FILE:peer_udp_fixture>" --tool "$<TARGET_FILE:sysnet_fixture>"
       ${tb_audio_burst_tools}
-      $<$<BOOL:${WIN32}>:--dependencies> $<$<BOOL:${WIN32}>:${TB_BUNDLE_DEPENDENCIES}>
+      $<$<BOOL:${TB_BUNDLE_DEPENDENCIES}>:--dependencies> $<$<BOOL:${TB_BUNDLE_DEPENDENCIES}>:${TB_BUNDLE_DEPENDENCIES}>
     DEPENDS tank_battles_host_archive tank_battles_boot_archive tank_battles_cpu_boot ps3recomp_runtime
       runtime_cpu_smoke vulkan_draw_groups vulkan_depth16 vulkan_nv3089
       runtime_shader_check

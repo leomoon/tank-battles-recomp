@@ -1,0 +1,73 @@
+# Redistributable build toolchain for the standalone builders
+
+The standalone builders compile each player's private executable on the player's own machine, from their purchased inputs, without installed development tools. That needs a compiler, linker, C/C++ runtime and build tools that may legally ship inside `Builder.exe` and `Builder.AppImage`. The Microsoft Build Tools and Windows SDK used by the ClangCL route may not be redistributed, so the builders use a different, freely redistributable stack. The ClangCL/vcpkg route in [RUNTIME_BUNDLE.md](RUNTIME_BUNDLE.md) remains the developer and CI path for MSVC-ABI Windows builds.
+
+## The stack
+
+| Component | Pinned | Role | Licence |
+| --- | --- | --- | --- |
+| Zig 0.17.1 | linux and windows host archives | The only compiler and linker: clang/lld 22.1.8, libc++, glibc 2.31 stubs, mingw-w64 | MIT; bundled LLVM Apache-2.0 with LLVM exception; mingw-w64 ZPL/public domain; glibc headers LGPL |
+| CMake 4.5.1 | official binaries | Build configuration | BSD-3-Clause |
+| Ninja 1.13.2 | official binaries | Build execution | Apache-2.0 |
+| CPython 3.13.18 (python-build-standalone 20261110) | install_only_stripped | Runs setup, the PPU/SPU lifter and title patches | PSF-2.0 plus bundled notices |
+| capstone, pycryptodome, construct, tabulate, tqdm, colorama | wheels per host | Lifter dependencies from `external/ps3recomp/requirements.txt` | BSD-3, BSD/Public Domain, MIT, MIT, MPL-2.0/MIT, BSD-3 |
+
+Every URL and SHA-256 is in [`ci/toolchain/manifest.json`](../ci/toolchain/manifest.json). Most digests are the publisher's own (Zig's index, GitHub release asset digests, PyPI). The Khronos tag archives and libiconv publish no digest; theirs were recorded when pinned and are marked so in the manifest.
+
+Targets: x86_64 Linux with a glibc 2.31 baseline (Ubuntu 20.04, Debian 11, Fedora 32 and newer), and x86_64 Windows 10 or newer with the mingw-w64 GNU ABI and the Universal CRT. Windows players import only Windows system DLLs (Universal CRT, kernel/user/GDI, Winsock, D3D12, DXGI, D3DCompiler_47). No libc++ or mingw runtime DLL is shipped or needed. Linux players link `libc`, `libm`, `libpthread` and `libdl`, and load X11, PulseAudio, ALSA, udev and the Vulkan driver at run time.
+
+## Runtime dependencies built with the same compiler
+
+`scripts/build_runtime_deps.py` builds these from the pinned sources as static libraries, with the same Zig, for each target. The runtime bundle carries the resulting libraries, headers and relocatable CMake packages, so players link against nothing from the machine.
+
+| Library | Version | Licence | Notes |
+| --- | --- | --- | --- |
+| SDL2 | 2.32.10 | Zlib | Linux: X11 (XInput2, XRandR), PulseAudio, ALSA, udev, loaded at run time. Native Wayland is not built; Wayland desktops use XWayland. |
+| Vulkan-Headers, SPIRV-Headers, SPIRV-Tools, glslang | vulkan-sdk-1.4.363.0 | Apache-2.0, MIT, BSD-3 | glslang with HLSL legalization through SPIRV-Tools-opt. SPIRV-Tools' shared library is removed after install. |
+| OpenSSL | 3.6.5 | Apache-2.0 | Linux trust store at `/etc/ssl` |
+| curl | 8.23.0 | curl (MIT-style) | OpenSSL backend; TLS sockets only |
+| GNU libiconv | 1.18 | LGPL-2.1-or-later | Windows only |
+
+Building the dependencies needs Perl and make on the Linux CI machine for OpenSSL and libiconv, and the X11, PulseAudio, ALSA and udev development headers for SDL2. These are build-machine requirements only; nothing from them ships.
+
+## Redistribution obligations
+
+- Ship each component's licence text and notices with the builder (the toolchain's own `LICENSE` files, CPython's notices, and the `licences/` directory of the runtime bundle).
+- **libiconv is LGPL and is linked statically into Windows players.** The builder must ship the exact libiconv 1.18 source archive (its SHA-256 is in the manifest) with its licence. Players are built locally from objects and the static library, so users can always relink against a modified libiconv, which satisfies the LGPL's relinking requirement.
+- Zig's glibc headers and stubs are LGPL; using them to compile does not place the player under the LGPL. The Linux player links the system glibc dynamically.
+- No purchased content, keys, generated PPU/SPU code, saves or RPCN credentials are part of any toolchain or bundle payload.
+
+## Size
+
+Unpacked: the Linux host toolchain is about 750 MB (Zig 330 MB, CMake 150 MB, Python 160 MB, wheels and Ninja the rest). The Linux runtime bundle is about 216 MB, mostly SPIRV-Tools, glslang and OpenSSL static libraries plus the game-free test tools. Both compress roughly four to one. A full player build additionally needs several gigabytes of workspace for the generated translation units and object files.
+
+## Reproduce
+
+```sh
+python scripts/toolchain.py fetch --host linux --cache ~/.cache/tb-toolchain --sources
+python scripts/toolchain.py stage --host linux --cache ~/.cache/tb-toolchain --dest /opt/tb-toolchain
+python scripts/build_runtime_deps.py --toolchain /opt/tb-toolchain --cache ~/.cache/tb-toolchain --target linux --prefix /opt/tb-deps/linux
+cmake -S . -B build-zig/linux -G Ninja -DCMAKE_MAKE_PROGRAM=/opt/tb-toolchain/ninja \
+  -DCMAKE_TOOLCHAIN_FILE=/opt/tb-toolchain/cmake/zig-linux.cmake \
+  -DCMAKE_PREFIX_PATH=/opt/tb-deps/linux -DCMAKE_FIND_ROOT_PATH=/opt/tb-deps/linux \
+  -DCMAKE_BUILD_TYPE=Release -DTB_BUILD_RUNTIME_BUNDLE=ON -DPS3RECOMP_RSX_VULKAN=ON \
+  -DPython3_EXECUTABLE=/opt/tb-toolchain/python/bin/python3
+cmake --build build-zig/linux && ctest --test-dir build-zig/linux
+cmake --build build-zig/linux --target runtime_bundle
+python scripts/verify_runtime_consumer.py --bundle build-zig/linux/runtime-bundle --output consumer-check \
+  --source "$(git rev-parse HEAD)" --toolchain /opt/tb-toolchain
+```
+
+A real player links the same way from a relocated bundle and the user's local translations:
+
+```sh
+cmake -S cmake/player-consumer -B build-zig/player-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_MAKE_PROGRAM=/opt/tb-toolchain/ninja -DCMAKE_TOOLCHAIN_FILE=/opt/tb-toolchain/cmake/zig-linux.cmake \
+  -DPython3_EXECUTABLE=/opt/tb-toolchain/python/bin/python3 -DTB_RUNTIME_ROOT=/path/to/runtime-bundle \
+  -DTB_RUNTIME_EXPECTED_SOURCE="$(git rev-parse HEAD)" -DRECOMP_DIR="$PWD/recompiled" -DTB_PORT_ROOT="$PWD"
+cmake --build build-zig/player-linux
+```
+
+On the Linux reference host the Zig-built player reached audio initialization in each of 5 boots, as did the GCC player, and measured 50.6 FPS against GCC's 50.6 FPS in the same profiled 20-second Battle run.
+
+Use `--target windows` and `zig-windows.cmake` for the Windows bundle; both are cross-built on Linux. `verify_runtime_consumer.py --toolchain` builds the synthetic title with only the staged CMake, Ninja, Python and Zig, with `PATH` limited to them and pkg-config disabled, and runs it when the bundle's target matches the host (otherwise it confirms the cross-link).

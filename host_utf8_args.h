@@ -16,5 +16,13 @@ static int tb_host_utf8_entry(int count,wchar_t** wide,int (*run)(int,char**)) {
     for(int i=0;i<count;++i)free(args[i]);
     free(args);return result;
 }
+#if defined(__MINGW32__)
+// MinGW (the standalone builders' toolchain) selects wmain only with -municode;
+// read the same wide command line through an ordinary main instead.
+#include <shellapi.h>
+#define TB_UTF8_ENTRY(function) int main(void){int count=0;wchar_t** args=CommandLineToArgvW(GetCommandLineW(),&count);\
+    if(!args)return 2;int result=tb_host_utf8_entry(count,args,function);LocalFree(args);return result;}
+#else
 #define TB_UTF8_ENTRY(function) int wmain(int count,wchar_t** args){return tb_host_utf8_entry(count,args,function);}
+#endif
 #endif

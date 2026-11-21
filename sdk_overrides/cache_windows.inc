@@ -9,6 +9,11 @@
 #include <sys/stat.h>
 #include <windows.h>
 #include <io.h>
+#if defined(__MINGW32__)
+/* MinGW declares rand_s only when _CRT_RAND_S precedes the first <stdlib.h>,
+ * which an earlier include in the generated source may already have pulled in. */
+int __cdecl rand_s(unsigned int* random_value);
+#endif
 #include <fcntl.h>
 #include <wchar.h>
 static wchar_t* tb_cache_wide(const char* path) {

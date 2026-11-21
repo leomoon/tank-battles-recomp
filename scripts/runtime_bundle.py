@@ -108,7 +108,8 @@ def pack(args):
         copy(path,'licences/attributions/'+path.name)
     copy(ROOT/'cmake/RuntimeConsumer.cmake','cmake/RuntimeConsumer.cmake')
     copy(ROOT/'scripts/runtime_bundle.py','tools/runtime_bundle.py')
-    copy(ROOT/'ci/windows-runtime/vcpkg.json','provenance/vcpkg.json')
+    if not metadata.get('toolchain'):
+        copy(ROOT/'ci/windows-runtime/vcpkg.json','provenance/vcpkg.json')
     metadata['source_sha256']={str(Path(p).relative_to(ROOT)):sha(Path(p)) for p in metadata['archive_sources']}
     (out/'provenance').mkdir(exist_ok=True)
     (out/'provenance/build.json').write_text(json.dumps(metadata,indent=2)+'\n')
@@ -116,14 +117,25 @@ def pack(args):
     # No vcpkg download/build caches, executables, debug libraries or DLLs.
     if args.dependencies:
         deps=Path(args.dependencies)
-        if not (deps/'lib').is_dir() or not (deps.parent/'vcpkg/status').is_file():
-            raise ValueError('Dependency tree must be a vcpkg triplet directory (include, lib, share) beside vcpkg/status: '+str(deps)+'; set TB_BUNDLE_DEPENDENCIES or use the vcpkg toolchain')
-        copy(deps.parent/'vcpkg/status','provenance/vcpkg-status.txt')
+        zig_prefix=(deps/'deps.json').is_file()
+        if not (deps/'lib').is_dir() or not (zig_prefix or (deps.parent/'vcpkg/status').is_file()):
+            raise ValueError('Dependency tree must be a vcpkg triplet directory beside vcpkg/status, or a scripts/build_runtime_deps.py prefix with deps.json: '+str(deps))
+        if zig_prefix:
+            # Static libraries, headers and relocatable CMake packages built by the
+            # pinned Zig; DLL import libraries, executables and scripts stay out.
+            copy(deps/'deps.json','provenance/deps.json')
+            copy(ROOT/'ci/toolchain/manifest.json','provenance/toolchain-manifest.json')
+        else:
+            copy(deps.parent/'vcpkg/status','provenance/vcpkg-status.txt')
         for folder in ('include','lib','share'):
+            if not (deps/folder).is_dir():
+                continue
             for path in (deps/folder).rglob('*'):
                 if path.is_file():
                     if path.is_symlink() or path.suffix.lower() in {'.dll','.exe','.pdb','.bin','.elf','.edat','.rap','.rif','.rifkey','.pkg','.self'}:
                         raise ValueError('Unexpected dependency payload: '+str(path))
+                    if zig_prefix and (path.name.endswith('.dll.a') or '.so' in path.suffixes or path.suffix in ('.la','.pc') or 'pkgconfig' in path.parts):
+                        continue
                     copy(path,'deps/'+path.relative_to(deps).as_posix())
     members={}
     expected={Path(p).name for p in metadata['archive_sources']}
