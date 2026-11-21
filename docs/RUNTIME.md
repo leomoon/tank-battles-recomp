@@ -71,3 +71,5 @@ python scripts/port.py run --rpcn-profile /path/to/profile.ini --console
 ```
 
 Pass `--build-dir` when using a build outside the project's configured default. For a standalone player, the equivalent executable arguments are `--rpcn-create-account FILE`, `--rpcn-check FILE`, or `<PPU ELF> --rpcn-profile FILE`. Sign-in opens the Online Battle submenu. [Native RPCN rooms](RPCN_ROOMS.md) covers room support and its tests. Live peer signaling and synchronized gameplay are still in development.
+
+After signing in, open **High Scores** from the main menu to see rankings on the selected RPCN server. The game submits scores through its existing score calls during play. Each server keeps its own rankings and attached score details. Stock RPCN with `CreateMissing=true` creates a board when it receives the first score. If automatic creation is disabled, configure the title's boards for `NPWR00718_00` in the server's `scoreboards.cfg` before accepting submissions.

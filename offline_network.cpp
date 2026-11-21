@@ -5,6 +5,7 @@
 #include "rpcn/client.h"
 #include "rpcn/basic.h"
 #include "rpcn/matching.h"
+#include "rpcn/score.h"
 #include "ppu_recomp.h"
 #include "ps3emu/nid.h"
 #include <algorithm>
@@ -64,7 +65,7 @@ void reset_np_services() {
     score.clear();tus.clear();np2=false;clear_matching();manager_callback={};
     voice_pending=false;++voice_generation;signaling.fill(0);
     std::erase_if(completions,[](const auto& e){return e.owner!=Owner::net;});
-    if (tb::rpcn::enabled()) { tb::rpcn::reset_matching(); tb::rpcn::reset_basic(); }
+    if (tb::rpcn::enabled()) { tb::rpcn::reset_matching(); tb::rpcn::reset_basic(); tb::rpcn::reset_score(); }
 }
 void delegate(const char* name, ppu_context* c) {
     tb_sdk_ps3_hle_call(ps3_compute_nid(name),c);
@@ -473,6 +474,7 @@ void tank_battles_register_offline_network(){
     if (tb::rpcn::enabled()) {
         tb::rpcn::register_basic();
         tb::rpcn::register_matching();
+        tb::rpcn::register_score();
         // The NPUB30154 data_receiver publishes its socket before its first
         // recvfrom. The creator immediately tries the peer handshake.
         ppu_thread_set_startup_wait_entry(0x00AB6880);

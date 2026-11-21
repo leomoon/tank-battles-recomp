@@ -6,6 +6,7 @@
 #include "offline_network.h"
 #include <cstdlib>
 #include <cstdio>
+#include <vector>
 #ifdef TB_DIAGNOSTIC_TESTS
 #include "ppu_recomp.h"
 #endif
@@ -16,8 +17,7 @@ extern "C" int ps3_hle_has(uint32_t);
 extern "C" void ps3_hle_register_ctx(uint32_t, const char*, tank_battles_override_fn);
 extern "C" void tb_sdk_ps3_hle_call(uint32_t, ppu_context*);
 struct Override { uint32_t nid; uint32_t alias; };
-static Override overrides[128];
-static unsigned count;
+static std::vector<Override> overrides;
 
 void tank_battles_register_override(uint32_t nid, tank_battles_override_fn handler)
 {
@@ -29,17 +29,19 @@ void tank_battles_register_override(uint32_t nid, tank_battles_override_fn handl
     // Dispatch through the SDK under a private NID to preserve its TOC guard,
     // callback pumping, ABI adaptation and in-flight tracking.
     ps3_hle_register_ctx(alias, "Tank Battles port override", handler);
-    if (!ps3_hle_has(alias)) std::abort();
-    for (unsigned i = 0; i < count; ++i)
-        if (overrides[i].nid == nid) { overrides[i].alias = alias; return; }
-    if (count == 128) std::abort();
-    overrides[count++] = {nid, alias};
+    if (!ps3_hle_has(alias)) {
+        std::fprintf(stderr, "[hle] Could not register override 0x%08x (alias 0x%08x)\n", nid, alias);
+        std::abort();
+    }
+    for (auto& entry : overrides)
+        if (entry.nid == nid) { entry.alias = alias; return; }
+    overrides.push_back({nid, alias});
 }
 bool tank_battles_dispatch_override(uint32_t nid, ppu_context* context)
 {
-    for (unsigned i = 0; i < count; ++i)
-        if (overrides[i].nid == nid) {
-            tb_sdk_ps3_hle_call(overrides[i].alias, context);
+    for (const auto& entry : overrides)
+        if (entry.nid == nid) {
+            tb_sdk_ps3_hle_call(entry.alias, context);
             return true;
         }
     return false;

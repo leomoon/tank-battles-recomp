@@ -27,6 +27,8 @@ enum class Request : uint16_t {
     leave_room = 16, search_room = 17, get_room_data = 20, set_room_data = 21,
     ping_room_owner = 25, send_room_message = 26,
     signaling_info = 27,
+    record_score = 31, record_score_data = 32, score_data = 33,
+    score_range = 34, score_npid = 36,
 };
 
 struct Notification {

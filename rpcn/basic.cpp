@@ -153,6 +153,25 @@ uint32_t attachment(ppu_context* c) {
     fprintf(stderr,"[rpcn-basic] attachment id=1 bytes=%zu sender=%s\n",count,selected->sender.c_str());
     return count<selected->data.size()?0x8002a66e:0;
 }
+uint32_t friend_count(ppu_context* c) {
+    if (!np_is_initialized()) return 0x8002a662;
+    if (!guest_range(c->gpr[3],4)) return invalid;
+    if (status().state!=State::online) return 0x8002aa06;
+    vm_write32(c->gpr[3],uint32_t(friends().size()));
+    return 0;
+}
+uint32_t friend_entry(ppu_context* c) {
+    if (!np_is_initialized()) return 0x8002a662;
+    const auto index=c->gpr[3],out=c->gpr[4];
+    if (!guest_range(out,36)) return invalid;
+    if (status().state!=State::online) return 0x8002a66f;
+    const auto list=friends();
+    if (index>=list.size()) return 0x8002aa06;
+    if (list[index].npid.size()>16) return invalid;
+    const auto& npid=list[index].npid;
+    for (unsigned i=0;i<36;++i) vm_write8(out+i,i<npid.size()?uint8_t(npid[i]):0);
+    return 0;
+}
 template<uint32_t (*call)(ppu_context*)> void handle(ppu_context* c) {
     std::lock_guard guard(basic_lock); c->gpr[3]=call(c);
 }
@@ -232,6 +251,8 @@ void register_basic() {
     tank_battles_register_override(ps3_compute_nid("sceNpBasicRecvMessageCustom"),handle<receive>);
     tank_battles_register_override(ps3_compute_nid("sceNpBasicGetEvent"),handle<get_event>);
     tank_battles_register_override(ps3_compute_nid("sceNpBasicRecvMessageAttachmentLoad"),handle<attachment>);
+    tank_battles_register_override(ps3_compute_nid("sceNpBasicGetFriendListEntryCount"),handle<friend_count>);
+    tank_battles_register_override(ps3_compute_nid("sceNpBasicGetFriendListEntry"),handle<friend_entry>);
     tank_battles_register_override(ps3_compute_nid("sceNpBasicUnregisterHandler"),[](ppu_context* c){reset_basic();c->gpr[3]=0;});
     tank_battles_register_override(ps3_compute_nid("sceNpBasicAbortGui"),[](ppu_context* c){
         std::lock_guard guard(basic_lock);close_panel();c->gpr[3]=0;

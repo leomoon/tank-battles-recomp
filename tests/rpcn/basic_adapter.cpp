@@ -81,6 +81,10 @@ int main() {
  register_basic();
  constexpr uint32_t context=0x11000,handler=0x11100,message=0x11200,payload=0x11300;
  constexpr uint32_t event=0x11400,from=0x11500,data=0x11600,size=0x11700;
+ assert(!call("sceNpBasicGetFriendListEntryCount",{size}) && vm_read32(size)==2);
+ assert(!call("sceNpBasicGetFriendListEntry",{1,from}));
+ for (unsigned i=0;i<36;++i) assert(vm_read8(from+i)==(i<7?"Offline"[i]:0));
+ assert(call("sceNpBasicGetFriendListEntry",{2,from})==0x8002aa06);
  for (unsigned i=0;i<9;++i) vm_write8(context+i,"NPWR00718"[i]);
  assert(!call("sceNpBasicRegisterContextSensitiveHandler",{context,handler,123}));
  vm_write16(message+8,3);vm_write32(message+12,1);vm_write32(message+32,payload);vm_write32(message+36,24);

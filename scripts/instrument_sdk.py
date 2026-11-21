@@ -236,6 +236,10 @@ def main():
     if text.count(before)!=1:raise SystemExit('Player settings anchor mismatch')
     text=text.replace(before,after,1)
   if relative=='runtime/ppu/ppu_hle.cpp':
+   # The SDK table also stores each port override under a private NID.
+   before='#define HLE_CTX_CAP 256'
+   if text.count(before)!=1:raise SystemExit('HLE context capacity anchor mismatch')
+   text=text.replace(before,'#define HLE_CTX_CAP 512',1)
    for name in ('ps3_hle_call','ps3_hle_register','ps3_hle_register_ctx','ps3_hle_register_fast'):
     pattern=r'(extern "C" void )'+name+r'(\()'
     text,count=re.subn(pattern,lambda m:m[1]+'tb_sdk_'+name+m[2],text)
