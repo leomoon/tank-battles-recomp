@@ -37,7 +37,8 @@ STAGES = (("inputs", "Check inputs, space and builder files"),
           ("import", "Import and verify your game"),
           ("translate", "Translate the game code"),
           ("configure", "Prepare the native build"),
-          ("compile", "Compile your player"))
+          ("compile", "Compile your player"),
+          ("assemble", "Create your player folder"))
 # Measured on the reference title: the largest lifted translation unit peaks
 # near 0.3 GB in clang/Zig and the lifter near the value below per worker.
 # Both carry a safety margin; a fixed reserve stays free for the desktop.
@@ -340,8 +341,13 @@ def run_setup(args, config, reporter: Reporter) -> Path | None:
     from setup_inputs import print_checks, require_valid
     from setup_pipeline import player_executable, run_pipeline, setup_lock
 
+    import player_folder
     workspace = port.LAYOUT.workspace
     reporter.stage("inputs", "started")
+    output = (Path(args.output).expanduser().resolve() if getattr(args, "output", None)
+              else player_folder.default_output() if port.LAYOUT.packaged and not args.check else None)
+    if output:
+        player_folder.check_output(output)   # Before any long work.
     checks = check_game(args, config, workspace, port.resolve)   # Prints its own results.
     extra = []
     if not args.import_only:
@@ -372,7 +378,25 @@ def run_setup(args, config, reporter: Reporter) -> Path | None:
         args.recomp_dir = None
         args.cmake_args = []
         run_pipeline(args, config, port.resolve, port.prepare, port.configure, port.build, notify=reporter.stage)
-    player = player_executable(port.resolve(args.build_dir or config["paths"]["build"]), args)
+    build_dir = port.resolve(args.build_dir or config["paths"]["build"])
+    player = player_executable(build_dir, args)
+    if output:
+        reporter.stage("assemble", "started")
+        sources = player_folder.build_outputs(build_dir, getattr(args, "multi_config", False))
+        sources.update(player_folder.content_files(port.resolve(config["paths"]["vfs_root"]),
+                                                   port.resolve(config["paths"]["hdd0_root"]) / "home/00000001/exdata",
+                                                   config["game"]["title_id"]))
+        try:
+            source = port.LAYOUT.source_commit()
+        except ValueError:
+            source = None
+        player_folder.assemble(output, sources, dict(source_commit=source, title_id=config["game"]["title_id"]))
+        if getattr(args, "migrate_saves_from", None):
+            player_folder.migrate(Path(args.migrate_saves_from).expanduser().resolve(), output)
+        reporter.stage("assemble", "done")
+        launcher = output / player_folder.launcher_name()
+        print(f"[setup] Ready. Play with: {launcher}")
+        return launcher
     workspace_option = f" --workspace {shlex_quote(str(workspace))}" if workspace != port.ROOT else ""
     build_option = f" --build-dir {shlex_quote(args.build_dir)}" if args.build_dir else ""
     print(f"[setup] Ready. Launch with: python scripts/port.py{workspace_option} run{build_option}")

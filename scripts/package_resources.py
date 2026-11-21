@@ -30,7 +30,7 @@ SCRIPT_ENTRIES = ("port.py", "runtime_abi.py", "patch_network_events.py", "toolc
                   "package_resources.py", "setup_engine.py", "player_folder.py")
 SCRIPT_DATA = ("rap_format.json",)
 TOP_FILES = ("config.toml", "LICENSE", "runtime_entry.cpp", "ci/toolchain/manifest.json")
-CMAKE_FILES = ("cmake/TitleCompileFlags.cmake", "cmake/player-consumer/CMakeLists.txt")
+CMAKE_FILES = ("cmake/TitleCompileFlags.cmake", "cmake/PlayerLauncher.cmake", "cmake/player-consumer/CMakeLists.txt")
 SDK = "external/ps3recomp"
 SDK_DIRS = ("tools", "cmake", "include", "runtime", "libs")
 SDK_FILES = ("LICENSE", "requirements.txt")
@@ -68,6 +68,7 @@ def resource_files(root: Path = ROOT) -> list[str]:
     names += [name for name in TOP_FILES if (root / name).is_file()]
     names += [path.relative_to(root).as_posix() for path in sorted(root.glob("*.h"))]
     names += list(CMAKE_FILES)
+    names += [path.relative_to(root).as_posix() for path in sorted((root / "launcher").glob("*")) if path.is_file()]
     names += [f"{SDK}/{name}" for name in SDK_FILES if (root / SDK / name).is_file()]
     for directory in SDK_DIRS:
         for path in sorted((root / SDK / directory).rglob("*")):

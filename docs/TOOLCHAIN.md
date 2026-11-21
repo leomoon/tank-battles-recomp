@@ -94,3 +94,17 @@ A checkout keeps the existing behaviour and can select the same route with `--ru
 - Failures become one sentence and an action: a full drive, out of memory, failed translation, configuration or compilation (details in the log), or the input problem found by the checks.
 
 `scripts/test_setup_engine.py` covers job bounds, error classification and cancellation of a child and its grandchild without touching an unrelated process. With a bundle and toolchain it also runs the packaged pipeline on synthetic input without network: injected translation failure, cancel during configure, resume, and a no-op repeat.
+
+## The movable player folder
+
+With `--output DIR` (always, for an installed builder; default `~/Games/Tank Battles Recomp`), setup's final `assemble` stage creates or updates a self-contained folder:
+
+| Path | Contents | Replaced by a rebuild |
+| --- | --- | --- |
+| `Play Tank Battles[.exe]` | Native launcher (`launcher/`), built with the player | yes |
+| `player/TankBattlesRecomp[.exe]`, `player/manifest.json` | Your private executable and the list of files this folder's builds own, with SHA-256 | yes |
+| `game/dev_hdd0/game/NPUB30154/`, `game/dev_hdd0/home/00000001/exdata/` | Imported content and your unlock | listed files only |
+| `game/dev_hdd0/home/00000001/savedata/`, `game/settings.ini` | Saves and preferences (including F4 FXAA) | never |
+| `online/`, `logs/` | Optional RPCN profiles (`online/active` names the selected one) and session logs | never |
+
+The launcher sets the same paths `port.py run` does, relative to its own location, then starts the player offline unless `online/active` selects a profile (`--offline` overrides). The folder needs no Python, checkout, workspace or compiler and can be moved or copied. Translations, objects and toolchain caches stay in the workspace. Updates copy only changed files and stage everything before the first replacement. A non-empty folder that is not a player folder is refused before any work starts. `--migrate-saves-from OLD_GAME_DIR` copies saves and settings into a new folder without overwriting anything there.

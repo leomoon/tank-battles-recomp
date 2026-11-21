@@ -196,7 +196,7 @@ def build(args, config) -> None:
     _, toolchain = selected_runtime(args)
     cmake = str(toolchain.cmake) if toolchain else tool(args.cmake)
     command = [cmake, "--build", str(resolve(args.build_dir or config["paths"]["build"])),
-               "--target", "TankBattlesRecomp", "--parallel", str(args.jobs)]
+               "--target", "TankBattlesRecomp", "PlayTankBattles", "--parallel", str(args.jobs)]
     if args.multi_config:
         command[3:3] = ["--config", getattr(args, "build_type", "Release")]
     run(command, env=build_environment(toolchain))
@@ -318,6 +318,8 @@ def add_setup_arguments(parser) -> None:
     parser.add_argument("--ninja", default="ninja")
     parser.add_argument("--backend", choices=("auto", "vulkan", "null"), default="auto")
     parser.add_argument("--build-type", default="Release")
+    parser.add_argument("--output", help="Movable player folder to create or update (default for an installed builder: ~/Games/Tank Battles Recomp)")
+    parser.add_argument("--migrate-saves-from", help="Copy saves and settings from an older game folder into a new player folder, without overwriting")
 
 
 def main() -> int:
