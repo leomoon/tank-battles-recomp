@@ -14,22 +14,50 @@ import sys
 import json
 
 from boot_session import run_session
+from install_layout import Layout, Toolchain
 
 if sys.version_info < (3, 11):
     raise SystemExit("Python 3.11 or newer is required.")
 import tomllib
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]  # Read-only resources in an installed package.
+LAYOUT = Layout(ROOT)
 
 
 def resolve(value: str) -> Path:
-    path = Path(value).expanduser()
-    return (ROOT / path).resolve() if not path.is_absolute() else path.resolve()
+    """User paths (game data, translations, builds, logs) live in the workspace."""
+    return LAYOUT.resolve(value)
 
 
 def run(command: list[str], **kwargs) -> None:
     print("+ " + shlex.join(map(str, command)), flush=True)
-    subprocess.run(command, cwd=ROOT, check=True, **kwargs)
+    LAYOUT.workspace.mkdir(parents=True, exist_ok=True)
+    subprocess.run(command, cwd=LAYOUT.workspace, check=True, **kwargs)
+
+
+def selected_runtime(args):
+    """The runtime bundle and builder toolchain for this build, if any.
+
+    An installed package always uses its own. A checkout uses them only when
+    selected, and otherwise builds the runtime from source as before."""
+    bundle = getattr(args, "runtime_bundle", None)
+    bundle = resolve(bundle) if bundle else LAYOUT.runtime_bundle()
+    chosen = getattr(args, "toolchain", None)
+    chosen = resolve(chosen) if chosen else LAYOUT.toolchain()
+    toolchain = Toolchain(chosen) if chosen else None
+    if toolchain and not bundle:
+        raise ValueError("--toolchain builds players from a runtime bundle; also pass --runtime-bundle")
+    if toolchain and toolchain.target != ("windows" if os.name == "nt" else "linux"):
+        raise ValueError(f"The selected toolchain runs on {toolchain.target}, not this system")
+    # Only the Visual Studio route (Windows bundle without a builder toolchain) is multi-config.
+    args.multi_config = bool(os.name == "nt" and bundle and not toolchain)
+    # Their identities join setup's configuration signature.
+    args.selected_runtime_bundle, args.selected_toolchain = bundle, toolchain.root if toolchain else None
+    return bundle, toolchain
+
+
+def build_environment(toolchain):
+    return toolchain.environment(os.environ, LAYOUT.workspace / "cache/zig") if toolchain else None
 
 
 def sdk_path(args, config) -> Path:
@@ -93,55 +121,84 @@ def prepare(args, config) -> None:
     patch(resolve(config["paths"]["recompiled"]))
 
 
+def forget_moved_configuration(build: Path, source: Path) -> None:
+    """A build directory configured from resources that have since moved cannot
+    be reconfigured in place. Its translations stay; CMake starts over."""
+    cache = build / "CMakeCache.txt"
+    if not cache.is_file():
+        return
+    for line in cache.read_text(errors="replace").splitlines():
+        if line.startswith("CMAKE_HOME_DIRECTORY:INTERNAL="):
+            recorded = Path(line.split("=", 1)[1])
+            if recorded.resolve() != source.resolve():
+                print(f"[configure] resources moved from {recorded}; recreating the build configuration.", flush=True)
+                cache.unlink()
+                shutil.rmtree(build / "CMakeFiles", ignore_errors=True)
+            return
+
+
 def configure(args, config) -> None:
     sdk, elf = sdk_path(args, config), elf_path(args, config)
     build = resolve(args.build_dir or config["paths"]["build"])
     recomp = resolve(args.recomp_dir or config["paths"]["recompiled"])
-    if os.name == "nt" and getattr(args, "runtime_bundle", None):
-        bundle = resolve(args.runtime_bundle)
+    bundle, toolchain = selected_runtime(args)
+    environment = None
+    if bundle:
         manifest = json.loads((bundle / "manifest.json").read_text())
-        checkout = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-        expected = args.runtime_source or checkout
+        identity = LAYOUT.source_commit() if not args.runtime_source else None
+        expected = args.runtime_source or identity
         if manifest.get("source_commit") != expected:
             raise ValueError(f"Runtime bundle source mismatch: selected {expected}, bundle is {manifest.get('source_commit')}")
-        if expected != checkout:
-            print(f"[runtime] Explicitly selected CI source {expected}; checkout is {checkout}.", flush=True)
+        if args.runtime_source and not LAYOUT.packaged:
+            print(f"[runtime] Explicitly selected CI source {expected}.", flush=True)
         run([sys.executable, str(bundle / "tools/runtime_bundle.py"), "verify", str(bundle), "--source", expected])
         abi = build / "runtime-abi-check"
         run([sys.executable, str(ROOT / "scripts/runtime_abi.py"), "--sdk", str(sdk),
              "--output", str(abi), "--check-title-header", str(recomp / "ppu_recomp.h")])
         if json.loads((abi / "abi.json").read_text())["header_sha256"] != manifest.get("abi_sha256"):
             raise ValueError("Local lifter/title ABI differs from the selected runtime bundle")
-        command = [tool(args.cmake), "-S", str(ROOT / "cmake/player-consumer"), "-B", str(build),
-                   "-A", "x64", "-T", "ClangCL", f"-DTB_PORT_ROOT={ROOT}",
-                   f"-DTB_RUNTIME_ROOT={bundle}", f"-DTB_RUNTIME_EXPECTED_SOURCE={expected}",
-                   f"-DPS3RECOMP_DIR={sdk}", f"-DRECOMP_DIR={recomp}",
-                   f"-DPORT_SPU_INPUTS={elf}", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"]
+        forget_moved_configuration(build, ROOT / "cmake/player-consumer")
+        common = ["-S", str(ROOT / "cmake/player-consumer"), "-B", str(build), f"-DTB_PORT_ROOT={ROOT}",
+                  f"-DTB_RUNTIME_ROOT={bundle}", f"-DTB_RUNTIME_EXPECTED_SOURCE={expected}",
+                  f"-DPS3RECOMP_DIR={sdk}", f"-DRECOMP_DIR={recomp}",
+                  f"-DPORT_SPU_INPUTS={elf}", f"-DPython3_EXECUTABLE={sys.executable}"]
+        if toolchain:
+            command = [str(toolchain.cmake), *common, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={toolchain.ninja}",
+                       f"-DCMAKE_TOOLCHAIN_FILE={toolchain.toolchain_file}", f"-DCMAKE_BUILD_TYPE={args.build_type}"]
+            environment = build_environment(toolchain)
+        elif os.name == "nt":
+            command = [tool(args.cmake), *common, "-A", "x64", "-T", "ClangCL", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"]
+        else:
+            command = [tool(args.cmake), *common, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={tool(args.ninja)}",
+                       f"-DCMAKE_BUILD_TYPE={args.build_type}"]
     else:
+        forget_moved_configuration(build, ROOT)
         command = [tool(args.cmake), "-S", str(ROOT), "-B", str(build), "-G", "Ninja",
                    f"-DCMAKE_MAKE_PROGRAM={tool(args.ninja)}",
                f"-DPS3RECOMP_DIR={sdk}", f"-DRECOMP_DIR={recomp}",
                f"-DPORT_SPU_INPUTS={elf}", f"-DCMAKE_BUILD_TYPE={args.build_type}"]
-    if sys.platform.startswith("linux") and args.backend != "auto":
-        command.append(f"-DPS3RECOMP_RSX_VULKAN={'ON' if args.backend == 'vulkan' else 'OFF'}")
+        if sys.platform.startswith("linux") and args.backend != "auto":
+            command.append(f"-DPS3RECOMP_RSX_VULKAN={'ON' if args.backend == 'vulkan' else 'OFF'}")
     extra = args.cmake_args
     command.extend(extra[1:] if extra[:1] == ["--"] else extra)
-    run(command)
+    run(command, env=environment)
 
 
 def build(args, config) -> None:
-    command = [tool(args.cmake), "--build", str(resolve(args.build_dir or config["paths"]["build"])),
+    _, toolchain = selected_runtime(args)
+    cmake = str(toolchain.cmake) if toolchain else tool(args.cmake)
+    command = [cmake, "--build", str(resolve(args.build_dir or config["paths"]["build"])),
                "--target", "TankBattlesRecomp", "--parallel", str(args.jobs)]
-    if os.name == "nt" and getattr(args, "runtime_bundle", None):
-        command[3:3] = ["--config", args.build_type]
-    run(command)
+    if args.multi_config:
+        command[3:3] = ["--config", getattr(args, "build_type", "Release")]
+    run(command, env=build_environment(toolchain))
 
 
 def setup(args, config) -> None:
     from setup_game import check_game
     from setup_inputs import print_checks, require_valid
     if args.check:
-        checks = check_game(args, config, ROOT, resolve)
+        checks = check_game(args, config, LAYOUT.workspace, resolve)
         if not args.import_only:
             tools = setup_tools(args)
             print_checks(tools)
@@ -161,7 +218,7 @@ def setup_install(args, config):
         tools = setup_tools(args)
         print_checks(tools)
         require_valid(tools)
-    args.elf = str(install_game(args, config, ROOT, resolve))
+    args.elf = str(install_game(args, config, LAYOUT.workspace, resolve))
     if args.import_only:
         return
     # Reuse the same translation and build paths as the individual commands.
@@ -172,14 +229,26 @@ def setup_install(args, config):
     args.jobs = args.jobs or config["recompiler"]["jobs"]
     from setup_pipeline import run_pipeline
     run_pipeline(args, config, resolve, prepare, configure, build)
+    workspace = " --workspace " + shlex.quote(str(LAYOUT.workspace)) if LAYOUT.workspace != ROOT else ""
     suffix = " --build-dir " + shlex.quote(args.build_dir) if args.build_dir else ""
-    print("[setup] Ready. Launch with: python scripts/port.py run" + suffix)
+    print(f"[setup] Ready. Launch with: python scripts/port.py{workspace} run{suffix}")
 
 
 def setup_tools(args):
+    _, toolchain = selected_runtime(args)
+    if toolchain:
+        # The packaged route needs nothing installed besides the Vulkan driver.
+        from toolchain import verify
+        try:
+            identity = verify(toolchain.root)
+            return [dict(name="Builder toolchain", path=str(toolchain.root), status="ok", action="",
+                         detail=identity.get("zig"))]
+        except (OSError, ValueError) as error:
+            return [dict(name="Builder toolchain", path=str(toolchain.root), status="error",
+                         action=f"Download the builder again ({error}).")]
     checks = []
     requirements = [("CMake", args.cmake, "Install CMake; see README build dependencies.")]
-    if not (os.name == "nt" and args.runtime_bundle):
+    if not args.multi_config:
         requirements.append(("Ninja", args.ninja, "Install Ninja; see README build dependencies."))
     compiler = "clang-cl" if os.name == "nt" else os.environ.get("CXX", "c++")
     requirements.append(("C++ compiler", compiler, "Install Visual Studio Build Tools with the ClangCL component." if os.name == "nt"
@@ -224,7 +293,7 @@ def player_executable(args, config) -> Path:
 def rpcn_account(args, config) -> int:
     flag = "--rpcn-create-account" if args.action == "create" else "--rpcn-check"
     return subprocess.run([str(player_executable(args, config)), flag, str(resolve(args.profile))],
-                          cwd=ROOT).returncode
+                          cwd=LAYOUT.workspace).returncode
 
 
 def launch(args, config) -> int:
@@ -232,8 +301,8 @@ def launch(args, config) -> int:
     executable = player_executable(args, config)
     env = launch_environment(config, args.paramsfo)
     log_path = resolve(args.log) if args.log else None
-    if args.log and not log_path.is_relative_to((ROOT / "analysis").resolve()):
-        raise ValueError("--log must be inside the repository's analysis/ directory")
+    if args.log and not log_path.is_relative_to(resolve("analysis")):
+        raise ValueError("--log must be inside the workspace's analysis/ directory")
     if not args.console and log_path is None:
         directory = Path(env["TB_LOG_DIR"]).expanduser() if env.get("TB_LOG_DIR") else Path(env.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "tank-battles-recomp/logs"
         log_path = directory / (datetime.now().strftime("session-%Y%m%d-%H%M%S-%f") + f"-{os.getpid()}.log")
@@ -244,7 +313,8 @@ def launch(args, config) -> int:
     command = [str(executable), str(elf)]
     if args.rpcn_profile:
         command.extend(["--rpcn-profile", str(resolve(args.rpcn_profile))])
-    status, _ = run_session(command, cwd=ROOT, env=env,
+    LAYOUT.workspace.mkdir(parents=True, exist_ok=True)
+    status, _ = run_session(command, cwd=LAYOUT.workspace, env=env,
                             timeout=args.timeout, log_path=log_path, request_snapshot=True,
                             shutdown_grace=5 if args.rpcn_profile else 2)
     return status
@@ -252,7 +322,8 @@ def launch(args, config) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml", help="TOML configuration, relative to repository root")
+    parser.add_argument("--config", default="config.toml", help="TOML configuration; relative paths look in the workspace, then the resources")
+    parser.add_argument("--workspace", help="Writable directory for game data, translations, builds and logs (default: the checkout, or a per-user folder for an installed builder)")
     commands = parser.add_subparsers(dest="command", required=True)
     install = commands.add_parser("setup", help="Import your original game, decrypt, translate, configure and build")
     sources = install.add_mutually_exclusive_group()
@@ -269,7 +340,8 @@ def main() -> int:
     install.add_argument("--restart", action="store_true", help="Regenerate translations before the incremental native build; keeps purchased inputs")
     install.add_argument("--import-only", action="store_true", help="Import, decrypt and prepare the unlock without translation or compilation")
     install.add_argument("--build-dir")
-    install.add_argument("--runtime-bundle", help="Verified game-free Windows runtime bundle matching this checkout")
+    install.add_argument("--runtime-bundle", help="Verified game-free runtime bundle matching these scripts")
+    install.add_argument("--toolchain", help="Staged builder toolchain (scripts/toolchain.py stage); builds with only its tools")
     install.add_argument("--runtime-source", help="Exact CI source commit recorded by the selected runtime bundle")
     install.add_argument("--jobs", type=positive_int)
     install.add_argument("--cmake", default="cmake")
@@ -285,7 +357,8 @@ def main() -> int:
     conf.add_argument("--sdk")
     conf.add_argument("--elf")
     conf.add_argument("--build-dir")
-    conf.add_argument("--runtime-bundle", help="Verified game-free Windows runtime bundle matching this checkout")
+    conf.add_argument("--runtime-bundle", help="Verified game-free runtime bundle matching these scripts")
+    conf.add_argument("--toolchain", help="Staged builder toolchain (scripts/toolchain.py stage); builds with only its tools")
     conf.add_argument("--runtime-source", help="Exact CI source commit recorded by the selected runtime bundle")
     conf.add_argument("--recomp-dir")
     conf.add_argument("--cmake", default="cmake")
@@ -297,6 +370,9 @@ def main() -> int:
     compile_command.add_argument("--build-dir")
     compile_command.add_argument("--cmake", default="cmake")
     compile_command.add_argument("--jobs", type=positive_int, default=2)
+    compile_command.add_argument("--runtime-bundle")
+    compile_command.add_argument("--toolchain")
+    compile_command.add_argument("--build-type", default="Release")
     launch_command = commands.add_parser("run", help="Run the experimental port with your local game dump")
     launch_command.add_argument("--elf")
     launch_command.add_argument("--paramsfo", help="Local PARAM.SFO (defaults to config.toml)")
@@ -311,9 +387,11 @@ def main() -> int:
     rpcn_command.add_argument("profile", help="Private RPCN profile file")
     rpcn_command.add_argument("--build-dir")
     args = parser.parse_args()
+    global LAYOUT
     try:
-        with resolve(args.config).open("rb") as file:
-            config = tomllib.load(file)
+        LAYOUT = Layout(ROOT, args.workspace)
+        LAYOUT.verify()
+        config = LAYOUT.load_config(args.config)
         result = {"setup": setup, "prepare": prepare, "configure": configure, "build": build,
                   "run": launch, "rpcn": rpcn_account}[args.command](args, config)
         return result if isinstance(result, int) else 0

@@ -33,30 +33,59 @@ def outputs(directory):
     return {path.name: digest(path) for path in paths}
 
 
-def translation_signature(args, config, resolve, prepare):
+def translation_signature(args, config, resolve, prepare, legacy=False):
+    """Identify translations by content, not location, so moving the builder
+    resources or the workspace keeps them. `legacy` reproduces the earlier
+    absolute-path form so existing setups are not retranslated."""
     sdk = resolve(config["paths"]["sdk"])
     sources = sorted((sdk / "tools").rglob("*.py"))
+    name = (lambda path: str(path)) if legacy else (lambda path: path.relative_to(sdk).as_posix())
     recipe = dict(elf=digest(Path(args.elf)), chunk_lines=config["recompiler"]["chunk_lines"],
                   prepare=inspect.getsource(prepare),
-                  sources={str(path): digest(path) for path in sources})
+                  sources={name(path): digest(path) for path in sources})
     return hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()
+
+
+def packaged_inputs(args):
+    """Digests of the selected runtime bundle and builder toolchain identities."""
+    identities = {}
+    for name, filename in (("runtime_bundle", "manifest.json"), ("toolchain", "toolchain.json")):
+        root = getattr(args, "selected_" + name, None)
+        if root:
+            identities[name] = digest(Path(root) / filename)
+    return identities
 
 
 def configuration_signature(args, config, resolve, generated):
     root = Path(__file__).resolve().parents[1]
     sdk = resolve(config["paths"]["sdk"])
-    paths = sorted(set(root.glob("*.cmake")) | set(root.glob("CMakeLists.txt"))
+    ours = [path for path in (root / "cmake").rglob("*") if path.suffix == ".cmake" or path.name == "CMakeLists.txt"]
+    paths = sorted(set(root.glob("*.cmake")) | set(root.glob("CMakeLists.txt")) | set(ours)
                    | set(sdk.rglob("*.cmake")) | set(sdk.rglob("CMakeLists.txt")))
     recipe = dict(sources={str(path): digest(path) for path in paths}, generated=generated,
                   elf=str(Path(args.elf)), elf_sha256=digest(Path(args.elf)), sdk=str(sdk), recompiled=str(resolve(config["paths"]["recompiled"])),
-                  options={name: getattr(args, name, None) for name in ("build_type", "backend", "cmake", "ninja", "cmake_args", "runtime_bundle", "runtime_source")},
+                  options={name: getattr(args, name, None) for name in ("build_type", "backend", "cmake", "ninja", "cmake_args", "runtime_bundle", "runtime_source", "toolchain")},
+                  packaged=packaged_inputs(args),
                   environment={key: os.environ.get(key) for key in ("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS", "CMAKE_PREFIX_PATH", "CMAKE_TOOLCHAIN_FILE", "PKG_CONFIG_PATH")})
     return hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()
 
 
 def configuration_outputs(build_dir):
-    paths = [build_dir / name for name in ("CMakeCache.txt", "build.ninja")]
-    return {str(path): digest(path) for path in paths} if all(path.is_file() for path in paths) else {}
+    """CMakeCache.txt plus the generator's own build file (Ninja or Visual Studio)."""
+    build_dir = Path(build_dir)
+    cache = build_dir / "CMakeCache.txt"
+    generated = [build_dir / "build.ninja", *sorted(build_dir.glob("*.sln"))]
+    generated = [path for path in generated if path.is_file()]
+    if not cache.is_file() or not generated:
+        return {}
+    return {str(path): digest(path) for path in (cache, *generated)}
+
+
+def player_executable(build_dir, args):
+    build_dir = Path(build_dir)
+    if os.name != "nt":
+        return build_dir / "TankBattlesRecomp"
+    return build_dir / ("Release/TankBattlesRecomp.exe" if getattr(args, "multi_config", False) else "TankBattlesRecomp.exe")
 
 
 def run_pipeline(args, config, resolve, prepare, configure, build):
@@ -71,6 +100,10 @@ def run_pipeline(args, config, resolve, prepare, configure, build):
         state = {}
     signature = translation_signature(args, config, resolve, prepare)
     current = outputs(destination)
+    if (not args.restart and current and state.get("outputs") == current and state.get("signature")
+            and state["signature"] != signature and state["signature"] == translation_signature(args, config, resolve, prepare, legacy=True)):
+        state["signature"] = signature   # Same content; only the recorded form changed.
+        atomic_json(marker, state)
     if not args.restart and current and state.get("signature") == signature and state.get("outputs") == current:
         print("[setup] prepare: verified translations reused.", flush=True)
     else:
@@ -110,8 +143,7 @@ def run_pipeline(args, config, resolve, prepare, configure, build):
         if name == "configure" and artifacts and state.get("configuration") == configure_signature and state.get("configuration_outputs") == artifacts:
             print("[setup] configure: verified configuration reused; Ninja will check regeneration dependencies.", flush=True)
             continue
-        executable = build_dir / ("Release/TankBattlesRecomp.exe" if os.name == "nt" and getattr(args, "runtime_bundle", None)
-                                  else "TankBattlesRecomp.exe" if os.name == "nt" else "TankBattlesRecomp")
+        executable = player_executable(build_dir, args)
         if name == "build" and state.get("executable_sha256") and executable.is_file() and digest(executable) != state["executable_sha256"]:
             print("[setup] build: executable changed outside setup; requesting a fresh link.", flush=True)
             executable.unlink()

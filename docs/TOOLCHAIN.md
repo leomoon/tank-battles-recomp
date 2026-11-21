@@ -71,3 +71,15 @@ cmake --build build-zig/player-linux
 On the Linux reference host the Zig-built player reached audio initialization in each of 5 boots, as did the GCC player, and measured 50.6 FPS against GCC's 50.6 FPS in the same profiled 20-second Battle run.
 
 Use `--target windows` and `zig-windows.cmake` for the Windows bundle; both are cross-built on Linux. `verify_runtime_consumer.py --toolchain` builds the synthetic title with only the staged CMake, Ninja, Python and Zig, with `PATH` limited to them and pkg-config disabled, and runs it when the bundle's target matches the host (otherwise it confirms the cross-link).
+
+## Installed builder resources and the workspace
+
+`scripts/package_resources.py assemble` lays out what a builder installs: the setup scripts that `port.py` needs (followed from its imports), the lifter and SDK headers from `external/ps3recomp`, the player CMake project, `config.toml`, the verified runtime bundle in `runtime/` and the staged toolchain in `toolchain/`. `package.json` records the source commit, runtime ABI and toolchain identity, plus the SHA-256 of every resource file. The audit refuses purchased formats, keys, saves, generated title code and object files.
+
+When `package.json` is present, `port.py` runs in installed mode:
+
+- The resources are read-only and every file setup writes goes to the workspace (`--workspace`, `TB_WORKSPACE`, or a per-user default: `~/.local/share/tank-battles-recomp/workspace`, `%LOCALAPPDATA%\TankBattlesRecomp\workspace`). Relative `config.toml` paths resolve in the workspace; `paths.sdk` resolves in the resources.
+- The source identity comes from `package.json`, not Git, and modified resources are rejected before any work starts.
+- `configure` and `build` use the packaged runtime and toolchain on both OSes, with `PATH` limited to the staged tools and Zig's cache inside the workspace.
+
+A checkout keeps the existing behaviour and can select the same route with `--runtime-bundle DIR --toolchain DIR`, now on Linux as well as Windows. Translation signatures no longer include absolute paths, so moving the resources or workspace reuses translations; a build directory configured from moved resources is reconfigured automatically. `scripts/test_packaged_route.py` checks a read-only, relocated package with a workspace path containing spaces and non-ASCII characters, no Git, no network and only staged tools: first build, no-op reuse, interrupted-link resume, relocation, tampering and source-mismatch rejection.
