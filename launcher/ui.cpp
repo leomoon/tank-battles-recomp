@@ -161,7 +161,7 @@ enum class Screen { home, sign_in, create };
 
 struct State {
     Screen screen = Screen::home;
-    std::string server = default_server, npid, password, confirm, email, token, ca_path;
+    std::string server, npid, password, confirm, email, token, ca_path;
     bool remember = true, advanced = false, show_token = false;
     std::string message;
     bool message_good = false;

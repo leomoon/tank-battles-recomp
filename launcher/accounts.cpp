@@ -66,7 +66,8 @@ std::optional<std::string> validate(const Account& account, const std::string& p
     const auto parsed = std::from_chars(digits, end, port);
     if (colon == std::string::npos || colon == 0 || parsed.ptr != end || parsed.ec != std::errc() || !port || port > 65535 ||
         account.endpoint.substr(0, colon).find_first_not_of(host_characters) != std::string::npos)
-        return "Enter the server as name:port, for example " + std::string(default_server) + ".";
+        return account.endpoint.empty() ? "Enter the RPCN server you want to use, as name:port."
+                                         : "Enter the server as name:port, for example rpcn.example.org:31313.";
     if (account.npid.size() < 3 || account.npid.size() > 16 || account.npid.find_first_not_of(npid_characters) != std::string::npos)
         return "Usernames have 3 to 16 letters, digits, hyphens or underscores.";
     if (password.empty() || !clean(password)) return "Enter your password (one line).";

@@ -73,7 +73,8 @@ int account_cli(Accounts& accounts, const std::vector<std::string>& arguments) {
         return print({"signed_out", "Signed out."});
     }
     Account account{option(arguments, "--server"), option(arguments, "--user"), option(arguments, "--token")};
-    if (account.endpoint.empty()) account.endpoint = default_server;
+    if (account.endpoint.empty() || account.npid.empty())
+        return print({"invalid_input", "Give the account's --server HOST:PORT and --user NAME."});
     if (action == "forget") {
         accounts.forget(account);
         return print({"forgotten", "Removed the saved account."});

@@ -15,8 +15,6 @@
 
 namespace tb::launcher {
 
-inline constexpr const char* default_server = "rpcn.example.org:31313";
-
 struct Account {
     std::string endpoint, npid, token;
     fs::path ca;               // Private CA for a non-public server; empty uses system trust.
