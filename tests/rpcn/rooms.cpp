@@ -5,6 +5,7 @@
 #include "rpcn/basic.h"
 #include "rpcn/matching.h"
 #include "rpcn/matching_data.h"
+#include "fps_overlay.h"
 #include "external/ps3recomp/libs/network/np_peer_transport.h"
 
 #include <array>
@@ -42,6 +43,10 @@ void vm_write32(uint64_t a,uint32_t v) { vm_write16(a,v>>16); vm_write16(a+2,v);
 void vm_write64(uint64_t a,uint64_t v) { vm_write32(a,v>>32); vm_write32(a+4,v); }
 }
 void tank_battles_register_override(uint32_t nid,tank_battles_override_fn handler) { hle.emplace(nid,handler); }
+void tb_panel_show(InvitePicker,std::span<const std::string>,size_t) {}
+void tb_panel_close() {}
+uint32_t tb_panel_take_input() {return 0;}
+void tb_show_network_toast(const char*,const char*) {}
 
 uint32_t call(const char* name,std::initializer_list<uint64_t> args={}) {
     ppu_context c{};
@@ -280,6 +285,7 @@ int main(int argc,char** argv) {
     }
     if (argc!=4) {
         fprintf(stderr,"Usage: matching_rooms PROFILE host|join normal|fullROOM|owner|close\n"
+                       "       matching_rooms PROFILE publish SECONDS\n"
                        "       matching_rooms PROFILE peer|signal PEER_NPID\n");
         return 2;
     }
@@ -446,6 +452,16 @@ int main(int argc,char** argv) {
         return 0;
     } else if (mode=="empty") {
         search(true);
+    } else if (mode=="publish") {
+        const auto seconds=std::strtoul(argv[3],nullptr,10);
+        assert(seconds>0 && seconds<=300);
+        const auto id=create(4,false);
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(seconds);
+        while (std::chrono::steady_clock::now()<until) {
+            tb::rpcn::pump_matching();
+            std::this_thread::sleep_for(10ms);
+        }
+        leave(id);
     } else if (mode=="host") {
         const auto id=create(full?1:2,owner);
         if (full) {

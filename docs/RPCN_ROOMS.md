@@ -6,7 +6,7 @@ The port implements Matching2 context creation, discovery, room creation/search/
 
 Room search also requests RPCN's owner-ping record before joining. Stock RPCN supplies a fixed 20 ms value; this is not a measurement of the connection between the players. The adapter now implements peer endpoint discovery and signaling activation. Live two-computer gameplay acceptance is still pending.
 
-Select **Online Battle**, create a room, confirm the map and mode, then choose **Go Public** in the lobby. A second account can search through **Join Game**. A newly created room is private, so searching before publication returns no matching room.
+Select **Online Battle**, create a room, confirm the map and mode, then choose **Go Public** in the lobby. **Join Game** opens a public-room list showing each host and player count. Use Up/Down to select, PlayStation X or keyboard Z to join, Square or keyboard A to refresh, and PlayStation O or keyboard X to return. Even a single result requires confirmation. An empty list stays open for refresh. A newly created room is private and appears after its host chooses Go Public.
 
 ## Peer transport
 

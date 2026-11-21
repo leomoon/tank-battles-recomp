@@ -22,7 +22,7 @@ struct FpsSample {
 };
 
 // A small native selection panel shares the window-only overlay surface.
-enum class InvitePicker { friends, invitations };
+enum class InvitePicker { friends, invitations, rooms, searching_rooms };
 void tb_panel_show(InvitePicker kind, std::span<const std::string> choices, size_t selected);
 void tb_panel_close();
 enum class PanelPadInput { passthrough, captured, back };

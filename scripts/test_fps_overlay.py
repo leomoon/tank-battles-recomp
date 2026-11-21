@@ -102,6 +102,20 @@ int main(){
  tb_show_invite_toast("PlayerB");
  tb_clear_invite_toast();
  assert(!tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
+ tb_panel_show(InvitePicker::rooms,friends,0);
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ assert(region.width==448 && region.height==290 && region.x==416 && region.y==215);
+ assert(tb_panel_input(0)==PanelPadInput::captured);
+ assert(tb_panel_input(0x8000)==PanelPadInput::captured);
+ assert(tb_panel_take_input()==0x8000);
+ assert(tb_panel_input(0)==PanelPadInput::captured);
+ assert(tb_panel_input(0x2000)==PanelPadInput::back);
+ assert(tb_panel_take_input()==0x2000);
+ assert(tb_panel_input(0x2000)==PanelPadInput::captured);
+ tb_panel_show(InvitePicker::searching_rooms,{},0);
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ assert(region.height==178);
+ tb_panel_close();
 }
 ''')
 subprocess.run(['c++','-std=c++20','-O2','-I'+str(ROOT),str(out/'test.cpp'),str(ROOT/'fps_overlay.cpp'),str(ROOT/'player_settings.cpp'),str(ROOT/'rendering_profile.cpp'),'-pthread','-o',str(out/'test')],check=True)

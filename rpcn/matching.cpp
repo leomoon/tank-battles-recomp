@@ -2,6 +2,7 @@
 #include "signaling.h"
 #include "client.h"
 #include "matching_data.h"
+#include "fps_overlay.h"
 #include "stubs.h"
 #include "ppu_recomp.h"
 #include "ps3emu/nid.h"
@@ -13,6 +14,7 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <span>
 
 extern "C" int np_is_initialized();
@@ -72,6 +74,25 @@ struct GuestCall {
     std::array<uint64_t,8> args;
 };
 
+struct PublicRoom {
+    uint32_t offset;
+    uint64_t id;
+    uint16_t players, slots;
+    std::string label;
+};
+
+struct RoomBrowser {
+    uint16_t context;
+    uint32_t request;
+    Callback callback;
+    Bytes packet;
+    std::future<Reply> reply;
+    Image image;
+    std::vector<PublicRoom> rooms;
+    size_t selected=0;
+    std::chrono::steady_clock::time_point deadline;
+};
+
 std::mutex lock;
 bool initialized;
 uint32_t next_context=1, next_request=1, next_event=1;
@@ -79,6 +100,7 @@ std::map<uint16_t,Context> contexts;
 std::map<uint32_t,Event> events;
 std::vector<Completion> completions;
 std::vector<GuestCall> calls;
+std::optional<RoomBrowser> browser;
 bool discovery_event_pending=false;
 uint32_t discovery_event_node=0;
 
@@ -91,6 +113,7 @@ bool trace_enabled() {
 }
 
 void drop_context_work(uint16_t id) {
+    if (browser && browser->context==id) { browser.reset();tb_panel_close(); }
     // Keep pending room joins long enough to clean up a successful late reply.
     for (auto& completion:completions)
         if (completion.context==id) completion.cancelled=true;
@@ -177,6 +200,97 @@ void answer(uint16_t ctx, uint16_t event, uint32_t id, Callback cb, uint32_t err
     if (trace_enabled())
         fprintf(stderr,"[rpcn-matching] ctx=%u req=%u event=0x%04x key=%u error=0x%08x bytes=%zu\n",
                 ctx,id,event,key,error,size);
+}
+
+void show_browser() {
+    std::vector<std::string> labels;
+    if (!browser->reply.valid())
+        for (const auto& room:browser->rooms) labels.push_back(room.label);
+    tb_panel_show(browser->reply.valid()?InvitePicker::searching_rooms:InvitePicker::rooms,labels,browser->selected);
+}
+
+void finish_browser(Image image,uint32_t error=0) {
+    answer(browser->context,0x0106,browser->request,browser->callback,error,std::move(image));
+    browser.reset();
+    tb_panel_close();
+}
+
+void pump_browser() {
+    if (!browser) return;
+    if (!contexts.contains(browser->context) || status().state!=State::online) {
+        finish_browser({},closed);
+        return;
+    }
+    auto& view=*browser;
+    const auto buttons=tb_panel_take_input();
+    if (buttons&0x2000) {
+        // cellPadGetData forwards this press to the title's search cancellation
+        // handler. Returning an empty search result would start another search.
+        browser.reset();
+        tb_panel_close();
+        return;
+    }
+    if (view.reply.valid()) {
+        if (view.reply.wait_for(0ms)!=std::future_status::ready) {
+            if (std::chrono::steady_clock::now()<view.deadline) return;
+            view.reply={};
+            tb_show_network_toast("ROOM SEARCH TIMED OUT","PRESS SQUARE OR A TO RETRY");
+        } else {
+            const auto reply=view.reply.get();
+            try {
+                if (reply.body.empty() || reply.body.front()) throw std::runtime_error("Room search failed");
+                auto result=room_reply(Request::search_room,reply,status().npid);
+                const auto selected_id=view.rooms.empty()?0:view.rooms[view.selected].id;
+                std::vector<PublicRoom> rooms;
+                auto offset=static_cast<uint32_t>(result.image.read(12,4));
+                for (unsigned i=0;i<result.count;++i) {
+                    if (!offset || offset+88>result.image.bytes.size()) throw std::runtime_error("Invalid public room entry");
+                    const auto owner=static_cast<uint32_t>(result.image.read(offset+48,4));
+                    std::string name;
+                    if (owner && owner+16<=result.image.bytes.size())
+                        for (unsigned j=0;j<16 && result.image.bytes[owner+j];++j)
+                            name.push_back(result.image.bytes[owner+j]);
+                    const auto id=result.image.read(offset+24,8);
+                    const auto players=static_cast<uint16_t>(result.image.read(offset+38,2));
+                    const auto slots=static_cast<uint16_t>(result.image.read(offset+32,2));
+                    if (name.empty()) name="ROOM "+std::to_string(id);
+                    rooms.push_back({offset,id,players,slots,name+"  "+std::to_string(players)+"/"+std::to_string(slots)});
+                    offset=static_cast<uint32_t>(result.image.read(offset,4));
+                }
+                view.image=std::move(result.image);
+                view.rooms=std::move(rooms);
+                const auto selected=std::find_if(view.rooms.begin(),view.rooms.end(),[=](const auto& room){return room.id==selected_id;});
+                view.selected=selected==view.rooms.end()?0:static_cast<size_t>(selected-view.rooms.begin());
+                if (trace_enabled()) fprintf(stderr,"[rpcn-browser] rooms=%zu selected=%zu\n",view.rooms.size(),view.selected);
+            } catch (const std::runtime_error& error) {
+                fprintf(stderr,"[rpcn-browser] %s\n",error.what());
+                tb_show_network_toast("ROOM SEARCH FAILED","PRESS SQUARE OR A TO RETRY");
+            }
+        }
+        show_browser();
+        return;
+    }
+    if (buttons&0x8000) {
+        view.reply=submit(Request::search_room,view.packet);
+        view.deadline=std::chrono::steady_clock::now()+8s;
+        if (!view.reply.valid()) tb_show_network_toast("ROOM SEARCH FAILED","CHECK CONNECTION AND RETRY");
+        show_browser();
+    } else if ((buttons&0x50) && !view.rooms.empty()) {
+        view.selected=(view.selected+(buttons&0x40?1:view.rooms.size()-1))%view.rooms.size();
+        show_browser();
+    } else if ((buttons&0x4000) && !view.rooms.empty()) {
+        const auto& selected=view.rooms[view.selected];
+        if (selected.slots && selected.players>=selected.slots) {
+            tb_show_network_toast("ROOM IS FULL","REFRESH OR CHOOSE ANOTHER ROOM");
+            return;
+        }
+        if (trace_enabled()) fprintf(stderr,"[rpcn-browser] selected room=%llu\n",static_cast<unsigned long long>(selected.id));
+        auto image=std::move(view.image);
+        image.write(0,1,4);image.write(4,1,4);image.write(8,1,4);
+        image.write(12,selected.offset,4);image.write(selected.offset,0,4);
+        std::erase(image.pointers,selected.offset);
+        finish_browser(std::move(image));
+    }
 }
 
 enum class Op {
@@ -326,6 +440,8 @@ uint32_t perform(Op operation, const ppu_context& c) {
         static constexpr uint16_t codes[]={0x0101,0x0106,0x0102,0x0103,0x0109,0x0108,0x0e01};
         const auto index=static_cast<size_t>(operation)-static_cast<size_t>(Op::create_room);
         const auto command=commands[index];
+        const bool browse=operation==Op::search_room && c.lr==0x001cc8f0 && cb.opd;
+        if (browse && browser) return 0x8002231f;
         Bytes data;
         try {
             data=room_request(command,req);
@@ -336,9 +452,16 @@ uint32_t perform(Op operation, const ppu_context& c) {
         Bytes packet=ctx.communication_id;
         if (command==Request::ping_room_owner) packet.insert(packet.end(),data.begin(),data.end());
         else packet=frame_protobuf(std::move(packet),data);
-        auto reply=submit(command,std::move(packet));
+        auto reply=submit(command,browse?packet:std::move(packet));
         if (!reply.valid()) return server_unavailable;
         const auto request=request_id(opt);
+        if (browse) {
+            browser.emplace(ctx_id,request,cb,std::move(packet),std::move(reply),Image{},std::vector<PublicRoom>{},0,
+                            std::chrono::steady_clock::now()+8s);
+            show_browser();
+            if (out) vm_write32(out,request);
+            return 0;
+        }
         completions.push_back({ctx_id,codes[index],request,cb,command,std::move(reply),ctx.communication_id});
         if (out) vm_write32(out,request);
         return 0;
@@ -433,9 +556,12 @@ void pump_matching() {
                 error=server_unavailable;
             }
         }
+        if (error && !item.cancelled && item.command==Request::join_room)
+            tb_show_network_toast(error==0x80022b19?"ROOM IS FULL":"ROOM IS UNAVAILABLE","REFRESH THE PUBLIC ROOM LIST");
         if (!item.cancelled) answer(item.context,item.event,item.id,item.callback,error,std::move(image));
         return true;
     });
+    pump_browser();
     for (const auto& packet:take_notifications()) {
         try {
             auto notice=room_notice(packet,identity.npid);

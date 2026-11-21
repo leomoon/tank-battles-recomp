@@ -17,7 +17,7 @@ std::mutex overlay_mutex;
 constexpr unsigned visible_choices=5;
 struct Picker {
     InvitePicker kind=InvitePicker::friends;
-    std::array<std::array<char,17>,visible_choices> choices{};
+    std::array<std::array<char,40>,visible_choices> choices{};
     unsigned count=0;
     unsigned selected=0;
     bool multiple=false;
@@ -55,14 +55,15 @@ const unsigned char* glyph(char ch) {
     if (ch>='0'&&ch<='9') return digits[ch-'0'];
     const char* found=std::strchr(letters,ch);
     if (found && ch) return rows[found-letters];
-    static const char extra[]="BCDHIJKLOQUVWXYZ_>";
+    static const char extra[]="BCDHIJKLOQUVWXYZ_>/";
     static const unsigned char extra_rows[][7]={
         {30,17,17,30,17,17,30},{14,17,16,16,16,17,14},{30,17,17,17,17,17,30},
         {17,17,17,31,17,17,17},{14,4,4,4,4,4,14},{7,2,2,2,2,18,12},
         {17,18,20,24,20,18,17},{16,16,16,16,16,16,31},{14,17,17,17,17,17,14},
         {14,17,17,17,21,18,13},{17,17,17,17,17,17,14},{17,17,17,17,17,10,4},
         {17,17,17,21,21,21,10},{17,17,10,4,10,17,17},{17,17,10,4,4,4,4},
-        {31,1,2,4,8,16,31},{0,0,0,0,0,0,31},{16,8,4,2,4,8,16}};
+        {31,1,2,4,8,16,31},{0,0,0,0,0,0,31},{16,8,4,2,4,8,16},
+        {1,2,2,4,8,8,16}};
     if (ch>='a' && ch<='z') return glyph(ch-'a'+'A');
     found=std::strchr(extra,ch);
     return found && ch ? extra_rows[found-extra] : blank;
@@ -100,10 +101,12 @@ void draw_picker(const Canvas& canvas,unsigned height,unsigned scale,const Picke
     const unsigned inset=10*scale;
     const unsigned heading_scale=scale+scale/2;
     const bool inviting=view.kind==InvitePicker::friends;
+    const bool rooms=view.kind==InvitePicker::rooms || view.kind==InvitePicker::searching_rooms;
     canvas.fill(0,0,canvas.width,height,border);
     canvas.fill(1,1,canvas.width-2,height-2,card);
     canvas.fill(0,0,canvas.width,2*scale,accent);
-    canvas.text(inset,9*scale,inviting?"INVITE FRIENDS":"ACCEPT INVITATION",heading_scale,white);
+    const auto* heading=rooms?"PUBLIC ROOMS":inviting?"INVITE FRIENDS":"ACCEPT INVITATION";
+    canvas.text(inset,9*scale,heading,heading_scale,white);
     canvas.fill(inset,23*scale,canvas.width-2*inset,scale,border);
 
     const unsigned rows=std::max(1u,view.count);
@@ -115,6 +118,7 @@ void draw_picker(const Canvas& canvas,unsigned height,unsigned scale,const Picke
             canvas.fill(inset,y,2*scale,13*scale,accent);
         }
         const auto* label=inviting?"NO ONLINE FRIENDS":"NO INVITATIONS";
+        if (rooms) label=view.kind==InvitePicker::searching_rooms?"SEARCHING...":"NO PUBLIC ROOMS";
         if (view.count) label=view.choices[row].data();
         canvas.text(17*scale,y+3*scale,label,scale,highlighted?white:muted);
     }
@@ -122,8 +126,15 @@ void draw_picker(const Canvas& canvas,unsigned height,unsigned scale,const Picke
     const unsigned footer=(30+rows*14)*scale;
     if (view.multiple)
         canvas.text(inset,footer,"D-PAD OR ARROWS TO CHOOSE",scale,muted);
-    canvas.text(inset,footer+11*scale,view.count?"PLAYSTATION  X ACCEPT  O BACK":"PLAYSTATION  O BACK",scale,white);
-    canvas.text(inset,footer+22*scale,view.count?"KEYBOARD     Z ACCEPT  X BACK":"KEYBOARD     X BACK",scale,muted);
+    const auto* pad_help=view.count?"PLAYSTATION  X ACCEPT  O BACK":"PLAYSTATION  O BACK";
+    const auto* keyboard_help=view.count?"KEYBOARD     Z ACCEPT  X BACK":"KEYBOARD     X BACK";
+    if (rooms && view.count) {
+        pad_help="PLAYSTATION  X JOIN  O BACK";
+        keyboard_help="KEYBOARD     Z JOIN  X BACK";
+    }
+    canvas.text(inset,footer+11*scale,pad_help,scale,white);
+    canvas.text(inset,footer+22*scale,keyboard_help,scale,muted);
+    if (rooms) canvas.text(inset,footer+33*scale,"SQUARE / KEYBOARD A REFRESH",scale,muted);
 }
 
 void draw_toast(const Canvas& canvas,unsigned height,unsigned scale,const Toast& view,double remaining) {
@@ -164,9 +175,11 @@ PanelPadInput tb_panel_input(uint32_t buttons) {
     const uint32_t pressed=buttons&~panel_previous;
     panel_pressed|=pressed;
     panel_previous=buttons;
-    // The title has its own Back handler for the invite screen. Give it the
-    // same press that dismisses an empty picker, then suppress the held input.
-    if (picker.kind==InvitePicker::invitations && !picker.count && (pressed&0x2000))
+    // Let the title unwind its search screen or empty inbox on the same Back
+    // press that dismisses the panel, then suppress held input until release.
+    const bool title_back=picker.kind==InvitePicker::rooms || picker.kind==InvitePicker::searching_rooms ||
+        (picker.kind==InvitePicker::invitations && !picker.count);
+    if (title_back && (pressed&0x2000))
         return PanelPadInput::back;
     return PanelPadInput::captured;
 }
@@ -227,7 +240,10 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
     unsigned card_width, card_height, margin;
     switch (mode) {
     case Mode::picker:
-        card_width=224; card_height=64+std::max(1u,picker_view.count)*14; margin=0;
+        card_width=224;
+        card_height=(picker_view.kind==InvitePicker::rooms || picker_view.kind==InvitePicker::searching_rooms?75:64)
+            +std::max(1u,picker_view.count)*14;
+        margin=0;
         break;
     case Mode::invitation:
         card_width=toast_view.invitation?184:224; card_height=toast_height; margin=10;

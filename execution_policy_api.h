@@ -15,7 +15,7 @@ uint64_t tb_fps_guest_serial(void);
 void tb_fps_present(void);
 void tb_fps_toggle(void);
 #define TB_OVERLAY_MAX_SCALE 6u
-#define TB_OVERLAY_BUFFER_SIZE (224u * 134u * TB_OVERLAY_MAX_SCALE * TB_OVERLAY_MAX_SCALE * 4u)
+#define TB_OVERLAY_BUFFER_SIZE (224u * 145u * TB_OVERLAY_MAX_SCALE * TB_OVERLAY_MAX_SCALE * 4u)
 #define TB_NOTIFICATION_BUFFER_SIZE (224u * 43u * TB_OVERLAY_MAX_SCALE * TB_OVERLAY_MAX_SCALE * 4u)
 typedef struct tb_overlay_region { uint32_t x, y, width, height; } tb_overlay_region;
 // Writes a tightly packed rectangle into TB_OVERLAY_BUFFER_SIZE bytes of storage.
