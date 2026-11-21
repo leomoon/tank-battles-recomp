@@ -70,6 +70,8 @@ def entries(manifest, host, sources=False):
     if sources:
         for name, source in manifest["sources"].items():
             yield f"source:{name}", source["url"], source["sha256"]
+        for name, item in manifest.get("packaging", {}).items():
+            yield f"packaging:{name}", item["url"], item["sha256"]
 
 
 def cached(cache, digest):

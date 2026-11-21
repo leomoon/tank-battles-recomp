@@ -29,6 +29,9 @@ class ManifestTests(unittest.TestCase):
         for name, source in manifest["sources"].items():
             self.assertRegex(source["sha256"], r"^[0-9a-f]{64}$", name)
             self.assertTrue(source["licence"], name)
+        for name, item in manifest["packaging"].items():
+            self.assertTrue(item["url"].startswith("https://"), name)
+            self.assertRegex(item["sha256"], r"^[0-9a-f]{64}$", name)
 
     def test_lifter_requirements_are_all_pinned(self):
         manifest = toolchain.load_manifest()

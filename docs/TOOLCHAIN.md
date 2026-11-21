@@ -119,3 +119,28 @@ The launcher sets the same paths `port.py run` does, relative to its own locatio
 - The same functions are scriptable, with the password read from standard input: `"Play Tank Battles" --account sign-in|create|status|sign-out|forget --server HOST:PORT --user NAME [--email E] [--token T] [--ca FILE] [--remember]`. `--play` starts online when the selected account's password is remembered, otherwise offline; `--offline` always starts offline.
 
 `online/` is never part of the player manifest, so rebuilding preserves accounts, and the builder never copies them.
+
+## The standalone builders
+
+`scripts/builder_app.py` is the builder window (Tk from the staged Python). Choose the game package, the unlock EDAT and the decrypted `EBOOT.elf` (or, under Advanced, SELF keys or a RAP), and where to install; press **Build**. It runs the setup engine as a child process and shows each stage, progress from the lifter and Ninja, the log and its file, and a sentence plus action when something fails. **Cancel** stops only the build's processes, and the next **Build** continues from the finished stages. When done it offers **Play** and **Open folder**, and says where saves and settings live; rebuilding into the same folder keeps them. Choices are remembered in `~/.config/tank-battles-recomp/builder.json` (`%APPDATA%\TankBattlesRecomp\builder.json`).
+
+`scripts/package_builder.py` turns the resources into the two downloads:
+
+| | `Builder.AppImage` | `Builder.exe` |
+| --- | --- | --- |
+| Contents | Resources for Linux (Linux-host toolchain, Linux runtime bundle), `NOTICES.txt` | Resources for Windows (Windows-host toolchain, Windows runtime bundle), `NOTICES.txt`, `sources/libiconv-1.18.tar.gz` |
+| Start | AppImage type2 runtime 20251108 (pinned in the toolchain manifest) mounts a zstd squashfs and runs `AppRun`, which starts the staged Python with the builder window | A Zig-built stub verifies the appended zip's SHA-256, unpacks it once with Windows' `tar.exe` into `%LOCALAPPDATA%\TankBattlesRecomp\builder\<digest>` and starts `pythonw.exe` with the builder window |
+| Without the default route | `./Builder.AppImage --appimage-extract`, then `squashfs-root/AppRun` (systems without FUSE) | `Builder.exe --extract FOLDER`, then `FOLDER\toolchain\python\pythonw.exe FOLDER\scripts\builder_app.py` |
+| Size | about 300 MB | about 250 MB |
+
+```sh
+python scripts/package_builder.py resources --target linux --runtime-bundle build-zig/linux/runtime-bundle \
+  --toolchain /opt/tb-toolchain --cache ~/.cache/tb-toolchain --output out/linux-resources
+python scripts/package_builder.py appdir --resources out/linux-resources --output out/AppDir
+python scripts/package_builder.py appimage --appdir out/AppDir --runtime ~/.cache/tb-toolchain/<digest> --output Builder.AppImage
+python scripts/package_builder.py resources --target windows ... --toolchain /opt/tb-toolchain-windows --output out/windows-resources
+python scripts/package_builder.py stub --toolchain /opt/tb-toolchain --output out/BuilderStub.exe
+python scripts/package_builder.py exe --resources out/windows-resources --stub out/BuilderStub.exe --output Builder.exe
+```
+
+Both are made on Linux. The Windows toolchain is staged there with `toolchain.py stage --host windows`. Every extracted path stays under Windows' 260-character limit with room for a long user name.
