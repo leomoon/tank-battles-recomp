@@ -8,12 +8,14 @@
 namespace tb::rpcn {
 
 enum class State { offline, connecting, online };
+enum class ConnectionError { none, account_in_use, unavailable };
 
 struct Status {
     State state = State::offline;
     std::string npid;
     uint64_t user_id = 0;
     std::string endpoint;
+    ConnectionError error = ConnectionError::none;
 };
 
 struct Reply {

@@ -140,11 +140,27 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     assert(delivered);
-    first.socket_closed();second.socket_closed();
+    // The remote process vanishes after socket handoff. The local side must
+    // report one loss without closing the socket still owned by guest sys_net.
+    second.socket_closed();
 #ifdef _WIN32
-    closesocket(left);closesocket(right);
+    closesocket(right);
 #else
-    close(left);close(right);
+    close(right);
 #endif
-    puts("PASS: mutual UDP challenge/ack, reordered activation, endpoint identity and socket handoff");
+    std::vector<tb::rpcn::PeerEvent> lost;
+    const auto loss_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(6);
+    while (lost.empty() && std::chrono::steady_clock::now()<loss_deadline) {
+        lost=first.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    assert(lost.size()==1 && !lost[0].active && lost[0].npid=="PeerBeta");
+    assert(first.usable() && first.pump().empty());
+    first.socket_closed();
+#ifdef _WIN32
+    closesocket(left);
+#else
+    close(left);
+#endif
+    puts("PASS: mutual UDP activation, socket handoff and one bounded event after abrupt peer loss");
 }

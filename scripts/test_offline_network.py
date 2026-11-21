@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Run the native offline contract probe with all new sockets denied on Linux."""
+"""Verify offline callbacks and host socket registration, denying sockets on Linux."""
 import os
 from pathlib import Path
 import re
-import resource
 import subprocess
+import sys
+import tempfile
 import unittest
 from port import ROOT
 
@@ -36,31 +37,41 @@ int main(int argc,char** argv){
 class OfflineNetworkTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.directory=ROOT/'build-tests/offline-network'
-        cls.directory.mkdir(parents=True,exist_ok=True)
-        source=cls.directory/'socket_guard.c'
-        source.write_text(SOCKET_GUARD)
-        cls.guard=cls.directory/'socket_guard'
-        subprocess.run(['cc','-std=gnu17',str(source),'-o',str(cls.guard)],check=True,capture_output=True)
-        resource.setrlimit(resource.RLIMIT_CORE,(0,0))
+        directory = tempfile.TemporaryDirectory(prefix='tb-offline-network-')
+        cls.addClassCleanup(directory.cleanup)
+        cls.directory = Path(directory.name)
+        cls.guard = []
+        if sys.platform == 'linux':
+            import resource
+            source = cls.directory/'socket_guard.c'
+            source.write_text(SOCKET_GUARD)
+            guard = cls.directory/'socket_guard'
+            subprocess.run(['cc','-std=gnu17',str(source),'-o',str(guard)],check=True)
+            resource.setrlimit(resource.RLIMIT_CORE,(0,0))
+            cls.guard = [str(guard)]
 
     def run_profile(self,hostile=False):
-        env={k:v for k,v in os.environ.items() if not k.startswith(('PS3_','TB_'))}
-        image=Path(os.environ.get('TB_TEST_ELF',str(ROOT/'build-smoke/synthetic/smoke.elf')))
+        env={k:v for k,v in os.environ.items()
+             if not k.startswith(('PS3_','PS3RECOMP_','TB_','PAD_')) and k!='PSNR_SERVER'}
+        image=Path(os.environ.get('TB_TEST_ELF',str(ROOT/'build-smoke/synthetic/smoke.elf'))).resolve()
         generated=image.parent
-        env.update(PS3_PARAM_SFO=os.environ.get('TB_TEST_SFO',str(generated/'PARAM.SFO')),PS3_VFS_ROOT=str(generated),
-                   PS3_HDD0_ROOT=str(self.directory/'dev_hdd0'),PS3_HDD1_ROOT=str(self.directory/'dev_hdd1'),
-                   PS3_GAMEDATA_ROOT=str(self.directory),PS3_DEV_FLASH=str(self.directory/'dev_flash'),
+        sfo=Path(os.environ.get('TB_TEST_SFO',str(generated/'PARAM.SFO'))).resolve()
+        root=self.directory/('hostile-env' if hostile else 'default')
+        env.update(PS3_PARAM_SFO=str(sfo),PS3_VFS_ROOT=str(generated),
+                   PS3_HDD0_ROOT=str(root/'dev_hdd0'),PS3_HDD1_ROOT=str(root/'dev_hdd1'),
+                   PS3_GAMEDATA_ROOT=str(root),PS3_DEV_FLASH=str(root/'dev_flash'),
+                   TB_SESSION_CAPTURED='1',TB_SETTINGS_FILE='',TB_EXECUTION_MODE='strict',
                    TB_OFFLINE_PROBE='1',TB_OFFLINE_TRACE='1',SDL_AUDIODRIVER='dummy',SDL_VIDEODRIVER='dummy')
         if hostile:
             env.update(PS3_NET_ONLINE='1',PSNR_SERVER='unreachable.invalid:31313')
-        command=[str(self.guard),os.environ.get('TB_TEST_RUNNER',str(ROOT/'build-smoke/TankBattlesRecomp')),str(image)]
-        result=subprocess.run(command,cwd=ROOT,env=env,capture_output=True,timeout=15)
+        runner=Path(os.environ.get('TB_TEST_RUNNER',str(ROOT/'build-smoke/TankBattlesRecomp'))).resolve()
+        command=[*self.guard,str(runner),str(image)]
+        result=subprocess.run(command,cwd=self.directory,env=env,capture_output=True,timeout=15)
         log=(result.stdout+result.stderr).decode(errors='replace')
-        label='hostile-env' if hostile else 'default'
-        (self.directory/(label+'.log')).write_text(log)
         self.assertEqual(result.returncode,0,log[-2500:])
-        self.assertIn('[offline-sandbox] new sockets blocked',log)
+        if self.guard:
+            self.assertIn('[offline-sandbox] new sockets blocked',log)
+        self.assertNotIn('[sys_net] PS3_NET_ONLINE: host sockets registered',log)
         self.assertIn('[offline-trace]',log)
         self.assertIn('name=net-dialog-event',log)
         count=re.search(r'\[offline-probe\] ALL PASS checks=(\d+)',log)

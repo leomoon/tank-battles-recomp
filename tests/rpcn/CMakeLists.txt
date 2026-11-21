@@ -38,7 +38,7 @@ else()
     target_compile_options(peer_udp PRIVATE -UNDEBUG)
 endif()
 add_test(NAME peer_udp_handshake COMMAND peer_udp)
-set_tests_properties(peer_udp_handshake PROPERTIES TIMEOUT 10)
+set_tests_properties(peer_udp_handshake PROPERTIES TIMEOUT 15)
 
 add_executable(basic_wire basic_wire.cpp "${PORT_ROOT}/rpcn/basic_wire.cpp")
 target_include_directories(basic_wire PRIVATE "${PORT_ROOT}")

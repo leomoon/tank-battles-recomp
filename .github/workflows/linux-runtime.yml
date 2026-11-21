@@ -30,7 +30,7 @@ jobs:
         run: ctest --test-dir build-runtime --output-on-failure
       - name: Check game-free RPCN protocol
         run: |
-          python scripts/test_rpcn_client.py --runner build-runtime/runtime_cpu_smoke
+          python scripts/test_rpcn_client.py --runner build-runtime/runtime_cpu_smoke --matching-runner build-runtime/tests/rpcn/matching_rooms
           python scripts/test_patch_network_events.py
       - name: Package and audit runtime
         run: |

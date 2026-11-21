@@ -59,7 +59,7 @@ jobs:
         run: ctest --test-dir build-runtime -C Release --output-on-failure
       - name: Check game-free RPCN account protocol
         run: |
-          python scripts/test_rpcn_client.py --runner build-runtime/Release/runtime_cpu_smoke.exe
+          python scripts/test_rpcn_client.py --runner build-runtime/Release/runtime_cpu_smoke.exe --matching-runner build-runtime/tests/rpcn/Release/matching_rooms.exe
           python scripts/test_patch_network_events.py
       - name: Create audited game-free runtime bundle
         run: cmake --build build-runtime --config Release --target runtime_bundle

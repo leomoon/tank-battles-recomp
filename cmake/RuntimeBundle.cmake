@@ -25,6 +25,10 @@ set_target_properties(runtime_shader_check PROPERTIES LINKER_LANGUAGE CXX)
 add_test(NAME runtime_shader_translation COMMAND runtime_shader_check)
 add_test(NAME runtime_cpu_smoke COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_runtime_smoke.py"
     --runner "$<TARGET_FILE:runtime_cpu_smoke>" --data "${TB_SYNTHETIC_DIR}")
+add_test(NAME runtime_offline_network COMMAND "${CMAKE_COMMAND}" -E env
+    "TB_TEST_RUNNER=$<TARGET_FILE:runtime_cpu_smoke>" "TB_TEST_ELF=${TB_SYNTHETIC_DIR}/smoke.elf"
+    "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_offline_network.py")
+set_tests_properties(runtime_offline_network PROPERTIES TIMEOUT 45)
 add_subdirectory(tests/host_services "bundle-contracts")
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS

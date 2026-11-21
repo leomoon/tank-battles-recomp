@@ -255,6 +255,7 @@ void check_login_retry(const char* profile) {
     while (status().state==State::connecting && std::chrono::steady_clock::now()<start_time+8s)
         std::this_thread::sleep_for(10ms);
     assert(status().state==State::offline);
+    assert(status().error==ConnectionError::account_in_use);
 
     // The fixture holds the old login beyond the initial retry window.
     std::this_thread::sleep_until(start_time+7s);
@@ -264,6 +265,7 @@ void check_login_retry(const char* profile) {
     while (status().state==State::connecting && std::chrono::steady_clock::now()<deadline)
         std::this_thread::sleep_for(10ms);
     assert(status().state==State::online && status().user_id==42);
+    assert(status().error==ConnectionError::none);
     retry_sign_in();
     stop();
     retry_sign_in();

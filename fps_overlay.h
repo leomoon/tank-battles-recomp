@@ -30,3 +30,4 @@ PanelPadInput tb_panel_input(uint32_t buttons);
 uint32_t tb_panel_take_input();
 void tb_show_invite_toast(const char* sender);
 void tb_clear_invite_toast();
+void tb_show_network_toast(const char* heading,const char* detail);

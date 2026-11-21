@@ -26,8 +26,15 @@ Picker picker;
 bool panel_active=false;
 uint32_t panel_previous=0,panel_pressed=0;
 bool panel_waits_for_release=false;
-std::array<char,17> invite_sender{};
-Clock::time_point invite_until{};
+struct Toast {
+    std::array<char,40> heading{};
+    std::array<char,40> detail{};
+    bool invitation=true;
+};
+Toast toast;
+Clock::time_point toast_until{};
+constexpr unsigned toast_height=43;
+constexpr auto toast_duration=std::chrono::seconds(4);
 std::atomic<bool>& enabled() {
     static std::atomic<bool> value{[] {const char* e=std::getenv("TB_FPS_OVERLAY");return e && std::atoi(e)!=0;}()};
     return value;
@@ -119,12 +126,12 @@ void draw_picker(const Canvas& canvas,unsigned height,unsigned scale,const Picke
     canvas.text(inset,footer+22*scale,view.count?"KEYBOARD     Z ACCEPT  X BACK":"KEYBOARD     X BACK",scale,muted);
 }
 
-void draw_toast(const Canvas& canvas,unsigned height,unsigned scale,const char* sender,double remaining) {
+void draw_toast(const Canvas& canvas,unsigned height,unsigned scale,const Toast& view,double remaining) {
     canvas.fill(0,0,canvas.width,height,border);
     canvas.fill(1,1,canvas.width-2,height-2,card);
     canvas.fill(0,0,3*scale,height,accent);
-    canvas.text(12*scale,9*scale,sender,scale+scale/2,white);
-    canvas.text(12*scale,28*scale,"INVITED YOU",scale,muted);
+    canvas.text(12*scale,9*scale,view.heading.data(),view.invitation?scale+scale/2:scale,white);
+    canvas.text(12*scale,28*scale,view.detail.data(),scale,muted);
     const auto remaining_width=static_cast<unsigned>((canvas.width-4*scale)*remaining);
     canvas.fill(3*scale,height-2*scale,remaining_width,scale,accent);
 }
@@ -169,41 +176,52 @@ uint32_t tb_panel_take_input() {
 }
 void tb_show_invite_toast(const char* sender) {
     std::lock_guard guard(overlay_mutex);
-    std::snprintf(invite_sender.data(),invite_sender.size(),"%s",sender);
-    invite_until=Clock::now()+std::chrono::seconds(4);
+    std::snprintf(toast.heading.data(),toast.heading.size(),"%s",sender);
+    std::snprintf(toast.detail.data(),toast.detail.size(),"INVITED YOU");
+    toast.invitation=true;
+    toast_until=Clock::now()+toast_duration;
 }
 void tb_clear_invite_toast() {
     std::lock_guard guard(overlay_mutex);
-    invite_sender={};
+    if (toast.invitation) toast={};
+}
+void tb_show_network_toast(const char* heading,const char* detail) {
+    std::lock_guard guard(overlay_mutex);
+    std::snprintf(toast.heading.data(),toast.heading.size(),"%s",heading);
+    std::snprintf(toast.detail.data(),toast.detail.size(),"%s",detail);
+    toast.invitation=false;
+    toast_until=Clock::now()+toast_duration;
 }
 
 extern "C" void tb_fps_guest_flip() {flips.fetch_add(1,std::memory_order_relaxed);tb_gameplay_event(0,0);}
 extern "C" uint64_t tb_fps_guest_serial() {return flips.load(std::memory_order_relaxed);}
 extern "C" void tb_fps_present() {presents.fetch_add(1,std::memory_order_relaxed);}
 extern "C" void tb_fps_toggle() {auto& e=enabled();const bool on=!e.load(std::memory_order_relaxed);e.store(on,std::memory_order_relaxed);tb_settings_note_overlay(on);}
-extern "C" int tb_draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_overlay_region* region)
+static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_overlay_region* region,bool notification)
 {
     if (!pixels || !region) return 0;
 
     enum class Mode { fps, picker, invitation };
     Mode mode=Mode::fps;
     Picker picker_view;
-    std::array<char,17> sender{};
+    Toast toast_view;
     double remaining=0;
     {
         std::lock_guard guard(overlay_mutex);
-        if (panel_active) {
+        if (!notification && panel_active) {
             mode=Mode::picker;
             picker_view=picker;
-        } else if (invite_sender[0]) {
+        }
+        if (notification && toast.heading[0]) {
             const auto now=Clock::now();
-            if (now<invite_until) {
+            if (now<toast_until) {
+                toast_view=toast;
+                remaining=std::chrono::duration<double>(toast_until-now)/toast_duration;
                 mode=Mode::invitation;
-                sender=invite_sender;
-                remaining=std::chrono::duration<double>(invite_until-now).count()/4;
-            } else invite_sender={};
+            } else toast={};
         }
     }
+    if (notification && !toast_view.heading[0]) return 0;
     if (mode==Mode::fps && !enabled().load(std::memory_order_relaxed)) return 0;
 
     unsigned card_width, card_height, margin;
@@ -212,7 +230,7 @@ extern "C" int tb_draw_overlay(void* pixels,uint32_t width,uint32_t height,int b
         card_width=224; card_height=64+std::max(1u,picker_view.count)*14; margin=0;
         break;
     case Mode::invitation:
-        card_width=184; card_height=43; margin=10;
+        card_width=toast_view.invitation?184:224; card_height=toast_height; margin=10;
         break;
     case Mode::fps:
         card_width=144; card_height=32; margin=8;
@@ -232,7 +250,7 @@ extern "C" int tb_draw_overlay(void* pixels,uint32_t width,uint32_t height,int b
     if (mode==Mode::picker) {
         draw_picker(canvas,draw_height,scale,picker_view);
     } else if (mode==Mode::invitation) {
-        draw_toast(canvas,draw_height,scale,sender.data(),remaining);
+        draw_toast(canvas,draw_height,scale,toast_view,remaining);
     } else {
         static FpsSample sample;
         const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
@@ -248,4 +266,12 @@ extern "C" int tb_draw_overlay(void* pixels,uint32_t width,uint32_t height,int b
             canvas.text(3*scale,(3+line*10)*scale,lines[line],scale,{240,240,240});
     }
     return 1;
+}
+
+extern "C" int tb_draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_overlay_region* region) {
+    return draw_overlay(pixels,width,height,bgra,region,false);
+}
+
+extern "C" int tb_draw_notification_toast(void* pixels,uint32_t width,uint32_t height,int bgra,tb_overlay_region* region) {
+    return draw_overlay(pixels,width,height,bgra,region,true);
 }

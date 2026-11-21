@@ -116,7 +116,7 @@ else()
     target_compile_options(peer_udp_fixture PRIVATE -UNDEBUG)
 endif()
 add_test(NAME peer_udp_handshake COMMAND peer_udp_fixture)
-set_tests_properties(peer_udp_handshake PROPERTIES TIMEOUT 10)
+set_tests_properties(peer_udp_handshake PROPERTIES TIMEOUT 15)
 
 add_executable(sysnet_fixture "${SDK}/libs/network/tests/test_sys_net.c")
 target_include_directories(sysnet_fixture PRIVATE "${SDK}/include")

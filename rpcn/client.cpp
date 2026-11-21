@@ -443,9 +443,10 @@ Login connect_and_login(const Profile& profile, const std::stop_token& stop) {
     }
 }
 
-void set_status(State state, std::string npid = {}, uint64_t user_id = 0, std::string endpoint = {}) {
+void set_status(State state, std::string npid = {}, uint64_t user_id = 0, std::string endpoint = {},
+                ConnectionError error = ConnectionError::none) {
     std::lock_guard guard(state_lock);
-    session_status = {state, std::move(npid), user_id, std::move(endpoint)};
+    session_status = {state, std::move(npid), user_id, std::move(endpoint), error};
     if (state == State::offline) {
         for (auto& pending : requests) pending.completion.set_value({});
         requests.clear();
@@ -459,19 +460,24 @@ bool launch_worker(const Profile& profile) {
     try {
         set_status(State::connecting);
         worker = std::jthread([profile](std::stop_token stop) {
+            auto failure = ConnectionError::none;
             try {
                 auto [connection, user_id] = connect_and_login(profile, stop);
                 set_status(State::online, profile.npid, user_id, profile.endpoint);
                 fprintf(stderr, "[rpcn] Signed in to %s as %s\n", profile.endpoint.c_str(), profile.npid.c_str());
                 connection->serve();
             } catch (const std::exception& error) {
-                if (!stop.stop_requested()) fprintf(stderr, "[rpcn] %s\n", error.what());
+                if (!stop.stop_requested()) {
+                    failure = dynamic_cast<const LoginBusy*>(&error)
+                        ? ConnectionError::account_in_use : ConnectionError::unavailable;
+                    fprintf(stderr, "[rpcn] %s\n", error.what());
+                }
             }
-            set_status(State::offline);
+            set_status(State::offline, {}, 0, {}, failure);
         });
         return true;
     } catch (const std::exception& error) {
-        set_status(State::offline);
+        set_status(State::offline, {}, 0, {}, ConnectionError::unavailable);
         fprintf(stderr, "[rpcn] %s\n", error.what());
         return false;
     }

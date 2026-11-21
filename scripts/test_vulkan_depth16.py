@@ -35,6 +35,7 @@ void tb_frame_budget_mark(unsigned kind,uint32_t a,uint32_t b){}
 void tb_vulkan_event(unsigned k,uint32_t a,uint32_t b,uint32_t c){} void tb_frame_history(const void* p,uint32_t w,uint32_t h,uint32_t n){}
 void tb_fps_present(void){} uint64_t tb_fps_guest_serial(void){return 0;} void tb_gameplay_event(unsigned k,uint64_t n){}
 int tb_draw_overlay(void* p,uint32_t w,uint32_t h,int bgra,tb_overlay_region* region){return 0;} void tb_fps_toggle(void){}
+int tb_draw_notification_toast(void* p,uint32_t w,uint32_t h,int bgra,tb_overlay_region* region){return 0;}
 void tb_keyboard_down(uint32_t s){} uint32_t tb_keyboard_take(void){return 0;}
 ''')
 subprocess.run(['cmake','-S',str(out),'-B',str(out/'build'),'-G','Ninja'],check=True)

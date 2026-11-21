@@ -1,6 +1,7 @@
 /* Original offline profile for the interfaces imported by NPUB30154.
  * ABI/error/event definitions checked against the local RPCS3 source. */
 #include "offline_network.h"
+#include "fps_overlay.h"
 #include "stubs.h"
 #include "rpcn/client.h"
 #include "rpcn/basic.h"
@@ -46,6 +47,7 @@ std::mutex lock;
 TitlePool score,tus;
 bool np2=false, matching=false, net=false, dialog=false, voice_pending=false;
 bool dialog_waiting=false;
+tb::rpcn::ConnectionError shown_connection_error=tb::rpcn::ConnectionError::none;
 struct StatusCallback {
     uint32_t opd=0, arg=0, previous=0;
 };
@@ -357,7 +359,15 @@ void check_callbacks(ppu_context* c) {
     {
         std::lock_guard guard(lock);
         if (tb::rpcn::enabled()) {
-            const auto state=tb::rpcn::status().state;
+            const auto identity=tb::rpcn::status();
+            const auto state=identity.state;
+            if (identity.error!=shown_connection_error) {
+                shown_connection_error=identity.error;
+                if (identity.error==tb::rpcn::ConnectionError::account_in_use)
+                    tb_show_network_toast("ACCOUNT ALREADY SIGNED IN","CLOSE OTHER SESSION AND RETRY");
+                else if (identity.error==tb::rpcn::ConnectionError::unavailable)
+                    tb_show_network_toast("ONLINE CONNECTION FAILED","CHECK CONNECTION AND PROFILE");
+            }
             if (dialog_waiting && state!=tb::rpcn::State::connecting) {
                 net_dialog_event(0x802u);
                 dialog_waiting=false;
