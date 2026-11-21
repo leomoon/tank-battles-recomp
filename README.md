@@ -62,7 +62,7 @@ Setup extracts the package, decrypts the executable, prepares the unlock, transl
 
 Use `setup --check` to report missing files before building. Setup resumes verified work after an interruption. A manually decrypted executable can be supplied with `--elf /path/to/EBOOT.elf`, or use your RPCS3 executable with `--rpcs3 /path/to/rpcs3`. Installed-dump and other options: [Setup reference](docs/SETUP.md).
 
-Controllers are supported. Keyboard: **Z = Cross, X = Circle, arrows = movement, Enter = Start**. **F3** toggles the FPS overlay; **F11 / Alt+Enter** toggles fullscreen.
+Controllers are supported. Keyboard: **Z = Cross, X = Circle, arrows = movement, Enter = Start**. **F3** toggles the FPS overlay, **F4** toggles optional FXAA antialiasing, and **F11 / Alt+Enter** toggles fullscreen. FXAA starts off and remembers your choice.
 
 The overlay starts hidden. Window/fullscreen and overlay preferences are saved in `game/settings.ini`. Session logs go to `~/.local/state/tank-battles-recomp/logs/` (or `$XDG_STATE_HOME`); `run --console` prints to the terminal. Developer profiles and diagnostic switches: [Runtime reference](docs/RUNTIME.md).
 

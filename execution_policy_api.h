@@ -14,7 +14,11 @@ void tb_fps_guest_flip(void);
 uint64_t tb_fps_guest_serial(void);
 void tb_fps_present(void);
 void tb_fps_toggle(void);
-int tb_fps_overlay(void* pixels,uint32_t width,uint32_t height,uint32_t pitch,uint32_t scale);
+#define TB_OVERLAY_MAX_SCALE 6u
+#define TB_OVERLAY_BUFFER_SIZE (224u * 134u * TB_OVERLAY_MAX_SCALE * TB_OVERLAY_MAX_SCALE * 4u)
+typedef struct tb_overlay_region { uint32_t x, y, width, height; } tb_overlay_region;
+// Writes a tightly packed rectangle into TB_OVERLAY_BUFFER_SIZE bytes of storage.
+int tb_draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_overlay_region* region);
 void tb_keyboard_down(uint32_t scancode);
 uint32_t tb_keyboard_take(void);
 uint32_t tb_keyboard_peek(void);

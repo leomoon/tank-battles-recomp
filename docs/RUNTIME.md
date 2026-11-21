@@ -4,6 +4,8 @@ Ordinary Linux setup uses the `player` profile: Release, effective `-O2`, no deb
 
 The FPS overlay starts hidden unless a saved preference or `TB_FPS_OVERLAY=1` enables it. F3 toggles and saves it. Windowed size and fullscreen changes are saved beside the user data in `game/settings.ini`. `TB_SETTINGS_FILE` selects a different file; an empty value disables persistence for diagnostics. Explicit environment values override saved preferences. The settings affect only the host window and overlay.
 
+F4 toggles optional FXAA antialiasing and saves `antialiasing = 0` or `1` in the same settings file. It starts disabled. `TB_FXAA=0` or `1` overrides the saved value at launch. FXAA smooths high-contrast edges such as wires in a GPU pass at guest resolution before window scaling. It can soften game text and fine texture detail and adds GPU work. Native invitation panels, notifications and the FPS overlay are drawn afterward. Guest surfaces and diagnostic readbacks retain their original pixels.
+
 Normal launches capture output in `${XDG_STATE_HOME:-$HOME/.local/state}/tank-battles-recomp/logs/`, with a unique session filename printed to the terminal. `TB_LOG_DIR` changes the directory. `python scripts/port.py run --console` leaves output on the terminal; `--log analysis/example.log` captures a diagnostic session at a chosen path. Direct executable launches use the same log directory; `TB_LOG_CONSOLE=1` keeps their console output. `PS3_VERBOSE` defaults to `0` and reduces high-volume SDK logging; setting it to `1` explicitly enables that logging.
 
 ## Reference and comparison paths

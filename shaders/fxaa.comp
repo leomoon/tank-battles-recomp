@@ -1,0 +1,41 @@
+#version 450
+// Optional edge smoothing for the host window, evaluated at guest resolution.
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0, binding=0) uniform sampler2D source_image;
+layout(set=0, binding=1, rgba8) writeonly uniform image2D destination;
+
+float luminance(vec3 rgb) {
+    return dot(rgb, vec3(0.299, 0.587, 0.114));
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(destination);
+    if (any(greaterThanEqual(p, size))) return;
+    vec2 step_uv = 1.0 / vec2(size);
+    vec2 uv = (vec2(p) + 0.5) * step_uv;
+    vec4 center = textureLod(source_image, uv, 0.0);
+    float luma = luminance(center.rgb);
+    float nw = luminance(textureLod(source_image, uv + vec2(-1,-1)*step_uv, 0.0).rgb);
+    float ne = luminance(textureLod(source_image, uv + vec2( 1,-1)*step_uv, 0.0).rgb);
+    float sw = luminance(textureLod(source_image, uv + vec2(-1, 1)*step_uv, 0.0).rgb);
+    float se = luminance(textureLod(source_image, uv + vec2( 1, 1)*step_uv, 0.0).rgb);
+    float low = min(luma, min(min(nw, ne), min(sw, se)));
+    float high = max(luma, max(max(nw, ne), max(sw, se)));
+    if (high - low < max(0.0312, high * 0.125)) {
+        imageStore(destination, p, center);
+        return;
+    }
+    vec2 direction = vec2(-(nw + ne - sw - se), nw + sw - ne - se);
+    float reduction = max((nw + ne + sw + se) * (0.25 * 0.125), 1.0/128.0);
+    direction /= min(abs(direction.x), abs(direction.y)) + reduction;
+    direction = clamp(direction, vec2(-8.0), vec2(8.0)) * step_uv;
+    vec3 narrow = 0.5 * (
+        textureLod(source_image, uv - direction/6.0, 0.0).rgb +
+        textureLod(source_image, uv + direction/6.0, 0.0).rgb);
+    vec3 wide = 0.5 * narrow + 0.25 * (
+        textureLod(source_image, uv - direction*0.5, 0.0).rgb +
+        textureLod(source_image, uv + direction*0.5, 0.0).rgb);
+    float wide_luma = luminance(wide);
+    imageStore(destination, p, vec4(wide_luma < low || wide_luma > high ? narrow : wide, center.a));
+}

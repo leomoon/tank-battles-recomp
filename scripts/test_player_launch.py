@@ -25,9 +25,12 @@ int main(int argc,char** argv) {
  tb_settings_init();
  if(!strcmp(argv[1],"write")) {tb_settings_note_overlay(1);tb_settings_note_fullscreen(1);tb_settings_note_window(1366,768);tb_settings_note_window(999999,1);}
  if(!strcmp(argv[1],"toggle")) tb_fps_toggle();
+ if(!strcmp(argv[1],"antialiasing")) tb_settings_note_antialiasing(!tb_settings_antialiasing());
+ printf("antialiasing=%d\n",tb_settings_antialiasing());
  int w=0,h=0;int valid=tb_settings_window_size(&w,&h);
- unsigned char pixels[144*32*4];
- printf("overlay=%d size=%d,%d,%d fullscreen=%s\n",tb_fps_overlay(pixels,144,32,144*4,1),valid,w,h,getenv("PS3RECOMP_FULLSCREEN")?getenv("PS3RECOMP_FULLSCREEN"):"unset");
+ uint32_t pixels[TB_OVERLAY_BUFFER_SIZE/4];
+ tb_overlay_region region{};
+ printf("overlay=%d size=%d,%d,%d fullscreen=%s\n",tb_draw_overlay(pixels,288,180,0,&region),valid,w,h,getenv("PS3RECOMP_FULLSCREEN")?getenv("PS3RECOMP_FULLSCREEN"):"unset");
 }
 ''')
         cls.exe=cls.build/'fixture'
@@ -61,6 +64,18 @@ int main(int argc,char** argv) {
         self.assertIn('overlay=1',self.run_fixture('read').stdout)
         self.assertIn('overlay=0',self.run_fixture('toggle').stdout)
         self.assertIn('overlay=0',self.run_fixture('read').stdout)
+
+    def test_antialiasing_default_toggle_persistence_and_override(self):
+        self.assertIn('antialiasing=0', self.run_fixture('read').stdout)
+        self.assertIn('antialiasing=1', self.run_fixture('antialiasing').stdout)
+        self.assertIn('antialiasing=1', self.run_fixture('read').stdout)
+        before = (self.root/'settings.ini').read_bytes()
+        self.assertIn('antialiasing=0', self.run_fixture('read', TB_FXAA='0').stdout)
+        self.assertEqual(before, (self.root/'settings.ini').read_bytes())
+        self.assertIn('antialiasing=0', self.run_fixture('antialiasing').stdout)
+        self.assertIn('antialiasing=0', self.run_fixture('read').stdout)
+        self.assertIn('antialiasing=1', self.run_fixture('antialiasing', TB_SETTINGS_FILE='').stdout)
+        self.assertIn('antialiasing=0', self.run_fixture('read').stdout)
 
     def test_diagnostics_can_disable_settings(self):
         self.run_fixture('write')

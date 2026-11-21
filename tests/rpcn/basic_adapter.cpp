@@ -47,20 +47,32 @@ uint32_t call(const char* name,std::initializer_list<uint64_t> args={}) {
 
 static uint32_t buttons=0;
 static bool panel=false;
-void tb_panel_show(const char*,const char*,const char*) { panel=true; }
+static std::vector<std::string> displayed_choices;
+static std::string toast_sender;
+void tb_show_invite_toast(const char* sender) { toast_sender=sender; }
+void tb_clear_invite_toast() { toast_sender.clear(); }
+void tb_panel_show(InvitePicker,std::span<const std::string> choices,size_t) {
+    panel=true;
+    displayed_choices.assign(choices.begin(),choices.end());
+}
 void tb_panel_close() { panel=false; }
-bool tb_panel_input(uint32_t value) {buttons=value;return panel;}
+PanelPadInput tb_panel_input(uint32_t value) {
+    buttons=value;
+    return panel?PanelPadInput::captured:PanelPadInput::passthrough;
+}
 uint32_t tb_panel_take_input() {auto value=buttons;buttons=0;return value;}
 extern "C" void tb_sdk_ps3_hle_call(uint32_t,ppu_context*) {}
 namespace tb::rpcn {
 bool guest_range(uint64_t a,uint64_t size) {return a>=0x10000 && a<=memory.size() && size<=memory.size()-a;}
 static std::vector<Notification> notices;
 static bool peer_online=true;
+static unsigned submitted_messages=0;
 Status status() {return {State::online,"PlayerA",1,"localhost:31313"};}
 std::vector<Friend> friends() {return {{"PlayerB",peer_online,0},{"Offline",false,0}};}
 std::vector<Notification> take_basic_notifications() {auto result=notices;notices.clear();return result;}
 std::future<Reply> submit(Request command,std::vector<unsigned char> bytes) {
  assert(command==Request::send_message && bytes.size()>4);
+ ++submitted_messages;
  std::promise<Reply> completion;completion.set_value({{0}});return completion.get_future();
 }
 }
@@ -74,6 +86,7 @@ int main() {
  vm_write16(message+8,3);vm_write32(message+12,1);vm_write32(message+32,payload);vm_write32(message+36,24);
  vm_write64(payload,56);
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));assert(panel);
+ assert(displayed_choices==std::vector<std::string>{"PlayerB"});
  buttons=0x4000;pump_basic();assert(!panel);
  assert(callbacks.back()[0]==13 && callbacks.back()[1]==0 && callbacks.back()[3]==123);
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
@@ -81,6 +94,13 @@ int main() {
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
  peer_online=false;buttons=0x4000;pump_basic();assert(!panel && callbacks.back()[1]==UINT64_MAX);
  peer_online=true;
+ constexpr uint32_t recipient=0x11800;
+ for (unsigned i=0;i<7;++i) vm_write8(recipient+i,"PlayerC"[i]);
+ vm_write32(message+16,recipient);vm_write32(message+20,1);
+ assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
+ assert(displayed_choices.empty());
+ buttons=0x4000;pump_basic();assert(!panel && callbacks.back()[1]==UINT64_MAX);
+ assert(submitted_messages==1);
  BasicMessage msg;msg.communication_id="NPWR00718_00";msg.data.resize(24);msg.data[7]=56;msg.features=1;
  const auto encoded=encode_basic_message(msg,{"PlayerA"});
  assert(encoded[4]==10 && encoded[5]<128);
@@ -88,12 +108,16 @@ int main() {
  std::vector<unsigned char> notice={'P','l','a','y','e','r','B',0};
  for(unsigned i=0;i<4;++i) notice.push_back(length>>(8*i));
  notice.insert(notice.end(),encoded.begin()+6,encoded.begin()+6+length);
- notices.push_back({10,notice});pump_basic();assert(callbacks.back()[0]==5);
+ assert(!call("sceNpBasicRecvMessageCustom",{3,0,0xffffffff}));
+ assert(panel && displayed_choices.empty());
+ buttons=0x4000;notices.push_back({10,notice});pump_basic();
+ assert(panel && displayed_choices==std::vector<std::string>{"PlayerB"});
+ assert(callbacks.back()[0]==5);
+ assert(toast_sender=="PlayerB");
  vm_write32(size,128);
  assert(!call("sceNpBasicGetEvent",{event,from,data,size}));
  assert(vm_read32(event)==5 && vm_read32(size)==24 && vm_read64(data)==56);
  assert(vm_read8(from)=='P' && vm_read8(from+36)=='P');
- assert(!call("sceNpBasicRecvMessageCustom",{3,0,0xffffffff}));assert(panel);
  buttons=0x4000;pump_basic();assert(callbacks.back()[0]==14 && !panel);
  vm_write32(size,32);
  assert(call("sceNpBasicGetEvent",{event,from,0,size})==0x8002a665);
@@ -106,8 +130,15 @@ int main() {
  assert(call("sceNpBasicRecvMessageAttachmentLoad",{1,data,size})==0x8002a66e);
  assert(vm_read32(size)==8);
  assert(call("sceNpBasicGetEvent",{event,from,data,size})==0x8002a66a);
- assert(call("sceNpBasicRecvMessageCustom",{3,0,0xffffffff})==0x8002a671);
+ assert(!call("sceNpBasicRecvMessageCustom",{3,0,0xffffffff}));
+ assert(panel && displayed_choices.empty());
+ const auto before_back=callbacks.size();
+ buttons=0x4000;pump_basic();assert(panel && callbacks.size()==before_back);
+ buttons=0x2000;pump_basic();assert(!panel && callbacks.size()==before_back+1);
+ assert(callbacks.back()[0]==14 && callbacks.back()[1]==UINT64_MAX);
+ assert(call("sceNpBasicGetEvent",{event,from,data,size})==0x8002a66a);
  reset_basic();
+ assert(toast_sender.empty());
  assert(call("sceNpBasicRecvMessageAttachmentLoad",{1,data,size})==0x8002a66d);
  puts("PASS: invite send/receive callbacks, guest events, attachment bounds and cleanup");
 }

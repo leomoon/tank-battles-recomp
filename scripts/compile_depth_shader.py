@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate the port's embedded compute shaders or check their embedded bytes.
 
-depth16.comp (exact Z16 conversion) and nv3089_gather.comp (exact NV3089
-point sampling) are compiled with glslangValidator -V into shaders/*_spirv.inc.
+Depth conversion, NV3089 point sampling and optional window FXAA are compiled
+with glslangValidator -V into shaders/*_spirv.inc.
 """
 import argparse
 import re
@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 root=Path(__file__).resolve().parent.parent
-SHADERS={'depth16':'tb_depth16_spirv','nv3089_gather':'tb_nv3089_gather_spirv','nv3089_gather_image':'tb_nv3089_gather_image_spirv'}
+SHADERS={'depth16':'tb_depth16_spirv','nv3089_gather':'tb_nv3089_gather_spirv','nv3089_gather_image':'tb_nv3089_gather_image_spirv','fxaa':'tb_fxaa_spirv'}
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--check',action='store_true')
 parser.add_argument('--shader',choices=sorted(SHADERS),action='append',help='Default: all')

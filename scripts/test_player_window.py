@@ -39,6 +39,8 @@ int main(void) {
  int w,h;SDL_GetWindowSize(s_vk.window,&w,&h);assert(w==1366 && h==768);
  SDL_SetWindowSize(s_vk.window,900,600);assert(rsx_vulkan_backend_pump_messages()==0);
  int saved_w=0,saved_h=0;assert(tb_settings_window_size(&saved_w,&saved_h));assert(saved_w==900 && saved_h==600);
+ key(SDLK_F4,0);assert(tb_settings_antialiasing()==1);
+ key(SDLK_F4,0);assert(tb_settings_antialiasing()==0);
  key(SDLK_F11,0);assert(SDL_GetWindowFlags(s_vk.window)&SDL_WINDOW_FULLSCREEN_DESKTOP);
  assert(tb_settings_window_size(&saved_w,&saved_h));assert(saved_w==900 && saved_h==600);
  key(SDLK_RETURN,KMOD_ALT);assert(!(SDL_GetWindowFlags(s_vk.window)&SDL_WINDOW_FULLSCREEN_DESKTOP));

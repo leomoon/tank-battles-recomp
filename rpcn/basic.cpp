@@ -18,7 +18,7 @@ extern "C" void tb_sdk_ps3_hle_call(uint32_t,ppu_context*);
 namespace tb::rpcn {
 namespace {
 using namespace std::chrono_literals;
-constexpr uint32_t invalid=0x8002a665,not_registered=0x8002a66d,cancel=0x8002a671;
+constexpr uint32_t invalid=0x8002a665,not_registered=0x8002a66d;
 constexpr uint32_t no_event=0x8002a66a,not_connected=0x8002a678;
 std::mutex basic_lock;
 uint32_t callback=0,callback_arg=0;
@@ -49,8 +49,7 @@ void result(uint32_t event,int32_t status=0) {
     fprintf(stderr,"[rpcn-basic] callback event=%u result=0x%08x\n",event,uint32_t(status));
 }
 void show() {
-    const auto label=choices.empty()?"NO ONLINE FRIENDS":choices[choice];
-    tb_panel_show(panel==Panel::send?"INVITE FRIEND":"ACCEPT INVITATION",label.c_str(),"ARROWS  Z OK  X BACK");
+    tb_panel_show(panel==Panel::send?InvitePicker::friends:InvitePicker::invitations,choices,choice);
 }
 std::optional<std::string> guest_text(uint32_t address,size_t limit) {
     if (!address) return std::string{};
@@ -115,7 +114,6 @@ uint32_t receive(ppu_context* c) {
     if (c->gpr[3]!=3 || (c->gpr[4]&~7u)) return invalid;
     choices.clear();
     for (const auto& msg:inbox) choices.push_back(msg.sender);
-    if (choices.empty()) return cancel;
     receive_options=c->gpr[4];
     panel=Panel::receive;choice=0;show();return 0;
 }
@@ -163,13 +161,17 @@ void reset_basic() {
     std::lock_guard guard(basic_lock);
     close_panel();callback=callback_arg=0;communication.clear();events.clear();callbacks.clear();
     inbox.clear();selected.reset();sending={};outgoing={};
+    tb_clear_invite_toast();
 }
 void pump_basic() {
     std::lock_guard guard(basic_lock);
     if (status().state!=State::online) {
         if (panel!=Panel::none || sending.valid()) result(panel==Panel::receive?14:13,-1);
         inbox.clear();selected.reset();close_panel();sending={};events.clear();
+        tb_clear_invite_toast();
     }
+    const auto buttons=panel==Panel::none?0:tb_panel_take_input();
+    const bool confirm=(buttons&0x4000) && (panel==Panel::send || !choices.empty());
     for (auto& notice:take_basic_notifications()) {
         try {
             auto message=decode_basic_notification(notice.body);
@@ -180,13 +182,17 @@ void pump_basic() {
             const auto event=(message.features&2)?23u:5u;
             if (events.size()<64) events.push_back({event,message});
             inbox.push_back(std::move(message));
+            tb_show_invite_toast(inbox.back().sender.c_str());
+            if (panel==Panel::receive) {
+                choices.push_back(inbox.back().sender);
+                show();
+            }
             result(event);
         } catch (const std::exception& e) { fprintf(stderr,"[rpcn-basic] rejected message: %s\n",e.what()); }
     }
     if (panel!=Panel::none) {
-        const auto buttons=tb_panel_take_input();
         if (buttons&0x2000) { result(panel==Panel::send?13:14,-1);close_panel(); }
-        else if (buttons&0x4000) {
+        else if (confirm) {
             if (!choices.empty() && panel==Panel::send) {
                 const auto online=friends();
                 const bool available=std::any_of(online.begin(),online.end(),[&](const Friend& f){
@@ -231,11 +237,21 @@ void register_basic() {
         std::lock_guard guard(basic_lock);close_panel();c->gpr[3]=0;
     });
     tank_battles_register_override(ps3_compute_nid("cellPadGetData"),[](ppu_context* c){
+        const auto port=c->gpr[3];
         const auto out=c->gpr[4];
         tb_sdk_ps3_hle_call(ps3_compute_nid("cellPadGetData"),c);
-        if (!c->gpr[3] && guest_range(out,12) && vm_read32(out)>0) {
+        if (!port && !c->gpr[3] && guest_range(out,12) && vm_read32(out)>0) {
             const auto buttons=vm_read16(out+8)|(vm_read16(out+10)<<8);
-            if (tb_panel_input(buttons)) { vm_write16(out+8,0);vm_write16(out+10,0); }
+            const auto handling=tb_panel_input(buttons);
+            if (handling!=PanelPadInput::passthrough) {
+                const bool forward_back=handling==PanelPadInput::back;
+                vm_write16(out+8,0);
+                vm_write16(out+10,forward_back?0x20:0);
+                const auto count=std::min(vm_read32(out),20u);
+                if (guest_range(out,4+count*2))
+                    for (unsigned i=8;i<count;++i)
+                        if (!forward_back || i!=13) vm_write16(out+4+i*2,0);
+            }
         }
     });
 }

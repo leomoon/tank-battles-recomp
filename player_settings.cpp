@@ -1,6 +1,7 @@
 // Persisted player settings: player_settings.h.
 #include "player_settings.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,7 @@
 namespace {
 struct Settings {
     int overlay = -1, fullscreen = -1, width = 0, height = 0;
+    std::atomic<int> antialiasing{0};
     std::string path;
     std::mutex mutex;
 };
@@ -32,6 +34,7 @@ void load(Settings& s) {
         if (sscanf(line, " %63[a-z_] = %d", key, &value) != 2) continue;
         if (!strcmp(key, "overlay")) s.overlay = value != 0;
         else if (!strcmp(key, "fullscreen")) s.fullscreen = value != 0;
+        else if (!strcmp(key, "antialiasing")) s.antialiasing.store(value != 0);
         else if (!strcmp(key, "window_width") && value >= 320 && value <= 16384) s.width = value;
         else if (!strcmp(key, "window_height") && value >= 180 && value <= 16384) s.height = value;
     }
@@ -58,6 +61,7 @@ void save(Settings& s) {
     fprintf(f, "# Tank Battles Recomp player settings, written by the game.\n");
     if (s.overlay >= 0) fprintf(f, "overlay = %d\n", s.overlay);
     if (s.fullscreen >= 0) fprintf(f, "fullscreen = %d\n", s.fullscreen);
+    fprintf(f, "antialiasing = %d\n", s.antialiasing.load());
     if (s.width && s.height) fprintf(f, "window_width = %d\nwindow_height = %d\n", s.width, s.height);
     const bool ok = fclose(f) == 0;
 #ifdef _WIN32
@@ -70,6 +74,9 @@ void save(Settings& s) {
 }
 
 extern "C" void tb_settings_init(void) {
+    Settings& s = settings();
+    const char* aa = getenv("TB_FXAA");
+    s.antialiasing.store(aa && atoi(aa) != 0);
     const char* path = getenv("TB_SETTINGS_FILE");
     std::string fallback;
     if (!path) {
@@ -79,10 +86,10 @@ extern "C" void tb_settings_init(void) {
         path = fallback.c_str();
     }
     if (!*path) return;
-    Settings& s = settings();
     std::lock_guard<std::mutex> lock(s.mutex);
     s.path = path;
     load(s);
+    if (aa) s.antialiasing.store(atoi(aa) != 0);
     auto set = [](const char* key, const char* value) {
 #ifdef _WIN32
         _putenv_s(key, value);
@@ -126,5 +133,16 @@ extern "C" void tb_settings_note_window(int width, int height) {
     if (s.path.empty() || width < 320 || height < 180 || width > 16384 || height > 16384 || (s.width == width && s.height == height)) return;
     s.width = width;
     s.height = height;
+    save(s);
+}
+
+extern "C" int tb_settings_antialiasing(void) {
+    return settings().antialiasing.load(std::memory_order_relaxed);
+}
+
+extern "C" void tb_settings_note_antialiasing(int on) {
+    Settings& s = settings();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (s.antialiasing.exchange(on != 0) == (on != 0)) return;
     save(s);
 }

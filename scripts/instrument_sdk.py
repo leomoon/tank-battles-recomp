@@ -123,6 +123,28 @@ EDITS={
  ('                u32 m = (type == 0) ? method + i * 4 : method;\n                /* GCM_SET_USER_COMMAND',
   '                u32 m = (type == 0) ? method + i * 4 : method;\n                if (subch == 1 && s1_2d) { gcm_2d_method(subch, m, vm_read32(dea)); continue; }\n                /* GCM_SET_USER_COMMAND')],
  'libs/video/rsx_vulkan_backend.c':[
+ ('static void vk_present_window(void)',
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_fxaa.inc')+'"\nstatic void vk_present_window(void)'),
+ ('    pvkCmdBlitImage(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,',
+  '    const VkImage window_source = tb_fxaa_window_source(cb);\n    pvkCmdBlitImage(cb, window_source, VK_IMAGE_LAYOUT_GENERAL,'),
+ ('VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) return -1;',
+  'VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) return -1;'),
+ ('X(vkCmdSetStencilReference) X(vkCmdSetDepthBounds)',
+  'X(vkCmdSetStencilReference) X(vkCmdSetDepthBounds) X(vkCmdSetDepthBias)'),
+ ('    float        depth_bounds[2];     /* min, max for the next draw */',
+  '    float        depth_bounds[2];     /* min, max for the next draw */\n    float        depth_bias, depth_slope;'),
+ ('static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)',
+  '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_depth_bias.inc')+'"\nstatic VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)'),
+ ('        .lineWidth = 1.0f };\n    VkPipelineMultisampleStateCreateInfo ms = {\n        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,\n        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT };\n    VkStencilOpState front',
+  '        .depthBiasEnable = VK_TRUE,\n        .lineWidth = 1.0f };\n    VkPipelineMultisampleStateCreateInfo ms = {\n        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,\n        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT };\n    VkStencilOpState front'),
+ ('    VkDynamicState dyn[4] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,\n                              VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_DEPTH_BOUNDS };',
+  '    VkDynamicState dyn[5] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,\n                              VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_DEPTH_BIAS,\n                              VK_DYNAMIC_STATE_DEPTH_BOUNDS };'),
+ ('        .dynamicStateCount = s_vk.depth_bounds_ok ? 4u : 3u, .pDynamicStates = dyn };',
+  '        .dynamicStateCount = s_vk.depth_bounds_ok ? 5u : 4u, .pDynamicStates = dyn };'),
+ ('    pvkCmdSetStencilReference(s_vk.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, s_e2.stencil_ref & 0xFFu);',
+  '    pvkCmdSetStencilReference(s_vk.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, s_e2.stencil_ref & 0xFFu);\n    pvkCmdSetDepthBias(s_vk.cmd, s_e2.depth_bias, 0.0f, s_e2.depth_slope);'),
+ ('    .set_depth_bounds     = vk_eng_set_depth_bounds,',
+  '    .set_depth_bounds     = vk_eng_set_depth_bounds,\n    .set_depth_bias       = tb_vk_set_depth_bias,'),
  ('X(vkCreateGraphicsPipelines) X(vkDestroyPipeline)', 'X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline)'),
  ('static void vk_eng_shutdown(void* user)\n{', 'static void tb_depth16_shutdown(void);\nstatic void vk_eng_shutdown(void* user)\n{\n    tb_depth16_shutdown();'),
  ('/* ---- E2: pipelines and draws', '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_depth16.inc')+'"\n/* ---- E2: pipelines and draws'),
@@ -150,12 +172,12 @@ EDITS={
  ('    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;\n    b.dstAccessMask = 0;',
   '    tb_fps_window_overlay(cb,s_vk.sc_images[idx]);\n    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;\n    b.dstAccessMask = 0;'),
  ('        vk_destroy_buffer(&s_vk.readback);',
-  '        vk_destroy_buffer(&tb_fps_buffer);\n        vk_destroy_buffer(&s_vk.readback);'),
+  '        tb_fxaa_shutdown();\n        vk_destroy_buffer(&tb_fps_buffer);\n        vk_destroy_buffer(&s_vk.readback);'),
  ('    s_vk.presented++;', '    s_vk.presented++;\n    tb_frame_history(px,s_vk.width,s_vk.height,s_vk.presented);'),
  ('    vk_eng_pipe* P = &s_epipe[s_e2.pipeline - 1];\n    if (!P->used || stride != P->stride) return;',
   '    vk_eng_pipe* P = &s_epipe[s_e2.pipeline - 1];\n    if (!P->used || stride != P->stride) return;\n    { static unsigned n; static const char* dir=(const char*)-1; if (dir == (const char*)-1) dir=getenv("TB_RSX_TEXTURE_CAPTURE"); static int ready; if (dir && s_e2.tex[0] && s_eobj[s_e2.tex[0]].w == 1920 && s_eobj[s_e2.tex[0]].h == 1080) ready=1; if (dir && ready && n < 96) { char path[4096]; snprintf(path,sizeof(path),"%s/draw-%03u.bin",dir,n); FILE* f=fopen(path,"wb"); if(f){fwrite(vertices,stride,vertex_count,f);fclose(f);} snprintf(path,sizeof(path),"%s/draws.txt",dir); f=fopen(path,"a"); if(f){ fprintf(f,"%u pipe=%u vertices=%u stride=%u index=%u texture=%u mask=%x viewport=%f,%f,%f,%f scissor=%u,%u,%u,%u\\n",n,s_e2.pipeline,vertex_count,stride,index_count,s_e2.tex[0],s_e2.tex_mask,s_e2.vp[0],s_e2.vp[1],s_e2.vp[2],s_e2.vp[3],s_e2.sc[0],s_e2.sc[1],s_e2.sc[2],s_e2.sc[3]);fclose(f);} ++n; } }'),
  ('int rsx_vulkan_backend_pump_messages(void)\n{', 'int rsx_vulkan_backend_pump_messages(void)\n{\n    tb_vulkan_event(7,0,0,0);'),
- ('    while (SDL_PollEvent(&e)) {', '    while (SDL_PollEvent(&e)) {\n        if (e.type == SDL_KEYDOWN && !e.key.repeat && e.key.keysym.sym==SDLK_F3) tb_fps_toggle();\n        if (e.type == SDL_KEYDOWN && !e.key.repeat) tb_keyboard_down((uint32_t)e.key.keysym.scancode);\n        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) (void)tb_keyboard_take();\n        if (e.type == SDL_WINDOWEVENT) tb_vulkan_event(8,e.window.event,e.window.windowID,0);'),
+ ('    while (SDL_PollEvent(&e)) {', '    while (SDL_PollEvent(&e)) {\n        if (e.type == SDL_KEYDOWN && !e.key.repeat && e.key.keysym.sym==SDLK_F3) tb_fps_toggle();\n        if (e.type == SDL_KEYDOWN && !e.key.repeat && e.key.keysym.sym==SDLK_F4 && !(e.key.keysym.mod & (KMOD_ALT | KMOD_CTRL | KMOD_GUI))) {\n            const int enabled = !tb_settings_antialiasing();\n            tb_settings_note_antialiasing(enabled);\n            VK_LOG("antialiasing %s (F4)\\n", enabled ? "FXAA" : "off");\n        }\n        if (e.type == SDL_KEYDOWN && !e.key.repeat) tb_keyboard_down((uint32_t)e.key.keysym.scancode);\n        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) (void)tb_keyboard_take();\n        if (e.type == SDL_WINDOWEVENT) tb_vulkan_event(8,e.window.event,e.window.windowID,0);'),
  ('    return pvkCreateShaderModule(s_vk.device, &ci, NULL, out) == VK_SUCCESS ? 0 : -1;',
   '    int result = pvkCreateShaderModule(s_vk.device, &ci, NULL, out) == VK_SUCCESS ? 0 : -1;\n    if (!result) tb_vulkan_event(1,stage,words,0);\n    return result;'),
  ('    return P->variant[topo_idx];', '    if (P->variant[topo_idx]) tb_vulkan_event(4,topo_idx,P->stride,P->rt_count);\n    return P->variant[topo_idx];'),
@@ -374,13 +396,13 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_depth_bias.inc','vulkan_fxaa.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}
   if relative=='libs/video/rsx_vulkan_backend.c':
    record['port_inputs']['player_settings_hooks.inc']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/player_settings_hooks.inc').read_bytes()).hexdigest()
-   for name in ('depth16.comp','depth16_spirv.inc','nv3089_gather.comp','nv3089_gather_spirv.inc','nv3089_gather_image.comp','nv3089_gather_image_spirv.inc'):
+   for name in ('fxaa.comp','fxaa_spirv.inc','depth16.comp','depth16_spirv.inc','nv3089_gather.comp','nv3089_gather_spirv.inc','nv3089_gather_image.comp','nv3089_gather_image_spirv.inc'):
     record['port_inputs']['shaders/'+name]=hashlib.sha256((Path(__file__).resolve().parent.parent/'shaders'/name).read_bytes()).hexdigest()
   if relative in ('libs/video/rsx_vulkan_backend.c','libs/video/rsx_draw_engine.c','libs/video/cellGcmSys.c'):
    record.setdefault('port_inputs',{})['depth_cost_trace.h']=hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h').read_bytes()).hexdigest()

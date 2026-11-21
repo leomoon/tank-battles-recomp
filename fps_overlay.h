@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdint>
+#include <span>
+#include <string>
 
 // Guest flips and host refreshes are deliberately independent counters.
 struct FpsSample {
@@ -20,7 +22,11 @@ struct FpsSample {
 };
 
 // A small native selection panel shares the window-only overlay surface.
-void tb_panel_show(const char* title, const char* choice, const char* action);
+enum class InvitePicker { friends, invitations };
+void tb_panel_show(InvitePicker kind, std::span<const std::string> choices, size_t selected);
 void tb_panel_close();
-bool tb_panel_input(uint32_t buttons);
+enum class PanelPadInput { passthrough, captured, back };
+PanelPadInput tb_panel_input(uint32_t buttons);
 uint32_t tb_panel_take_input();
+void tb_show_invite_toast(const char* sender);
+void tb_clear_invite_toast();

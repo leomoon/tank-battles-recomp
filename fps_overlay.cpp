@@ -1,20 +1,33 @@
 #include "execution_policy_api.h"
 #include "fps_overlay.h"
 #include "player_settings.h"
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <array>
 
 namespace {
+using Clock=std::chrono::steady_clock;
 std::atomic<uint64_t> flips{0},presents{0};
-std::mutex panel_mutex;
-std::array<std::array<char,32>,3> panel_lines{};
+std::mutex overlay_mutex;
+constexpr unsigned visible_choices=5;
+struct Picker {
+    InvitePicker kind=InvitePicker::friends;
+    std::array<std::array<char,17>,visible_choices> choices{};
+    unsigned count=0;
+    unsigned selected=0;
+    bool multiple=false;
+};
+Picker picker;
 bool panel_active=false;
 uint32_t panel_previous=0,panel_pressed=0;
+bool panel_waits_for_release=false;
+std::array<char,17> invite_sender{};
+Clock::time_point invite_until{};
 std::atomic<bool>& enabled() {
     static std::atomic<bool> value{[] {const char* e=std::getenv("TB_FPS_OVERLAY");return e && std::atoi(e)!=0;}()};
     return value;
@@ -47,64 +60,192 @@ const unsigned char* glyph(char ch) {
     found=std::strchr(extra,ch);
     return found && ch ? extra_rows[found-extra] : blank;
 }
+
+struct Color { unsigned char red,green,blue; };
+constexpr Color card{18,29,43}, border{78,101,121}, selected_row{39,59,78};
+constexpr Color accent{255,199,102}, white{245,249,255}, muted{178,198,216};
+
+struct Canvas {
+    uint32_t* pixels;
+    unsigned width;
+    bool bgra;
+
+    void fill(unsigned x,unsigned y,unsigned w,unsigned h,Color color) const {
+        const uint32_t first=bgra?color.blue:color.red;
+        const uint32_t third=bgra?color.red:color.blue;
+        const uint32_t pixel=0xff000000u|(third<<16)|(uint32_t(color.green)<<8)|first;
+        for (unsigned row=y;row<y+h;++row)
+            std::fill_n(pixels+size_t(row)*width+x,w,pixel);
+    }
+
+    void text(unsigned x,unsigned y,const char* line,unsigned scale,Color color) const {
+        for (;*line && x+5*scale<=width;++line,x+=6*scale) {
+            const auto* rows=glyph(*line);
+            for (unsigned row=0;row<7;++row)
+                for (unsigned column=0;column<5;++column)
+                    if (rows[row]&(16u>>column))
+                        fill(x+column*scale,y+row*scale,scale,scale,color);
+        }
+    }
+};
+
+void draw_picker(const Canvas& canvas,unsigned height,unsigned scale,const Picker& view) {
+    const unsigned inset=10*scale;
+    const unsigned heading_scale=scale+scale/2;
+    const bool inviting=view.kind==InvitePicker::friends;
+    canvas.fill(0,0,canvas.width,height,border);
+    canvas.fill(1,1,canvas.width-2,height-2,card);
+    canvas.fill(0,0,canvas.width,2*scale,accent);
+    canvas.text(inset,9*scale,inviting?"INVITE FRIENDS":"ACCEPT INVITATION",heading_scale,white);
+    canvas.fill(inset,23*scale,canvas.width-2*inset,scale,border);
+
+    const unsigned rows=std::max(1u,view.count);
+    for (unsigned row=0;row<rows;++row) {
+        const unsigned y=(28+row*14)*scale;
+        const bool highlighted=view.count && row==view.selected;
+        if (highlighted) {
+            canvas.fill(inset,y,canvas.width-2*inset,13*scale,selected_row);
+            canvas.fill(inset,y,2*scale,13*scale,accent);
+        }
+        const auto* label=inviting?"NO ONLINE FRIENDS":"NO INVITATIONS";
+        if (view.count) label=view.choices[row].data();
+        canvas.text(17*scale,y+3*scale,label,scale,highlighted?white:muted);
+    }
+
+    const unsigned footer=(30+rows*14)*scale;
+    if (view.multiple)
+        canvas.text(inset,footer,"D-PAD OR ARROWS TO CHOOSE",scale,muted);
+    canvas.text(inset,footer+11*scale,view.count?"PLAYSTATION  X ACCEPT  O BACK":"PLAYSTATION  O BACK",scale,white);
+    canvas.text(inset,footer+22*scale,view.count?"KEYBOARD     Z ACCEPT  X BACK":"KEYBOARD     X BACK",scale,muted);
 }
 
-void tb_panel_show(const char* title,const char* choice,const char* action) {
-    std::lock_guard guard(panel_mutex);
-    const char* lines[]={title,choice,action};
-    for (unsigned i=0;i<3;++i) std::snprintf(panel_lines[i].data(),32,"%s",lines[i]);
+void draw_toast(const Canvas& canvas,unsigned height,unsigned scale,const char* sender,double remaining) {
+    canvas.fill(0,0,canvas.width,height,border);
+    canvas.fill(1,1,canvas.width-2,height-2,card);
+    canvas.fill(0,0,3*scale,height,accent);
+    canvas.text(12*scale,9*scale,sender,scale+scale/2,white);
+    canvas.text(12*scale,28*scale,"INVITED YOU",scale,muted);
+    const auto remaining_width=static_cast<unsigned>((canvas.width-4*scale)*remaining);
+    canvas.fill(3*scale,height-2*scale,remaining_width,scale,accent);
+}
+}
+
+void tb_panel_show(InvitePicker kind,std::span<const std::string> choices,size_t selected) {
+    std::lock_guard guard(overlay_mutex);
+    picker.kind=kind;
+    selected=choices.empty()?0:std::min(selected,choices.size()-1);
+    const auto first=selected/visible_choices*visible_choices;
+    picker.count=static_cast<unsigned>(std::min<size_t>(choices.size()-first,visible_choices));
+    picker.selected=static_cast<unsigned>(selected-first);
+    picker.multiple=choices.size()>1;
+    for (unsigned row=0;row<picker.count;++row)
+        std::snprintf(picker.choices[row].data(),picker.choices[row].size(),"%s",choices[first+row].c_str());
     if (!panel_active) { panel_pressed=0;panel_previous=UINT32_MAX; }
     panel_active=true;
 }
 void tb_panel_close() {
-    std::lock_guard guard(panel_mutex);
+    std::lock_guard guard(overlay_mutex);
+    if (panel_active) panel_waits_for_release=panel_previous!=0;
     panel_active=false; panel_pressed=panel_previous=0;
 }
-bool tb_panel_input(uint32_t buttons) {
-    std::lock_guard guard(panel_mutex);
-    if (!panel_active) return false;
-    panel_pressed|=buttons&~panel_previous; panel_previous=buttons;
-    return true;
+PanelPadInput tb_panel_input(uint32_t buttons) {
+    std::lock_guard guard(overlay_mutex);
+    if (!panel_active) {
+        if (!buttons) panel_waits_for_release=false;
+        return panel_waits_for_release?PanelPadInput::captured:PanelPadInput::passthrough;
+    }
+    const uint32_t pressed=buttons&~panel_previous;
+    panel_pressed|=pressed;
+    panel_previous=buttons;
+    // The title has its own Back handler for the invite screen. Give it the
+    // same press that dismisses an empty picker, then suppress the held input.
+    if (picker.kind==InvitePicker::invitations && !picker.count && (pressed&0x2000))
+        return PanelPadInput::back;
+    return PanelPadInput::captured;
 }
 uint32_t tb_panel_take_input() {
-    std::lock_guard guard(panel_mutex);
+    std::lock_guard guard(overlay_mutex);
     const auto buttons=panel_pressed; panel_pressed=0; return buttons;
+}
+void tb_show_invite_toast(const char* sender) {
+    std::lock_guard guard(overlay_mutex);
+    std::snprintf(invite_sender.data(),invite_sender.size(),"%s",sender);
+    invite_until=Clock::now()+std::chrono::seconds(4);
+}
+void tb_clear_invite_toast() {
+    std::lock_guard guard(overlay_mutex);
+    invite_sender={};
 }
 
 extern "C" void tb_fps_guest_flip() {flips.fetch_add(1,std::memory_order_relaxed);tb_gameplay_event(0,0);}
 extern "C" uint64_t tb_fps_guest_serial() {return flips.load(std::memory_order_relaxed);}
 extern "C" void tb_fps_present() {presents.fetch_add(1,std::memory_order_relaxed);}
 extern "C" void tb_fps_toggle() {auto& e=enabled();const bool on=!e.load(std::memory_order_relaxed);e.store(on,std::memory_order_relaxed);tb_settings_note_overlay(on);}
-extern "C" int tb_fps_overlay(void* pixels,uint32_t width,uint32_t height,uint32_t pitch,uint32_t scale)
+extern "C" int tb_draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_overlay_region* region)
 {
-    std::array<std::array<char,32>,3> panel;
-    bool show_panel;
-    { std::lock_guard guard(panel_mutex); show_panel=panel_active; panel=panel_lines; }
-    if (!show_panel && !enabled().load(std::memory_order_relaxed)) return 0;
-    if (!pixels || !scale || scale>3 || width<144*scale || height<32*scale || uint64_t(pitch)<uint64_t(width)*4) return 0;
-    static FpsSample sample;
-    const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    sample.update(ns,flips.load(std::memory_order_relaxed),presents.load(std::memory_order_relaxed));
-    char lines[3][32]={"GAME -- FPS","PRESENT -- FPS","FRAME -- MS"};
-    if (show_panel) {
-        for (unsigned i=0;i<3;++i) std::snprintf(lines[i],sizeof lines[i],"%s",panel[i].data());
-    } else if (sample.ready) {
-        std::snprintf(lines[0],sizeof lines[0],"GAME %.1f FPS",sample.game_fps);
-        std::snprintf(lines[1],sizeof lines[1],"PRESENT %.1f FPS",sample.present_fps);
-        if (sample.game_fps>0) std::snprintf(lines[2],sizeof lines[2],"FRAME %.1f MS",sample.frame_ms);
+    if (!pixels || !region) return 0;
+
+    enum class Mode { fps, picker, invitation };
+    Mode mode=Mode::fps;
+    Picker picker_view;
+    std::array<char,17> sender{};
+    double remaining=0;
+    {
+        std::lock_guard guard(overlay_mutex);
+        if (panel_active) {
+            mode=Mode::picker;
+            picker_view=picker;
+        } else if (invite_sender[0]) {
+            const auto now=Clock::now();
+            if (now<invite_until) {
+                mode=Mode::invitation;
+                sender=invite_sender;
+                remaining=std::chrono::duration<double>(invite_until-now).count()/4;
+            } else invite_sender={};
+        }
     }
-    auto* bytes=static_cast<unsigned char*>(pixels);
-    for (uint32_t y=0;y<height;y++) for (uint32_t x=0;x<width;x++) {
-        auto* p=bytes+size_t(y)*pitch+x*4;p[0]=p[1]=p[2]=16;p[3]=255;
+    if (mode==Mode::fps && !enabled().load(std::memory_order_relaxed)) return 0;
+
+    unsigned card_width, card_height, margin;
+    switch (mode) {
+    case Mode::picker:
+        card_width=224; card_height=64+std::max(1u,picker_view.count)*14; margin=0;
+        break;
+    case Mode::invitation:
+        card_width=184; card_height=43; margin=10;
+        break;
+    case Mode::fps:
+        card_width=144; card_height=32; margin=8;
+        break;
     }
-    for (unsigned line=0;line<3;line++) for (unsigned ch=0;lines[line][ch];ch++) {
-        const auto* g=glyph(lines[line][ch]);
-        for (unsigned y=0;y<7;y++) for (unsigned x=0;x<5;x++) if (g[y]&(16>>x))
-            for (unsigned sy=0;sy<scale;sy++) for (unsigned sx=0;sx<scale;sx++) {
-                const unsigned px=(3+ch*6+x)*scale+sx,py=(3+line*10+y)*scale+sy;
-                if (px>=width || py>=height) continue;
-                auto* p=bytes+size_t(py)*pitch+px*4;p[0]=p[1]=p[2]=240;p[3]=255;
-            }
+    const bool centered=mode==Mode::picker;
+    const unsigned max_scale=mode==Mode::fps
+        ? (height>=1400?3u:2u)
+        : std::clamp((height+180)/360,2u,TB_OVERLAY_MAX_SCALE);
+    const unsigned scale=std::min({max_scale,width/(card_width+2*margin),height/(card_height+2*margin)});
+    if (!scale) return 0;
+
+    const unsigned draw_width=card_width*scale, draw_height=card_height*scale;
+    const unsigned offset=mode==Mode::fps?margin:margin*scale;
+    *region={centered?(width-draw_width)/2:offset,centered?(height-draw_height)/2:offset,draw_width,draw_height};
+    const Canvas canvas{static_cast<uint32_t*>(pixels),draw_width,bgra!=0};
+    if (mode==Mode::picker) {
+        draw_picker(canvas,draw_height,scale,picker_view);
+    } else if (mode==Mode::invitation) {
+        draw_toast(canvas,draw_height,scale,sender.data(),remaining);
+    } else {
+        static FpsSample sample;
+        const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+        sample.update(ns,flips.load(std::memory_order_relaxed),presents.load(std::memory_order_relaxed));
+        char lines[3][32]={"GAME -- FPS","PRESENT -- FPS","FRAME -- MS"};
+        if (sample.ready) {
+            std::snprintf(lines[0],32,"GAME %.1f FPS",sample.game_fps);
+            std::snprintf(lines[1],32,"PRESENT %.1f FPS",sample.present_fps);
+            if (sample.game_fps>0) std::snprintf(lines[2],32,"FRAME %.1f MS",sample.frame_ms);
+        }
+        canvas.fill(0,0,draw_width,draw_height,{16,16,16});
+        for (unsigned line=0;line<3;++line)
+            canvas.text(3*scale,(3+line*10)*scale,lines[line],scale,{240,240,240});
     }
     return 1;
 }

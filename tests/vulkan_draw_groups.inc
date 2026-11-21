@@ -24,6 +24,146 @@ static void draw_color(float r,float g,float b,int left)
     vk_eng_set_scissor(NULL,left,0,8,16);
     vk_eng_draw(NULL,RSX_TOPOLOGY_TRIANGLES,vertices,3,16,indices,3);
 }
+
+static void check_polygon_offset(void)
+{
+    const rsx_vertex_layout_plan layout = { .count = 1, .stride = 16 };
+    const rsx_be_render_state state = {
+        .color_mask = 0xffffffff, .depth_test = 1, .depth_write = 1,
+        .depth_func = 0x201 /* LESS */
+    };
+    const u32 pipeline = vk_eng_pipeline_create(NULL, tb_test_vs, tb_test_ps,
+        &state, &layout, 16, RSX_BE_FMT_R8G8B8A8, 1);
+    const u32 color = vk_eng_color_target_create(NULL, RSX_BE_FMT_R8G8B8A8,
+        16, 16, NULL, 0);
+    const u32 depth = vk_eng_depth_target_create(NULL, 16, 16);
+    assert(pipeline && color && depth);
+    assert(s_vk_engine_backend.set_depth_bias == tb_vk_set_depth_bias);
+    vk_eng_bind_pipeline(NULL, pipeline);
+    vk_eng_bind_targets(NULL, &color, 1, depth);
+
+    const struct {
+        float units, z;
+        u32 bits;
+        int expected_green;
+    } cases[] = {
+        { 0, .5f, 24, 0 },
+        { -4, .5f, 24, 1 },
+        { 4, .5f, 24, 0 },
+        { -2, .50001f, 16, 1 },
+        { -2, .50001f, 24, 0 },
+        { 0, .5f, 16, 0 }
+    };
+    for (u32 i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+        vk_eng_clear_depth_stencil(NULL, depth, 1, 1.0f, 0);
+        tb_vk_set_depth_bias(NULL, 0, 0, 24);
+        draw_color(1, 0, 0, 0);
+
+        const float shift[4] = { 0, 0, cases[i].z - .5f, 0 };
+        const float green[4] = { 0, 1, 0, 1 };
+        const float vertices[3][4] = {
+            { -1, -1, .5f, 1 }, { 3, -1, .5f, 1 }, { -1, 3, .5f, 1 }
+        };
+        tb_vk_set_depth_bias(NULL, 0, cases[i].units, cases[i].bits);
+        vk_eng_bind_vs_constants(NULL, shift, sizeof shift);
+        vk_eng_bind_ps_constants(NULL, green, sizeof green);
+        vk_eng_draw(NULL, RSX_TOPOLOGY_TRIANGLES, vertices, 3, 16, NULL, 0);
+        pixel(color, 2, 8, cases[i].expected_green ? 0 : 255,
+            cases[i].expected_green ? 255 : 0, 0);
+    }
+
+    /* The slope term must also survive state changes within one draw group. */
+    const float vertices[3][4] = {
+        { -1, -1, .4f, 1 }, { 3, -1, .8f, 1 }, { -1, 3, .4f, 1 }
+    };
+    const float shift[4] = { 0, 0, 0, 0 };
+    const float red[4] = { 1, 0, 0, 1 }, green[4] = { 0, 1, 0, 1 };
+    vk_eng_clear_depth_stencil(NULL, depth, 1, 1.0f, 0);
+    tb_vk_set_depth_bias(NULL, 0, 0, 24);
+    vk_eng_bind_vs_constants(NULL, shift, sizeof shift);
+    vk_eng_bind_ps_constants(NULL, red, sizeof red);
+    vk_eng_draw(NULL, RSX_TOPOLOGY_TRIANGLES, vertices, 3, 16, NULL, 0);
+    tb_vk_set_depth_bias(NULL, -1, 0, 24);
+    vk_eng_bind_ps_constants(NULL, green, sizeof green);
+    vk_eng_draw(NULL, RSX_TOPOLOGY_TRIANGLES, vertices, 3, 16, NULL, 0);
+    pixel(color, 2, 8, 0, 255, 0);
+
+    tb_vk_set_depth_bias(NULL, 0, 0, 24);
+    vk_eng_bind_ps_constants(NULL, red, sizeof red);
+    vk_eng_draw(NULL, RSX_TOPOLOGY_TRIANGLES, vertices, 3, 16, NULL, 0);
+    pixel(color, 2, 8, 0, 255, 0);
+    vk_eng_bind_targets(NULL, NULL, 0, 0);
+    vk_eng_color_target_release(NULL, color);
+    vk_eng_depth_target_release(NULL, depth);
+    vk_eng_pipeline_release(NULL, pipeline);
+}
+
+static void check_fxaa(void)
+{
+    const u32 pixels = s_vk.width * s_vk.height;
+    const size_t bytes = pixels * 4;
+    vk_buffer upload = {0}, readback = {0};
+    assert(!vk_create_host_buffer(&upload, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT));
+    assert(!vk_create_host_buffer(&readback, bytes * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+    assert(upload.coherent);
+    u8* pattern = upload.ptr;
+    for (u32 y = 0; y < s_vk.height; ++y) {
+        for (u32 x = 0; x < s_vk.width; ++x) {
+            const size_t offset = (y * s_vk.width + x) * 4;
+            memset(pattern + offset, x > y ? 255 : 0, 3);
+            pattern[offset + 3] = 81;
+        }
+    }
+    assert(!vk_begin());
+    vk_barrier_image(s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    VkBufferImageCopy region = {
+        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageExtent = { s_vk.width, s_vk.height, 1 }
+    };
+    pvkCmdCopyBufferToImage(s_vk.cmd, upload.buf, s_vk.color.img,
+        VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    assert(tb_fxaa_window_source(s_vk.cmd) == s_vk.color.img);
+    assert(!tb_fxaa.state); /* Off allocates no FXAA resources. */
+    setenv("TB_FXAA", "1", 1);
+    tb_settings_note_antialiasing(1);
+    const VkImage filtered = tb_fxaa_window_source(s_vk.cmd);
+    assert(filtered && filtered != s_vk.color.img);
+    pvkCmdCopyImageToBuffer(s_vk.cmd, filtered, VK_IMAGE_LAYOUT_GENERAL,
+        readback.buf, 1, &region);
+    region.bufferOffset = bytes;
+    pvkCmdCopyImageToBuffer(s_vk.cmd, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
+        readback.buf, 1, &region);
+    const VkBufferMemoryBarrier host = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = readback.buf, .size = VK_WHOLE_SIZE
+    };
+    pvkCmdPipelineBarrier(s_vk.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &host, 0, NULL);
+    assert(!vk_submit_and_wait());
+    vk_invalidate(&readback);
+    const u8* result = readback.ptr;
+    assert(!memcmp(result + bytes, pattern, bytes));
+    u32 smoothed = 0;
+    for (u32 i = 0; i < pixels; ++i) {
+        smoothed += result[i * 4] > 0 && result[i * 4] < 255;
+        assert(result[i * 4 + 3] == 81);
+    }
+    assert(smoothed > 0);
+    assert(result[(s_vk.width - 1) * 4] == 255);
+    assert(result[(pixels - s_vk.width) * 4] == 0);
+    unsetenv("TB_FXAA");
+    tb_settings_note_antialiasing(0);
+    assert(tb_fxaa_window_source(VK_NULL_HANDLE) == s_vk.color.img);
+    tb_fxaa_shutdown();
+    assert(!tb_fxaa.state && !tb_fxaa.output.img);
+    vk_destroy_buffer(&upload);
+    vk_destroy_buffer(&readback);
+    puts("PASS: optional FXAA smooths diagonal edges, preserves alpha and source bytes, and switches off cleanly");
+}
 int main(void)
 {
     setenv("VK_DRAW_BATCH","0",1);
@@ -115,6 +255,8 @@ int main(void)
     }
     draw_color(1,0,0,0);vk_eng_color_target_release(NULL,a);
     assert(!tb_group_open && !s_eb_pending);
+    check_polygon_offset();
+    check_fxaa();
     vk_eng_shutdown(NULL);vk_guest_shutdown();
     vk_destroy_image(&s_vk.color);vk_destroy_image(&s_vk.depth);
     vk_destroy_buffer(&s_vk.readback);

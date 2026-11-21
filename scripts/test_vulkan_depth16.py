@@ -30,9 +30,11 @@ endif()
 (out/'hooks.c').write_text('''#include "execution_policy_api.h"
 uint64_t tb_render_clock(unsigned k){return 0;} void tb_render_finish(unsigned k,uint64_t s){} void tb_render_frame(void){}
 __thread const char* tb_wait_label; uint32_t tb_frame_budget_site(const char* l){return 0;} int tb_frame_budget_on(void){return 0;} uint64_t tb_frame_budget_now(void){return 0;} void tb_frame_budget_span(unsigned k,uint32_t a,uint64_t t0,uint64_t t1){}
+void tb_frame_budget_count(uint32_t id,uint32_t amount){}
+void tb_frame_budget_mark(unsigned kind,uint32_t a,uint32_t b){}
 void tb_vulkan_event(unsigned k,uint32_t a,uint32_t b,uint32_t c){} void tb_frame_history(const void* p,uint32_t w,uint32_t h,uint32_t n){}
 void tb_fps_present(void){} uint64_t tb_fps_guest_serial(void){return 0;} void tb_gameplay_event(unsigned k,uint64_t n){}
-int tb_fps_overlay(void* p,uint32_t w,uint32_t h,uint32_t r,uint32_t s){return 0;} void tb_fps_toggle(void){}
+int tb_draw_overlay(void* p,uint32_t w,uint32_t h,int bgra,tb_overlay_region* region){return 0;} void tb_fps_toggle(void){}
 void tb_keyboard_down(uint32_t s){} uint32_t tb_keyboard_take(void){return 0;}
 ''')
 subprocess.run(['cmake','-S',str(out),'-B',str(out/'build'),'-G','Ninja'],check=True)
