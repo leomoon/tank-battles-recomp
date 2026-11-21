@@ -150,7 +150,7 @@ jobs:
             for path in $(which -a $tool 2>/dev/null); do sudo chmod 000 "$(readlink -f "$path")" || true; done
           done
       - name: Window opens
-        run: xvfb-run -a sh -c 'env -i HOME="$HOME" PATH=/usr/bin:/bin DISPLAY="$DISPLAY" "$RUNNER_TEMP/down load ü/squashfs-root/AppRun" --self-test'
+        run: xvfb-run -a sh -c 'env -i HOME="$HOME" PATH=/usr/bin:/bin DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" "$RUNNER_TEMP/down load ü/squashfs-root/AppRun" --self-test'
       - name: Build and start a synthetic player offline with only the builder's tools
         run: |
           B="$RUNNER_TEMP/down load ü/squashfs-root"

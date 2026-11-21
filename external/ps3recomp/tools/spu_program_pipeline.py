@@ -244,7 +244,7 @@ def build_programs(args, registry_writer):
             sources = [destination / name / 'spu_recomp.c' for name, _, _, _ in imgs] + [registry]
             # Bracket arguments preserve spaces and avoid expansion of $ in paths.
             cmake = 'set(SPU_GENERATED_SOURCES\n' + ''.join(f'  [==[{p.as_posix()}]==]\n' for p in sources) + ')\n'
-            (stage / 'sources.cmake').write_text(cmake)
+            (stage / 'sources.cmake').write_text(cmake, encoding='utf-8')
         if not usable:
             for program in report['programs']:
                 if program['status'] == 'registered':

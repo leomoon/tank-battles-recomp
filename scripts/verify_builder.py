@@ -74,6 +74,8 @@ def build(work: Path, elf: Path, output: Path) -> Path:
     events = [line for line in stream.getvalue().splitlines() if '"stage"' in line or '"result"' in line]
     print("\n".join(events))
     if status:
+        log_tail = reporter.log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
+        print("\n".join(log_tail), file=sys.stderr)
         raise SystemExit(f"Packaged synthetic build failed (status {status}); see {reporter.log_path}")
     return output / player_folder.launcher_name()
 
