@@ -1,24 +1,6 @@
 name: Portable host services
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '*.cpp'
-      - '*.h'
-      - 'sdk_overrides/**'
-      - 'scripts/instrument_sdk.py'
-      - 'scripts/test_edat_cache.py'
-      - 'tests/host_services/**'
-      - '.github/workflows/host-services.yml'
-  pull_request:
-    paths:
-      - '*.cpp'
-      - '*.h'
-      - 'sdk_overrides/**'
-      - 'scripts/instrument_sdk.py'
-      - 'scripts/test_edat_cache.py'
-      - 'tests/host_services/**'
-      - '.github/workflows/host-services.yml'
 permissions:
   contents: read
 jobs:

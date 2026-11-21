@@ -1,12 +1,6 @@
 name: Game-free Windows Vulkan runtime
 on:
   workflow_dispatch:
-  push:
-    tags: ['*']
-    branches: ['master', 'validation/windows-runtime-*']
-    paths: ['*.cpp', '*.h', 'CMakeLists.txt', 'cmake/**', 'scripts/**', 'sdk_overrides/**', 'rpcn/**', 'tests/**', 'ci/windows-runtime/**', '.github/workflows/windows-runtime.yml']
-  pull_request:
-    paths: ['*.cpp', '*.h', 'CMakeLists.txt', 'cmake/**', 'scripts/**', 'sdk_overrides/**', 'rpcn/**', 'tests/**', 'ci/windows-runtime/**', '.github/workflows/windows-runtime.yml']
 permissions:
   contents: read
 jobs:

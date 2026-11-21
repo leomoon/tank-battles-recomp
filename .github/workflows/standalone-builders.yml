@@ -7,63 +7,82 @@ on:
   workflow_dispatch:
   push:
     tags: ['*']
-    # Test candidates before they reach master; dispatch needs the default branch.
-    branches: ['validation/standalone-builders-*']
 permissions:
   contents: read
 env:
   TB_CACHE: ${{ github.workspace }}/../tb-cache
 jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Builder and packaging contracts
+        run: |
+          python3 -m unittest discover -s scripts -p test_toolchain.py
+          python3 -m unittest discover -s scripts -p test_package_builder.py
+          python3 -m unittest discover -s scripts -p test_audit_builder.py
+
   build:
+    name: Build ${{ matrix.target }} builder
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
-      - name: Build-machine headers for SDL2 (never shipped)
+      - name: Build-machine dependencies (never shipped)
         run: |
           sudo apt-get update
-          sudo apt-get install -y perl make squashfs-tools libx11-dev libxext-dev libxrandr-dev libxi-dev \
-            libxcursor-dev libxinerama-dev libxss-dev libxfixes-dev libxrender-dev libpulse-dev libasound2-dev libudev-dev
+          sudo apt-get install -y perl make
+          if [ '${{ matrix.target }}' = linux ]; then
+            sudo apt-get install -y squashfs-tools libx11-dev libxext-dev libxrandr-dev libxi-dev \
+              libxcursor-dev libxinerama-dev libxss-dev libxfixes-dev libxrender-dev libpulse-dev libasound2-dev libudev-dev
+          fi
       - uses: actions/cache@v6.1.0
         with:
           path: ${{ env.TB_CACHE }}
-          key: tb-toolchain-${{ hashFiles('ci/toolchain/manifest.json') }}
+          key: tb-toolchain-${{ matrix.target }}-${{ hashFiles('ci/toolchain/manifest.json') }}
       - name: Fetch pinned downloads (SHA-256 verified)
         run: |
           python3 scripts/toolchain.py fetch --host linux --cache "$TB_CACHE" --sources
-          python3 scripts/toolchain.py fetch --host windows --cache "$TB_CACHE"
-      - name: Stage both toolchains
+          if [ '${{ matrix.target }}' = windows ]; then
+            python3 scripts/toolchain.py fetch --host windows --cache "$TB_CACHE"
+          fi
+      - name: Stage the pinned toolchain
         run: |
           python3 scripts/toolchain.py stage --host linux --cache "$TB_CACHE" --dest "$RUNNER_TEMP/tc-linux"
-          python3 scripts/toolchain.py stage --host windows --cache "$TB_CACHE" --dest "$RUNNER_TEMP/tc-windows"
-          python3 -m unittest discover -s scripts -p test_toolchain.py
+          if [ '${{ matrix.target }}' = windows ]; then
+            python3 scripts/toolchain.py stage --host windows --cache "$TB_CACHE" --dest "$RUNNER_TEMP/tc-windows"
+          fi
       - name: Build runtime dependencies with Zig
         run: |
-          for target in linux windows; do
-            python3 scripts/build_runtime_deps.py --toolchain "$RUNNER_TEMP/tc-linux" --cache "$TB_CACHE" \
-              --target $target --prefix "$RUNNER_TEMP/deps-$target"
-          done
-      - name: Build, test and pack both runtimes
+          python3 scripts/build_runtime_deps.py --toolchain "$RUNNER_TEMP/tc-linux" --cache "$TB_CACHE" \
+            --target '${{ matrix.target }}' --prefix "$RUNNER_TEMP/deps-${{ matrix.target }}"
+      - name: Build and pack the runtime
         run: |
           TC="$RUNNER_TEMP/tc-linux"
+          TARGET='${{ matrix.target }}'
           export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zig-cache" ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/zig-cache"
-          for target in linux windows; do
-            "$TC/cmake/bin/cmake" -S . -B build-zig/$target -G Ninja -DCMAKE_MAKE_PROGRAM="$TC/ninja" \
-              -DCMAKE_TOOLCHAIN_FILE="$TC/cmake/zig-$target.cmake" -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/deps-$target" -DCMAKE_FIND_ROOT_PATH="$RUNNER_TEMP/deps-$target" \
-              -DTB_BUILD_RUNTIME_BUNDLE=ON -DPS3RECOMP_RSX_VULKAN=ON -DPython3_EXECUTABLE="$TC/python/bin/python3"
-            "$TC/cmake/bin/cmake" --build build-zig/$target --parallel 4
-            "$TC/cmake/bin/cmake" --build build-zig/$target --target runtime_bundle
-          done
-          "$TC/cmake/bin/ctest" --test-dir build-zig/linux --output-on-failure
-      - name: Relocated consumers with only the staged tools
+          "$TC/cmake/bin/cmake" -S . -B build-zig/$TARGET -G Ninja -DCMAKE_MAKE_PROGRAM="$TC/ninja" \
+            -DCMAKE_TOOLCHAIN_FILE="$TC/cmake/zig-$TARGET.cmake" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/deps-$TARGET" -DCMAKE_FIND_ROOT_PATH="$RUNNER_TEMP/deps-$TARGET" \
+            -DTB_BUILD_RUNTIME_BUNDLE=ON -DPS3RECOMP_RSX_VULKAN=ON -DPython3_EXECUTABLE="$TC/python/bin/python3"
+          "$TC/cmake/bin/cmake" --build build-zig/$TARGET --parallel 4
+          "$TC/cmake/bin/cmake" --build build-zig/$TARGET --target runtime_bundle
+          if [ "$TARGET" = linux ]; then
+            "$TC/cmake/bin/ctest" --test-dir build-zig/linux --output-on-failure
+          fi
+      - name: Relocated consumer with only staged tools
         run: |
-          for target in linux windows; do
-            cp -a build-zig/$target/runtime-bundle "$RUNNER_TEMP/relocated $target bundle"
-            python3 scripts/verify_runtime_consumer.py --bundle "$RUNNER_TEMP/relocated $target bundle" \
-              --output "$RUNNER_TEMP/consumer $target" --source '${{ github.sha }}' --toolchain "$RUNNER_TEMP/tc-linux"
-          done
+          TARGET='${{ matrix.target }}'
+          cp -a build-zig/$TARGET/runtime-bundle "$RUNNER_TEMP/relocated $TARGET bundle"
+          python3 scripts/verify_runtime_consumer.py --bundle "$RUNNER_TEMP/relocated $TARGET bundle" \
+            --output "$RUNNER_TEMP/consumer $TARGET" --source '${{ github.sha }}' --toolchain "$RUNNER_TEMP/tc-linux"
       - name: Game-free contract suites
+        if: matrix.target == 'linux'
         env:
           TB_TEST_RUNTIME_BUNDLE: ${{ github.workspace }}/build-zig/linux/runtime-bundle
         run: |
@@ -71,30 +90,38 @@ jobs:
           cd scripts
           python3 -m unittest test_setup_pipeline test_setup_engine test_packaged_route test_player_folder \
             test_package_builder test_audit_builder
-      - name: Package both builders
+      - name: Package the builder
         run: |
           OUT="$RUNNER_TEMP/out"
-          RUNTIME=$(python3 -c "import json,sys;sys.path.insert(0,'scripts');import toolchain as t;m=t.load_manifest();print(t.cached('$TB_CACHE',m['packaging']['appimage_runtime']['sha256']))")
-          python3 scripts/package_builder.py resources --target linux --runtime-bundle build-zig/linux/runtime-bundle \
-            --toolchain "$RUNNER_TEMP/tc-linux" --cache "$TB_CACHE" --source '${{ github.sha }}' --output "$OUT/linux"
-          python3 scripts/package_builder.py appdir --resources "$OUT/linux" --output "$OUT/AppDir"
-          python3 scripts/package_builder.py appimage --appdir "$OUT/AppDir" --runtime "$RUNTIME" --output "$OUT/Builder.AppImage"
-          python3 scripts/package_builder.py resources --target windows --runtime-bundle build-zig/windows/runtime-bundle \
-            --toolchain "$RUNNER_TEMP/tc-windows" --cache "$TB_CACHE" --source '${{ github.sha }}' --output "$OUT/windows"
-          python3 scripts/package_builder.py stub --toolchain "$RUNNER_TEMP/tc-linux" --output "$OUT/BuilderStub.exe"
-          python3 scripts/package_builder.py exe --resources "$OUT/windows" --stub "$OUT/BuilderStub.exe" --output "$OUT/Builder.exe"
-      - name: Audit the complete payloads
+          TARGET='${{ matrix.target }}'
+          python3 scripts/package_builder.py resources --target "$TARGET" --runtime-bundle build-zig/$TARGET/runtime-bundle \
+            --toolchain "$RUNNER_TEMP/tc-$TARGET" --cache "$TB_CACHE" --source '${{ github.sha }}' --output "$OUT/$TARGET"
+          if [ "$TARGET" = linux ]; then
+            RUNTIME=$(python3 -c "import sys;sys.path.insert(0,'scripts');import toolchain as t;m=t.load_manifest();print(t.cached('$TB_CACHE',m['packaging']['appimage_runtime']['sha256']))")
+            python3 scripts/package_builder.py appdir --resources "$OUT/linux" --output "$OUT/AppDir"
+            python3 scripts/package_builder.py appimage --appdir "$OUT/AppDir" --runtime "$RUNTIME" --output "$OUT/Builder.AppImage"
+          else
+            python3 scripts/package_builder.py stub --toolchain "$RUNNER_TEMP/tc-linux" --output "$OUT/BuilderStub.exe"
+            python3 scripts/package_builder.py exe --resources "$OUT/windows" --stub "$OUT/BuilderStub.exe" --output "$OUT/Builder.exe"
+          fi
+      - name: Audit the complete payload
         run: |
           OUT="$RUNNER_TEMP/out"
-          (cd "$OUT" && ./Builder.AppImage --appimage-extract > /dev/null)
-          python3 scripts/audit_builder.py "$OUT/squashfs-root" --source '${{ github.sha }}' --json "$OUT/audit-linux.json"
-          python3 scripts/audit_builder.py "$OUT/Builder.exe" --source '${{ github.sha }}' --json "$OUT/audit-windows.json"
+          TARGET='${{ matrix.target }}'
+          if [ "$TARGET" = linux ]; then
+            (cd "$OUT" && ./Builder.AppImage --appimage-extract > /dev/null)
+            python3 scripts/audit_builder.py "$OUT/squashfs-root" --source '${{ github.sha }}' --json "$OUT/audit-linux.json"
+            ARTIFACT="$OUT/Builder.AppImage"
+          else
+            python3 scripts/audit_builder.py "$OUT/Builder.exe" --source '${{ github.sha }}' --json "$OUT/audit-windows.json"
+            ARTIFACT="$OUT/Builder.exe"
+          fi
           python3 scripts/package_builder.py provenance --source '${{ github.sha }}' --output "$OUT/release" \
-            --artifact "$OUT/Builder.AppImage" --resources "$OUT/linux" --artifact "$OUT/Builder.exe" --resources "$OUT/windows"
-          cp "$OUT/Builder.AppImage" "$OUT/Builder.exe" "$OUT"/audit-*.json "$OUT/release/"
+            --artifact "$ARTIFACT" --resources "$OUT/$TARGET"
+          cp "$ARTIFACT" "$OUT/audit-$TARGET.json" "$OUT/release/"
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: standalone-builders-${{ github.sha }}
+          name: standalone-builder-${{ matrix.target }}-${{ github.sha }}
           path: ${{ runner.temp }}/out/release/
           if-no-files-found: error
           retention-days: 14
@@ -106,7 +133,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8.0.2
         with:
-          name: standalone-builders-${{ github.sha }}
+          name: standalone-builder-linux-${{ github.sha }}
           path: download
       - name: Checksums and window prerequisites
         run: |
@@ -146,7 +173,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8.0.2
         with:
-          name: standalone-builders-${{ github.sha }}
+          name: standalone-builder-windows-${{ github.sha }}
           path: download
       - name: Checksum
         shell: pwsh
@@ -195,7 +222,6 @@ jobs:
         run: Remove-NetFirewallRule -DisplayName "tb-offline" -ErrorAction SilentlyContinue
 
   stage-release:
-    if: startsWith(github.ref, 'refs/tags/')
     needs: [linux-consumer, windows-consumer]
     runs-on: ubuntu-24.04
     permissions:
@@ -203,13 +229,59 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8.0.2
         with:
+          name: standalone-builder-linux-${{ github.sha }}
+          path: release/linux
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: standalone-builder-windows-${{ github.sha }}
+          path: release/windows
+      - name: Combine and verify both release artifacts
+        run: |
+          (cd release/linux && sha256sum -c --ignore-missing SHA256SUMS)
+          (cd release/windows && sha256sum -c --ignore-missing SHA256SUMS)
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil
+          root = pathlib.Path('release')
+          output = root / 'final'
+          output.mkdir()
+          records = []
+          sums = []
+          manifest = None
+          for target, artifact in [('linux', 'Builder.AppImage'), ('windows', 'Builder.exe')]:
+              source = root / target
+              record = json.loads((source / 'provenance.json').read_text())
+              assert record['source_commit'] == os.environ['GITHUB_SHA']
+              manifest = manifest or record['toolchain_manifest_sha256']
+              assert record['toolchain_manifest_sha256'] == manifest
+              assert len(record['artifacts']) == 1 and record['artifacts'][0]['name'] == artifact
+              digest = hashlib.sha256((source / artifact).read_bytes()).hexdigest()
+              assert digest == record['artifacts'][0]['sha256']
+              shutil.copy2(source / artifact, output / artifact)
+              shutil.copy2(source / f'NOTICES-{target}.txt', output / f'NOTICES-{target}.txt')
+              shutil.copy2(source / f'audit-{target}.json', output / f'audit-{target}.json')
+              sums.append(f'{digest}  {artifact}')
+              records.extend(record['artifacts'])
+          (output / 'SHA256SUMS').write_text('\n'.join(sums) + '\n')
+          (output / 'provenance.json').write_text(json.dumps({
+              'source_commit': os.environ['GITHUB_SHA'],
+              'toolchain_manifest_sha256': manifest,
+              'workflow_run': f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              'artifacts': records,
+          }, indent=2) + '\n')
+          PY
+          (cd release/final && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@v7.0.2
+        with:
           name: standalone-builders-${{ github.sha }}
-          path: release
+          path: release/final/
+          if-no-files-found: error
+          retention-days: 14
       - name: Draft release candidate (not published)
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cd release && sha256sum -c --ignore-missing SHA256SUMS
+          cd release/final && sha256sum -c SHA256SUMS
           gh release create '${{ github.ref_name }}' --repo '${{ github.repository }}' --draft --verify-tag \
             --title 'Tank Battles builders ${{ github.ref_name }}' \
             --notes 'Release candidate. The builders contain no game; they build your own copy from your purchased files.' \

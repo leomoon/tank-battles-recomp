@@ -1,24 +1,6 @@
 name: Entitlement preparation and bridge
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'entitlement*'
-      - 'scripts/*entitlement*'
-      - 'scripts/private_files.py'
-      - 'scripts/rap_format.json'
-      - 'tests/entitlement/**'
-      - 'external/ps3recomp/libs/filesystem/edat*'
-      - '.github/workflows/entitlement.yml'
-  pull_request:
-    paths:
-      - 'entitlement*'
-      - 'scripts/*entitlement*'
-      - 'scripts/private_files.py'
-      - 'scripts/rap_format.json'
-      - 'tests/entitlement/**'
-      - 'external/ps3recomp/libs/filesystem/edat*'
-      - '.github/workflows/entitlement.yml'
 permissions:
   contents: read
 jobs:

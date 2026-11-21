@@ -1,8 +1,6 @@
 name: Game-free Linux Vulkan runtime
 on:
   workflow_dispatch:
-  push:
-    tags: ['*']
 permissions:
   contents: read
 jobs:

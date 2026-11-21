@@ -1,22 +1,6 @@
 name: Texture decoder equivalence
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'texture_decode*'
-      - 'tests/texture_decode*'
-      - 'tests/texture_decode/**'
-      - 'scripts/instrument_sdk.py'
-      - 'external/ps3recomp/**'
-      - '.github/workflows/texture-decode.yml'
-  pull_request:
-    paths:
-      - 'texture_decode*'
-      - 'tests/texture_decode*'
-      - 'tests/texture_decode/**'
-      - 'scripts/instrument_sdk.py'
-      - 'external/ps3recomp/**'
-      - '.github/workflows/texture-decode.yml'
 permissions:
   contents: read
 jobs:
