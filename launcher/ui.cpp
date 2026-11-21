@@ -200,7 +200,7 @@ struct Worker {
 
 Account account_from(const State& state, Accounts& accounts) {
     Account account{state.server, state.npid, state.token};
-    if (!state.ca_path.empty()) {
+    if (state.advanced && !state.ca_path.empty()) {
         fs::path chosen = from_utf8(state.ca_path);
         account.ca = chosen.parent_path() == accounts.folder().online() ? chosen
                                                                          : accounts.import_ca(chosen, state.server);
@@ -417,7 +417,14 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                 painter.text(margin, y - 4, creating ? "Create an account" : "Sign in", accent, 2);
                 y += 16;
                 const int half = (column - 8) / 2;
+                const auto previous_server = state.server;
                 bool submit = form.field(margin, y, half, "Server", state.server, false, 80, !busy);
+                if (state.server != previous_server) {
+                    // A private CA and sign-in token belong to the previous server.
+                    state.ca_path.clear();
+                    state.token.clear();
+                    state.show_token = false;
+                }
                 submit |= form.field(margin + half + 8, y, half, "Username", state.npid, false, 16, !busy);
                 y += 30;
                 if (creating) {
