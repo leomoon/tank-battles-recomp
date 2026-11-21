@@ -144,3 +144,19 @@ python scripts/package_builder.py exe --resources out/windows-resources --stub o
 ```
 
 Both are made on Linux. The Windows toolchain is staged there with `toolchain.py stage --host windows`. Every extracted path stays under Windows' 260-character limit with room for a long user name.
+
+## Continuous integration and release candidates
+
+`.github/workflows/standalone-builders.yml` (manual dispatch or any tag) builds both builders from one revision. Everything comes from `ci/toolchain/manifest.json`, cached by its digest:
+
+1. **build** (Ubuntu) stages the Linux- and Windows-host toolchains and builds the dependencies and both runtimes with Zig. It runs the Linux runtime's tests, links relocated synthetic consumers with only the staged tools, and runs the game-free contract suites. It then packages `Builder.AppImage` and `Builder.exe` and audits both complete payloads with `scripts/audit_builder.py`. Finally it writes `SHA256SUMS`, `provenance.json` (source, toolchain manifest digest, toolchain identity, runtime build and ABI per artifact) and the notices.
+2. **linux-consumer** and **windows-consumer** start from a clean runner that downloads only the artifact. Each checks the checksum and relocates the builder into a path with spaces and a non-ASCII character. Linux strips the runner's compilers and tools; on Windows they are not on `PATH`. With the network blocked (a network namespace on Linux, firewall rules for every builder executable on Windows), each opens the builder window and runs `scripts/verify_builder.py` from inside the download. That script translates, compiles and assembles a synthetic player with the packaged engine, then starts it through the launcher. Both jobs also confirm that a modified or damaged download is refused.
+3. **stage-release** (tags only, after both consumers pass) creates a draft GitHub release with the two builders, checksums, provenance and notices. Nothing is published automatically.
+
+`scripts/audit_builder.py` inspects every file of an extracted builder or of `Builder.exe`'s payload, not only those `package.json` lists. It refuses:
+
+- PlayStation packages, executables and licences; keys, saves, RPCN accounts and private keys;
+- generated title code, recognised by thousands of distinct lifted-function symbols, including object names inside static archives;
+- executables and objects outside the verified runtime and toolchain.
+
+It also rejects modified resources, a mismatched source commit and tampered or unsafe `Builder.exe` payloads.

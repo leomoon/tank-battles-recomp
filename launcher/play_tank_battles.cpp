@@ -145,7 +145,10 @@ int launch(const std::vector<std::string>& arguments) {
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     // A GUI program; scripted use from a console still gets its output.
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+    // Keep inherited handles (pipes from a script); otherwise use the parent's console.
+    const HANDLE inherited = GetStdHandle(STD_OUTPUT_HANDLE);
+    const bool has_output = inherited && inherited != INVALID_HANDLE_VALUE && GetFileType(inherited) != FILE_TYPE_UNKNOWN;
+    if (!has_output && AttachConsole(ATTACH_PARENT_PROCESS)) {
         freopen("CONOUT$", "w", stdout);
         freopen("CONOUT$", "w", stderr);
     }

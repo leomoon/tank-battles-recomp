@@ -27,7 +27,8 @@ from install_layout import PACKAGE_FILE, PACKAGE_FORMAT, Layout, sha256  # noqa:
 ROOT = Path(__file__).resolve().parents[1]
 # Entry points the packaged route runs; their local imports are followed.
 SCRIPT_ENTRIES = ("port.py", "runtime_abi.py", "patch_network_events.py", "toolchain.py",
-                  "package_resources.py", "setup_engine.py", "player_folder.py", "builder_app.py")
+                  "package_resources.py", "setup_engine.py", "player_folder.py", "builder_app.py",
+                  "verify_builder.py")
 SCRIPT_DATA = ("rap_format.json",)
 TOP_FILES = ("config.toml", "LICENSE", "runtime_entry.cpp", "ci/toolchain/manifest.json")
 CMAKE_FILES = ("cmake/TitleCompileFlags.cmake", "cmake/PlayerLauncher.cmake", "cmake/player-consumer/CMakeLists.txt")

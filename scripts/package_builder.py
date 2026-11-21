@@ -191,6 +191,35 @@ def read_exe_payload(path: Path) -> tuple[int, int, bytes]:
     return offset, size, digest
 
 
+def provenance(args) -> None:
+    """SHA256SUMS and provenance.json for the release candidates."""
+    output = Path(args.output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    sums, artifacts = [], []
+    for artifact, resources_dir in zip(args.artifact, args.resources):
+        artifact, resources_dir = Path(artifact), Path(resources_dir)
+        digest = toolchains.sha256(artifact)
+        package = json.loads((resources_dir / "package.json").read_text())
+        runtime = json.loads((resources_dir / "runtime/manifest.json").read_text())
+        sums.append(f"{digest}  {artifact.name}")
+        artifacts.append(dict(name=artifact.name, sha256=digest, bytes=artifact.stat().st_size,
+                              source_commit=package["source_commit"], abi_sha256=package.get("abi_sha256"),
+                              target=package.get("target"), toolchain=package.get("toolchain_identity"),
+                              runtime_build=runtime.get("build"), resource_files=len(package["files"])))
+    record = dict(source_commit=args.source, toolchain_manifest_sha256=toolchains.manifest_digest(),
+                  workflow_run=os.environ.get("GITHUB_SERVER_URL", "") and
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{os.environ.get('GITHUB_RUN_ID')}",
+                  artifacts=artifacts)
+    mismatched = [a["name"] for a in artifacts if args.source and a["source_commit"] != args.source]
+    if mismatched:
+        raise SystemExit(f"Artifacts from another source: {mismatched}")
+    (output / "SHA256SUMS").write_text("\n".join(sums) + "\n")
+    (output / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
+    (output / "NOTICES-linux.txt").write_text(notices("linux"))
+    (output / "NOTICES-windows.txt").write_text(notices("windows"))
+    print(f"[builder] provenance for {len(artifacts)} artifacts in {output}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -211,8 +240,13 @@ def main() -> int:
     command = commands.add_parser("exe")
     for name in ("--resources", "--stub", "--output"):
         command.add_argument(name, required=True)
+    command = commands.add_parser("provenance")
+    command.add_argument("--artifact", action="append", required=True)
+    command.add_argument("--resources", action="append", required=True, help="The resources each artifact was made from, in order")
+    command.add_argument("--source", required=True)
+    command.add_argument("--output", required=True)
     args = parser.parse_args()
-    {"resources": resources, "appdir": appdir, "appimage": appimage, "stub": stub, "exe": exe}[args.command](args)
+    {"provenance": provenance, "resources": resources, "appdir": appdir, "appimage": appimage, "stub": stub, "exe": exe}[args.command](args)
     return 0
 
 
