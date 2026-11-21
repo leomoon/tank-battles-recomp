@@ -88,8 +88,15 @@ def player_executable(build_dir, args):
     return build_dir / ("Release/TankBattlesRecomp.exe" if getattr(args, "multi_config", False) else "TankBattlesRecomp.exe")
 
 
-def run_pipeline(args, config, resolve, prepare, configure, build):
-    """A failed stage never receives a completion stamp. Retry the same command."""
+STAGE_NAMES = {"configure": "configure", "build": "compile"}
+
+
+def run_pipeline(args, config, resolve, prepare, configure, build, notify=None):
+    """A failed stage never receives a completion stamp. Retry the same command.
+
+    `notify(stage, state)` receives translate/configure/compile with started,
+    reused or done, for front ends that show stage progress."""
+    notify = notify or (lambda stage, state: None)
     destination = resolve(config["paths"]["recompiled"])
     marker = resolve(config["paths"]["gamedata_root"]) / "setup-state.json"
     try:
@@ -106,7 +113,9 @@ def run_pipeline(args, config, resolve, prepare, configure, build):
         atomic_json(marker, state)
     if not args.restart and current and state.get("signature") == signature and state.get("outputs") == current:
         print("[setup] prepare: verified translations reused.", flush=True)
+        notify("translate", "reused")
     else:
+        notify("translate", "started")
         print("[setup] prepare: translating into staging; existing output stays intact on failure.", flush=True)
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -132,6 +141,7 @@ def run_pipeline(args, config, resolve, prepare, configure, build):
                     print("[setup] prepare: output is identical; retaining existing file timestamps.", flush=True)
             state.update(signature=signature, outputs=generated, completed="prepare")
             atomic_json(marker, state)
+            notify("translate", "done")
         except Exception as error:
             raise ValueError("Setup prepare failed. Correct the error and rerun the same setup command. " + str(error)) from error
     build_dir = resolve(getattr(args, "build_dir", None) or config["paths"]["build"])
@@ -142,12 +152,14 @@ def run_pipeline(args, config, resolve, prepare, configure, build):
     for name, action in (("configure", configure), ("build", build)):
         if name == "configure" and artifacts and state.get("configuration") == configure_signature and state.get("configuration_outputs") == artifacts:
             print("[setup] configure: verified configuration reused; Ninja will check regeneration dependencies.", flush=True)
+            notify("configure", "reused")
             continue
         executable = player_executable(build_dir, args)
         if name == "build" and state.get("executable_sha256") and executable.is_file() and digest(executable) != state["executable_sha256"]:
             print("[setup] build: executable changed outside setup; requesting a fresh link.", flush=True)
             executable.unlink()
         print(f"[setup] {name}: checking incremental dependencies.", flush=True)
+        notify(STAGE_NAMES[name], "started")
         try:
             action(args, config)
         except Exception as error:
@@ -160,6 +172,7 @@ def run_pipeline(args, config, resolve, prepare, configure, build):
         state["configuration"] = configure_signature
         state["configuration_outputs"] = configuration_outputs(build_dir)
         atomic_json(marker, state)
+        notify(STAGE_NAMES[name], "done")
 
 
 @contextmanager

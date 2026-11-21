@@ -29,10 +29,18 @@ def resolve(value: str) -> Path:
     return LAYOUT.resolve(value)
 
 
-def run(command: list[str], **kwargs) -> None:
+def execute(command, *, cwd, env=None):
+    subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+# Front ends (scripts/setup_engine.py) replace this to stream and own child processes.
+EXECUTE = execute
+
+
+def run(command: list[str], env=None) -> None:
     print("+ " + shlex.join(map(str, command)), flush=True)
     LAYOUT.workspace.mkdir(parents=True, exist_ok=True)
-    subprocess.run(command, cwd=LAYOUT.workspace, check=True, **kwargs)
+    EXECUTE([str(part) for part in command], cwd=LAYOUT.workspace, env=env)
 
 
 def selected_runtime(args):
@@ -111,7 +119,7 @@ def prepare(args, config) -> None:
     # SPU scanning and lifting are handled by CMake's PORT_SPU_INPUTS pipeline.
     if args.analyze_only:
         return
-    jobs = args.jobs or config["recompiler"]["jobs"]
+    jobs = getattr(args, "lift_jobs", None) or args.jobs or config["recompiler"]["jobs"]
     run([sys.executable, str(sdk / "tools/ppu_lifter.py"), str(elf),
          "--functions", str(functions),
          "--hle-stubs", str(analysis / f"{elf.stem}.imports.json"),
@@ -194,44 +202,10 @@ def build(args, config) -> None:
     run(command, env=build_environment(toolchain))
 
 
-def setup(args, config) -> None:
-    from setup_game import check_game
-    from setup_inputs import print_checks, require_valid
-    if args.check:
-        checks = check_game(args, config, LAYOUT.workspace, resolve)
-        if not args.import_only:
-            tools = setup_tools(args)
-            print_checks(tools)
-            checks.extend(tools)
-        require_valid(checks)
-        print("[setup] Check passed. Purchased inputs were not modified.")
-        return
-    from setup_pipeline import setup_lock
-    with setup_lock(resolve(config["paths"]["gamedata_root"])):
-        setup_install(args, config)
-
-
-def setup_install(args, config):
-    from setup_game import install_game
-    from setup_inputs import print_checks, require_valid
-    if not args.import_only:
-        tools = setup_tools(args)
-        print_checks(tools)
-        require_valid(tools)
-    args.elf = str(install_game(args, config, LAYOUT.workspace, resolve))
-    if args.import_only:
-        return
-    # Reuse the same translation and build paths as the individual commands.
-    args.sdk = None
-    args.analyze_only = False
-    args.recomp_dir = None
-    args.cmake_args = []
-    args.jobs = args.jobs or config["recompiler"]["jobs"]
-    from setup_pipeline import run_pipeline
-    run_pipeline(args, config, resolve, prepare, configure, build)
-    workspace = " --workspace " + shlex.quote(str(LAYOUT.workspace)) if LAYOUT.workspace != ROOT else ""
-    suffix = " --build-dir " + shlex.quote(args.build_dir) if args.build_dir else ""
-    print(f"[setup] Ready. Launch with: python scripts/port.py{workspace} run{suffix}")
+def setup(args, config) -> int:
+    """The console front end of scripts/setup_engine.py."""
+    from setup_engine import ConsoleReporter, log_path, run
+    return run(args, config, ConsoleReporter(log_path(LAYOUT.workspace)))
 
 
 def setup_tools(args):
@@ -320,34 +294,39 @@ def launch(args, config) -> int:
     return status
 
 
+def add_setup_arguments(parser) -> None:
+    """Shared by `port.py setup` and scripts/setup_engine.py."""
+    sources = parser.add_mutually_exclusive_group()
+    sources.add_argument("--pkg", help="Original purchased Tank Battles NPUB30154 PKG")
+    sources.add_argument("--game-dir", help="Original installed NPUB30154 folder containing EBOOT.BIN")
+    parser.add_argument("--unlock", help="Purchased full-game unlock EDAT")
+    parser.add_argument("--rap", help="Your purchased unlock's 16-byte RAP (license-2 EDAT only)")
+    parser.add_argument("--keys", default=os.environ.get("PS3_KEYS"), help="Your scetool-format SELF keys; defaults to PS3_KEYS or game/keys")
+    parser.add_argument("--rpcs3-source", help="Optional existing local RPCS3 source as the SELF key provider")
+    parser.add_argument("--rpcs3", help="Your RPCS3 executable/AppImage; decrypts only a temporary copy of EBOOT.BIN")
+    parser.add_argument("--elf", help="Manually decrypted EBOOT.elf, validated and copied into the installed game")
+    parser.add_argument("--check", action="store_true", help="Report all missing/mismatched inputs and actions without installing or building")
+    parser.add_argument("--allow-unknown-version", action="store_true", help="Explicitly accept untested hashes with warnings; never bypass file/title/ELF structure checks")
+    parser.add_argument("--restart", action="store_true", help="Regenerate translations before the incremental native build; keeps purchased inputs")
+    parser.add_argument("--import-only", action="store_true", help="Import, decrypt and prepare the unlock without translation or compilation")
+    parser.add_argument("--build-dir")
+    parser.add_argument("--runtime-bundle", help="Verified game-free runtime bundle matching these scripts")
+    parser.add_argument("--toolchain", help="Staged builder toolchain (scripts/toolchain.py stage); builds with only its tools")
+    parser.add_argument("--runtime-source", help="Exact CI source commit recorded by the selected runtime bundle")
+    parser.add_argument("--jobs", type=positive_int)
+    parser.add_argument("--cmake", default="cmake")
+    parser.add_argument("--ninja", default="ninja")
+    parser.add_argument("--backend", choices=("auto", "vulkan", "null"), default="auto")
+    parser.add_argument("--build-type", default="Release")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="config.toml", help="TOML configuration; relative paths look in the workspace, then the resources")
     parser.add_argument("--workspace", help="Writable directory for game data, translations, builds and logs (default: the checkout, or a per-user folder for an installed builder)")
     commands = parser.add_subparsers(dest="command", required=True)
     install = commands.add_parser("setup", help="Import your original game, decrypt, translate, configure and build")
-    sources = install.add_mutually_exclusive_group()
-    sources.add_argument("--pkg", help="Original purchased Tank Battles NPUB30154 PKG")
-    sources.add_argument("--game-dir", help="Original installed NPUB30154 folder containing EBOOT.BIN")
-    install.add_argument("--unlock", help="Purchased full-game unlock EDAT")
-    install.add_argument("--rap", help="Your purchased unlock's 16-byte RAP (license-2 EDAT only)")
-    install.add_argument("--keys", default=os.environ.get("PS3_KEYS"), help="Your scetool-format SELF keys; defaults to PS3_KEYS or game/keys")
-    install.add_argument("--rpcs3-source", help="Optional existing local RPCS3 source as the SELF key provider")
-    install.add_argument("--rpcs3", help="Your RPCS3 executable/AppImage; decrypts only a temporary copy of EBOOT.BIN")
-    install.add_argument("--elf", help="Manually decrypted EBOOT.elf, validated and copied into the installed game")
-    install.add_argument("--check", action="store_true", help="Report all missing/mismatched inputs and actions without installing or building")
-    install.add_argument("--allow-unknown-version", action="store_true", help="Explicitly accept untested hashes with warnings; never bypass file/title/ELF structure checks")
-    install.add_argument("--restart", action="store_true", help="Regenerate translations before the incremental native build; keeps purchased inputs")
-    install.add_argument("--import-only", action="store_true", help="Import, decrypt and prepare the unlock without translation or compilation")
-    install.add_argument("--build-dir")
-    install.add_argument("--runtime-bundle", help="Verified game-free runtime bundle matching these scripts")
-    install.add_argument("--toolchain", help="Staged builder toolchain (scripts/toolchain.py stage); builds with only its tools")
-    install.add_argument("--runtime-source", help="Exact CI source commit recorded by the selected runtime bundle")
-    install.add_argument("--jobs", type=positive_int)
-    install.add_argument("--cmake", default="cmake")
-    install.add_argument("--ninja", default="ninja")
-    install.add_argument("--backend", choices=("auto", "vulkan", "null"), default="auto")
-    install.add_argument("--build-type", default="Release")
+    add_setup_arguments(install)
     prep = commands.add_parser("prepare", help="Analyze and translate your decrypted game executable")
     prep.add_argument("--sdk")
     prep.add_argument("--elf")

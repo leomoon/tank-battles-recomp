@@ -83,3 +83,14 @@ When `package.json` is present, `port.py` runs in installed mode:
 - `configure` and `build` use the packaged runtime and toolchain on both OSes, with `PATH` limited to the staged tools and Zig's cache inside the workspace.
 
 A checkout keeps the existing behaviour and can select the same route with `--runtime-bundle DIR --toolchain DIR`, now on Linux as well as Windows. Translation signatures no longer include absolute paths, so moving the resources or workspace reuses translations; a build directory configured from moved resources is reconfigured automatically. `scripts/test_packaged_route.py` checks a read-only, relocated package with a workspace path containing spaces and non-ASCII characters, no Git, no network and only staged tools: first build, no-op reuse, interrupted-link resume, relocation, tampering and source-mismatch rejection.
+
+## Setup engine
+
+`scripts/setup_engine.py` is the single implementation behind `port.py setup` and the builder interface. It runs the existing pipeline as stages: `inputs` (purchased files, builder files, workspace space, job limits), `import`, `translate`, `configure` and `compile`. With `--json` it writes one event per line (`stage`, `progress` from the lifter and Ninja, `log`, and a final `result` with the player path or an error plus the action to take). Every run also writes `logs/setup-*.log` in the workspace.
+
+- Damaged builder files and too little disk space are reported in `inputs`, before an hour of work. The space estimate credits existing translations, builds and caches.
+- Parallelism is bounded by available memory: about 0.7 GB per compile job and 1.5 GB per translation worker, with 1.5 GB kept free. The reference title's largest translation unit peaks near 0.3 GB in Zig/clang, and two lifter workers near 1.9 GB in total. `--jobs` can only lower the result.
+- Cancelling (SIGINT/SIGTERM, CTRL_BREAK on Windows, or `cancel` or end of input with `--stdin-control`) stops the engine's own child process trees and nothing else. Completed stages are kept, so the next run resumes; a failed or cancelled stage never records completion.
+- Failures become one sentence and an action: a full drive, out of memory, failed translation, configuration or compilation (details in the log), or the input problem found by the checks.
+
+`scripts/test_setup_engine.py` covers job bounds, error classification and cancellation of a child and its grandchild without touching an unrelated process. With a bundle and toolchain it also runs the packaged pipeline on synthetic input without network: injected translation failure, cancel during configure, resume, and a no-op repeat.

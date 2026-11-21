@@ -46,6 +46,9 @@ class Layout:
         self.resources = Path(resources).resolve()
         package = self.resources / PACKAGE_FILE
         self.package = json.loads(package.read_text()) if package.is_file() else None
+        if self.package is not None:
+            # Installed resources are read-only; never try to cache bytecode in them.
+            sys.dont_write_bytecode = True
         if self.package is not None and self.package.get("format") != PACKAGE_FORMAT:
             raise ValueError(f"Unsupported package format in {package}; use the matching builder scripts")
         chosen = workspace or os.environ.get("TB_WORKSPACE")
