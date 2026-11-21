@@ -85,22 +85,25 @@ def launch(launcher: Path) -> None:
     environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE",
                                                     "LOCALAPPDATA", "APPDATA", "XDG_RUNTIME_DIR") if key in os.environ}
     environment.update(SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy", PATH=os.defpath)
-    status = subprocess.run([str(launcher), "--account", "status"], capture_output=True, text=True, env=environment, timeout=60)
+    status = subprocess.run([str(launcher), "--account", "status"], capture_output=True,
+                            encoding="utf-8", errors="replace", env=environment, timeout=60)
     if status.returncode or "active=" not in status.stdout:
         raise SystemExit(f"Launcher account interface failed: {status.stdout}{status.stderr}")
     shots = folder.parent / "launcher-screens"
     shots.mkdir(exist_ok=True)
-    window = subprocess.run([str(launcher)], capture_output=True, text=True, timeout=60,
+    window = subprocess.run([str(launcher)], capture_output=True, encoding="utf-8", errors="replace", timeout=60,
                             env=dict(environment, TB_LAUNCHER_UI_SMOKE=str(shots)))
     drawn = len(list(shots.glob("screen-*.bmp")))
     if window.returncode or drawn != 3:
-        raise SystemExit(f"Launcher window did not draw its screens ({drawn}): {window.stderr}")
+        raise SystemExit(f"Launcher captured {drawn}/3 screens (exit {window.returncode}): {window.stdout}{window.stderr}")
     started = time.monotonic()
-    subprocess.run([str(launcher), "--offline"], capture_output=True, text=True, timeout=120, env=environment)
+    offline = subprocess.run([str(launcher), "--offline"], capture_output=True,
+                             encoding="utf-8", errors="replace", timeout=120, env=environment)
     logs = sorted((folder / "logs").glob("session-*.log"))
     text = logs[-1].read_text(errors="replace") if logs else ""
     if "[milestone] first guest dispatch" not in text:
-        raise SystemExit(f"The synthetic player did not run its translated code: {logs[-1] if logs else 'no session log'}")
+        raise SystemExit(f"The synthetic player did not run its translated code (exit {offline.returncode}):\n"
+                         f"{text[-4000:] if logs else 'no session log'}\n{offline.stdout}{offline.stderr}")
     print(f"[verify] launcher started the player, which ran translated code ({time.monotonic() - started:.1f}s)")
 
 

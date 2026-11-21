@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -217,6 +219,27 @@ void fill_from(State& state, const Account& account) {
     state.confirm.clear();
 }
 
+std::optional<fs::path> smoke_output_directory() {
+#ifdef _WIN32
+    // SDL_getenv uses the Windows narrow code page, but SDL_SaveBMP expects UTF-8.
+    constexpr wchar_t variable[] = L"TB_LAUNCHER_UI_SMOKE";
+    SetLastError(ERROR_SUCCESS);
+    const DWORD size = GetEnvironmentVariableW(variable, nullptr, 0);
+    if (!size) {
+        if (GetLastError() == ERROR_SUCCESS) return fs::path{};
+        return std::nullopt;
+    }
+    std::wstring value(size, L'\0');
+    const DWORD length = GetEnvironmentVariableW(variable, value.data(), size);
+    if (length >= size || !length) return std::nullopt;
+    value.resize(length);
+    return fs::path(value);
+#else
+    if (const char* value = std::getenv("TB_LAUNCHER_UI_SMOKE")) return fs::path(value);
+    return std::nullopt;
+#endif
+}
+
 }  // namespace
 
 std::optional<Choice> run_ui(Accounts& accounts) {
@@ -253,7 +276,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
             focus = 0;
         };
         // Smoke mode for tests: draw each screen once and leave.
-        const bool smoke = SDL_getenv("TB_LAUNCHER_UI_SMOKE") != nullptr;
+        const auto smoke = smoke_output_directory();
         int smoke_frames = 0;
 
         while (!choice) {
@@ -448,16 +471,18 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                                       state.message_good ? good : bad);
             }
             focus_count = form.count();
-            if (smoke && *SDL_getenv("TB_LAUNCHER_UI_SMOKE")) {
+            if (smoke && !smoke->empty()) {
                 // TB_LAUNCHER_UI_SMOKE=DIR also saves each screen for review.
                 int w = 0, h = 0;
                 SDL_GetRendererOutputSize(renderer, &w, &h);
                 if (SDL_Surface* shot = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
-                    SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, shot->pixels, shot->pitch);
-                    const std::string path = std::string(SDL_getenv("TB_LAUNCHER_UI_SMOKE")) + "/screen-" +
-                                             std::to_string(smoke_frames) + ".bmp";
-                    SDL_SaveBMP(shot, path.c_str());
+                    const auto path = *smoke / ("screen-" + std::to_string(smoke_frames) + ".bmp");
+                    if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, shot->pixels, shot->pitch) != 0 ||
+                        SDL_SaveBMP(shot, utf8(path).c_str()) != 0)
+                        std::fprintf(stderr, "Could not capture launcher screen %d: %s\n", smoke_frames, SDL_GetError());
                     SDL_FreeSurface(shot);
+                } else {
+                    std::fprintf(stderr, "Could not allocate launcher screenshot: %s\n", SDL_GetError());
                 }
             }
             SDL_RenderPresent(renderer);
