@@ -3573,7 +3573,18 @@ static int32_t g_ppu_primary_priority = 1001;
 extern "C" uint32_t ppu_load_elf(const char* path)
 {
     g_ppu_primary_priority = 1001;
+#ifdef _WIN32
+    // The Windows entry point converts its arguments from UTF-16 to UTF-8.
+    FILE* f = nullptr;
+    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, nullptr, 0);
+    if (length > 0) {
+        std::vector<wchar_t> wide(length);
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide.data(), length))
+            f = _wfopen(wide.data(), L"rb");
+    }
+#else
     FILE* f = fopen(path, "rb");
+#endif
     if (!f) { fprintf(stderr, "[ppu] cannot open %s\n", path); return 0; }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
