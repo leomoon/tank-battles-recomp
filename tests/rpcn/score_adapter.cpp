@@ -5,6 +5,7 @@
 #include "stubs.h"
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <map>
