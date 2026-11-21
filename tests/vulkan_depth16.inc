@@ -42,7 +42,9 @@ assert(!vk_begin());
 }
 int main(void) {
  setenv("VK_DRAW_BATCH","0",1);setenv("TB_DEPTH_GPU","1",1);
+ if(getenv("TB_TEST_DEPTH_BATCHED"))setenv("PS3RECOMP_VK_GUEST_PROGRAMS","1",1);
  assert(!vk_init_all(16,16,"exact GPU depth16 fixture"));assert(!vk_eng_init(NULL,16,16));
+ if(getenv("TB_TEST_DEPTH_BATCHED"))assert(vk_eb_on());
  u32 z=vk_eng_depth_target_create(NULL,1,1);assert(z);
  setenv("TB_DEPTH_GPU","0",1);assert(!tb_vk_depth16(NULL,z,1,1,0x92));
  /* Unset (an empty value on Windows) is the default: on for every OS. */
@@ -50,6 +52,10 @@ int main(void) {
  u32 t=tb_vk_depth16(NULL,z,1,1,0x92);assert(t);vk_eng_texture_release(NULL,t);
  vk_eng_depth_target_release(NULL,z);setenv("TB_DEPTH_GPU","1",1);
  check_depth16(1024,2048);check_depth16(13,7);check_depth16(1,1);
+ /* Recreated descriptor pools and small-to-large buffer replacement must
+  * rebind descriptors even when Vulkan recycles the previous handles. */
+ tb_depth16_shutdown();
+ check_depth16(13,7);check_depth16(1024,2048);
  vk_eng_shutdown(NULL);pvkDeviceWaitIdle(s_vk.device);
  puts("PASS: GPU Z16 conversion matches exact CPU rounding at every 16-bit boundary and random float32 values, odd shapes, views, producer updates and fallback");return 0;
 }

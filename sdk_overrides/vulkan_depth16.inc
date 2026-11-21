@@ -3,6 +3,7 @@
 static struct {
  VkDescriptorSetLayout sl; VkPipelineLayout layout; VkDescriptorPool pool;
  VkDescriptorSet set; VkPipeline pipeline; vk_buffer input,output;
+ int descriptors_valid;
 } tb_d16;
 static void tb_depth16_shutdown(void) {
  vk_destroy_buffer(&tb_d16.input);vk_destroy_buffer(&tb_d16.output);
@@ -37,6 +38,10 @@ fail:tb_depth16_shutdown();return -1;
 }
 static vk_buffer* tb_depth16_buffer(vk_buffer* b,VkDeviceSize bytes,VkBufferUsageFlags usage) {
  if(b->buf && b->size>=bytes)return b;
+ /* Destroying a buffer invalidates its descriptor even if the driver reuses
+  * the same VkBuffer handle for the replacement allocation. Destruction
+  * completes recorded users before the descriptor can be rewritten. */
+ tb_d16.descriptors_valid=0;
  vk_destroy_buffer(b);
  if(vk_create_device_buffer(b,bytes,usage)){vk_destroy_buffer(b);return NULL;}
  return b;
@@ -81,14 +86,13 @@ static u32 tb_vk_depth16(void* user,u32 depth,u32 w,u32 h,u32 format) {
   * recorded use first, so no pending batch sees the set change. */
  const int batched=tb_async_record();
  if(batched?(!s_eb_pending && vk_begin()):vk_begin()){vk_eng_release(user,handle);return 0;}
- static VkBuffer bound_in,bound_out;
- if(bound_in!=in->buf || bound_out!=out->buf) {
+ if(!tb_d16.descriptors_valid) {
   /* Whole buffers: the set stays valid for every later size that fits. */
   VkDescriptorBufferInfo bi[2]={{in->buf,0,VK_WHOLE_SIZE},{out->buf,0,VK_WHOLE_SIZE}};
   VkWriteDescriptorSet writes[2];memset(writes,0,sizeof writes);
   for(unsigned i=0;i<2;i++)writes[i]=(VkWriteDescriptorSet){.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstSet=tb_d16.set,.dstBinding=i,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&bi[i]};
   pvkUpdateDescriptorSets(s_vk.device,2,writes,0,NULL);
-  bound_in=in->buf;bound_out=out->buf;
+  tb_d16.descriptors_valid=1;
  }
  vk_barrier_image(z->im.img,s_vk.depth_aspect,VK_IMAGE_LAYOUT_GENERAL);
  vk_barrier_image(t->im.img,VK_IMAGE_ASPECT_COLOR_BIT,reused?VK_IMAGE_LAYOUT_GENERAL:VK_IMAGE_LAYOUT_UNDEFINED);

@@ -44,3 +44,5 @@ if '--build-only' not in sys.argv:
  env={k:v for k,v in os.environ.items() if not k.startswith(('TB_','PS3RECOMP_VK_','VK_DRAW_'))}
  subprocess.run([str(out/'build/groups')],env=env,check=True,timeout=40)
  print('PASS: actual GPU depth16 fixture')
+ subprocess.run([str(out/'build/groups')],env=dict(env,TB_TEST_DEPTH_BATCHED='1'),check=True,timeout=40)
+ print('PASS: actual GPU depth16 fixture with asynchronous batches')
