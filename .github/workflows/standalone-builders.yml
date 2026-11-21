@@ -7,6 +7,8 @@ on:
   workflow_dispatch:
   push:
     tags: ['*']
+    # Test candidates before they reach master; dispatch needs the default branch.
+    branches: ['validation/standalone-builders-*']
 permissions:
   contents: read
 env:
