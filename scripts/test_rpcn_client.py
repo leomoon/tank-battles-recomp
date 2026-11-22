@@ -45,7 +45,8 @@ class RpcnClientTests(unittest.TestCase):
         cls.tls.load_cert_chain(cls.directory / "cert.pem", cls.directory / "key.pem")
 
     def run_client(self, action, exchange, *, expected_error=None, trust_fixture=True, version=34,
-                   stale_login_attempts=0, busy_seconds=0, runner=None):
+                   stale_login_attempts=0, busy_seconds=0, runner=None, expected_result=None,
+                   fields="password=fixture-secret\nemail=fixture@example.invalid\n"):
         errors = []
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -85,8 +86,8 @@ class RpcnClientTests(unittest.TestCase):
 
             profile = self.directory / "profile.ini"
             profile.write_text(
-                f"endpoint=127.0.0.1:{port}\nnpid=FixturePlayer\npassword=fixture-secret\n"
-                "email=fixture@example.invalid\n" + ("ca=cert.pem\n" if trust_fixture else ""),
+                f"endpoint=127.0.0.1:{port}\nnpid=FixturePlayer\n" + fields +
+                ("ca=cert.pem\n" if trust_fixture else ""),
                 encoding="utf-8",
             )
             server = threading.Thread(target=serve, daemon=True)
@@ -96,7 +97,10 @@ class RpcnClientTests(unittest.TestCase):
             server.join(timeout=7)
             self.assertFalse(server.is_alive())
             self.assertEqual(errors, [])
-            self.assertNotIn("fixture-secret", result.stdout + result.stderr)
+            for secret in ("fixture-secret", "fixture-reset-code"):
+                self.assertNotIn(secret, result.stdout + result.stderr)
+            if expected_result:
+                self.assertIn(f"[rpcn-result] {expected_result}", result.stdout.splitlines())
             if expected_error:
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(expected_error, result.stderr)
@@ -135,6 +139,23 @@ class RpcnClientTests(unittest.TestCase):
             self.assertEqual(fields[-2:], [b"fixture@example.invalid", b""])
             stream.sendall(packet(1, 2, 1, b"\0"))
         self.run_client("--rpcn-create-account", exchange)
+
+    def test_request_reset_code_without_a_password(self):
+        def exchange(stream, reader):
+            self.assertEqual(request(reader), (5, 1, b"FixturePlayer\0fixture@example.invalid\0"))
+            stream.sendall(packet(1, 5, 1, b"\0"))
+        self.run_client("--rpcn-request-reset", exchange, expected_result="reset_sent",
+                        fields="email=fixture@example.invalid\n")
+
+    def test_reset_password_and_reject_invalid_code(self):
+        for status, result in [(0, "password_reset"), (5, "reset_code_rejected")]:
+            with self.subTest(status=status):
+                def exchange(stream, reader):
+                    self.assertEqual(request(reader), (6, 1, b"FixturePlayer\0fixture-reset-code\0fixture-secret\0"))
+                    stream.sendall(packet(1, 6, 1, bytes([status])))
+                self.run_client("--rpcn-reset-password", exchange, expected_result=result,
+                                expected_error="request rejected" if status else None,
+                                fields="reset_code=fixture-reset-code\npassword=fixture-secret\n")
 
     def test_incorrect_password(self):
         def exchange(stream, reader):

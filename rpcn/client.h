@@ -18,6 +18,8 @@ struct Status {
     ConnectionError error = ConnectionError::none;
 };
 
+enum class AccountAction { sign_in, create, request_reset, reset_password };
+
 struct Reply {
     // A missing response indicates that the connection ended.
     std::vector<unsigned char> body;
@@ -49,6 +51,6 @@ void retry_sign_in();
 void stop();
 bool enabled();
 Status status();
-int account_command(const char* profile_path, bool create);
+int account_command(const char* profile_path, AccountAction action);
 
 }

@@ -245,7 +245,7 @@ class LauncherTests(unittest.TestCase):
         result = subprocess.run([str(root / "Play Tank Battles")], capture_output=True, text=True,
                                 env={"PATH": "/nonexistent", "SDL_VIDEODRIVER": "dummy", "TB_LAUNCHER_UI_SMOKE": str(shots)})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(list(shots.glob("screen-*.bmp"))), 3)
+        self.assertEqual(len(list(shots.glob("screen-*.bmp"))), 5)
 
     def test_a_missing_player_is_explained(self):
         root = self.folder("broken")

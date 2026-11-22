@@ -50,30 +50,36 @@ std::string result_code(const std::string& output) {
     return output.substr(at + marker.size(), end == std::string::npos ? std::string::npos : end - at - marker.size());
 }
 
-}  // namespace
+std::optional<std::string> validate_server(const std::string& endpoint) {
+    const auto colon = endpoint.rfind(':');
+    unsigned port = 0;
+    const auto* digits = endpoint.data() + (colon == std::string::npos ? 0 : colon + 1);
+    const auto* end = endpoint.data() + endpoint.size();
+    const auto parsed = std::from_chars(digits, end, port);
+    if (colon == std::string::npos || colon == 0 || parsed.ptr != end || parsed.ec != std::errc() || !port || port > 65535 ||
+        endpoint.substr(0, colon).find_first_not_of(host_characters) != std::string::npos)
+        return "Enter the server as name:port, for example rpcn.example.org:31313.";
+    return std::nullopt;
+}
 
-std::string Account::id() const {
-    std::string server = endpoint;
-    std::replace(server.begin(), server.end(), ':', '_');
-    return npid + "@" + server;
+std::optional<std::string> validate_identity(const Account& account) {
+    if (auto problem = validate_server(account.endpoint)) return problem;
+    if (account.npid.size() < 3 || account.npid.size() > 16 || account.npid.find_first_not_of(npid_characters) != std::string::npos)
+        return "Usernames have 3 to 16 letters, digits, hyphens or underscores.";
+    return std::nullopt;
+}
+
+bool valid_email(const std::string& email) {
+    const auto at = email.find('@');
+    return at != std::string::npos && at > 0 && at + 1 < email.size() &&
+           email.find('@', at + 1) == std::string::npos && clean(email) && email.find(' ') == std::string::npos;
 }
 
 std::optional<std::string> validate(const Account& account, const std::string& password, const std::string* email) {
-    const auto colon = account.endpoint.rfind(':');
-    unsigned port = 0;
-    const auto* digits = account.endpoint.data() + (colon == std::string::npos ? 0 : colon + 1);
-    const auto* end = account.endpoint.data() + account.endpoint.size();
-    const auto parsed = std::from_chars(digits, end, port);
-    if (colon == std::string::npos || colon == 0 || parsed.ptr != end || parsed.ec != std::errc() || !port || port > 65535 ||
-        account.endpoint.substr(0, colon).find_first_not_of(host_characters) != std::string::npos)
-        return account.endpoint.empty() ? "Enter the RPCN server you want to use, as name:port."
-                                         : "Enter the server as name:port, for example rpcn.example.org:31313.";
-    if (account.npid.size() < 3 || account.npid.size() > 16 || account.npid.find_first_not_of(npid_characters) != std::string::npos)
-        return "Usernames have 3 to 16 letters, digits, hyphens or underscores.";
+    if (auto problem = validate_identity(account)) return problem;
     if (password.empty() || !clean(password)) return "Enter your password (one line).";
     if (!clean(account.token) || account.token.find(' ') != std::string::npos) return "Enter the token exactly as it was sent.";
-    if (email && (email->find('@') == std::string::npos || email->size() < 3 || !clean(*email) ||
-                  email->find(' ') != std::string::npos))
+    if (email && !valid_email(*email))
         return "Enter the email address the server should use for this account.";
     return std::nullopt;
 }
@@ -81,6 +87,13 @@ std::optional<std::string> validate(const Account& account, const std::string& p
 std::string explain(const std::string& code, bool token_sent) {
     if (code == "signed_in") return "Signed in.";
     if (code == "created") return "Account created.";
+    if (code == "reset_sent") return "Check your email for the reset code.";
+    if (code == "password_reset") return "Password changed. Sign in with your new password.";
+    if (code == "reset_unavailable") return "This server does not offer password recovery.";
+    if (code == "reset_limited") return "A code was requested recently. Use that code or try again later.";
+    if (code == "reset_details") return "Check the server, username and email address, then try again.";
+    if (code == "reset_code_rejected") return "The code is invalid or already used. Check the latest email and try again.";
+    if (code == "reset_email_failed") return "The server could not send the reset email. Try again later.";
     if (code == "invalid_profile") return "Check the server address (name:port) and the username.";
     if (code == "name_taken") return "That username is already taken on this server. Choose another.";
     if (code == "email_taken") return "That email already has an account on this server. Sign in instead.";
@@ -96,6 +109,14 @@ std::string explain(const std::string& code, bool token_sent) {
     if (code == "creation_rejected") return "The server did not accept the new account. Try another username or email.";
     if (code == "no_player") return "The player is missing from this folder. Build it again with the builder.";
     return "The server rejected the request. Check the details and retry.";
+}
+
+}  // namespace
+
+std::string Account::id() const {
+    std::string server = endpoint;
+    std::replace(server.begin(), server.end(), ':', '_');
+    return npid + "@" + server;
 }
 
 std::vector<Account> Accounts::saved() const {
@@ -141,6 +162,7 @@ std::optional<std::string> Accounts::remembered_password(const Account& account)
 }
 
 fs::path Accounts::import_ca(const fs::path& source, const std::string& endpoint) const {
+    if (auto problem = validate_server(endpoint)) throw std::runtime_error(*problem);
     std::string name = endpoint;
     std::replace(name.begin(), name.end(), ':', '_');
     const auto target = folder_.online() / from_utf8(name + ".pem");
@@ -166,34 +188,42 @@ void Accounts::save(const Account& account, const std::string* password) const {
     write_private(folder_.online() / from_utf8(account.id() + ".account"), content);
 }
 
-fs::path Accounts::write_runtime_profile(const Account& account, const std::string& password, const std::string* email) const {
+fs::path Accounts::write_runtime_profile(const Account& account, const std::string& password,
+                                         const std::string* email, const std::string* reset_code) const {
     std::random_device device;
     const auto directory = private_temporary_directory(folder_.online() / ".session");
     const auto path = directory / ("session-" + std::to_string(device()) + std::to_string(device()) + ".profile");
-    std::string content = "endpoint=" + account.endpoint + "\nnpid=" + account.npid + "\npassword=" + password + "\n";
+    std::string content = "endpoint=" + account.endpoint + "\nnpid=" + account.npid + "\n";
+    if (!password.empty()) content += "password=" + password + "\n";
     if (!account.ca.empty()) content += "ca=" + utf8(fs::absolute(account.ca)) + "\n";
     if (!account.token.empty()) content += "token=" + account.token + "\n";
     if (email) content += "email=" + *email + "\n";
+    if (reset_code) content += "reset_code=" + *reset_code + "\n";
     write_private(path, content);
     return path;
 }
 
-Result Accounts::run(const Account& account, const std::string& password, const std::string* email) {
+Result Accounts::run(const char* command, const Account& account, const std::string& password,
+                     const std::string* email, const std::string* reset_code) {
     std::error_code error;
     if (!fs::is_regular_file(folder_.player(), error)) return {"no_player", explain("no_player", false)};
-    const auto profile = write_runtime_profile(account, password, email);
     auto environment = folder_.environment();
     environment.emplace_back("TB_SESSION_CAPTURED", "1");   // Results on stdout, not in a session log.
-    const auto output = run_captured(folder_.player(),
-                                     {email ? "--rpcn-create-account" : "--rpcn-check", profile}, environment);
-    erase_private(profile);
-    const auto code = output.status < 0 ? std::string("no_player") : result_code(output.text);
-    return {code, explain(code, !account.token.empty())};
+    const auto profile = write_runtime_profile(account, password, email, reset_code);
+    try {
+        const auto output = run_captured(folder_.player(), {command, profile}, environment);
+        erase_private(profile);
+        const auto code = output.status < 0 ? std::string("no_player") : result_code(output.text);
+        return {code, explain(code, !account.token.empty())};
+    } catch (...) {
+        erase_private(profile);
+        throw;
+    }
 }
 
 Result Accounts::sign_in(Account account, const std::string& password, bool remember) {
     if (auto problem = validate(account, password, nullptr)) return {"invalid_input", *problem};
-    auto result = run(account, password, nullptr);
+    auto result = run("--rpcn-check", account, password);
     if (result.ok()) {
         save(account, remember ? &password : nullptr);
         select(account);
@@ -205,7 +235,7 @@ Result Accounts::sign_in(Account account, const std::string& password, bool reme
 
 Result Accounts::create(Account account, const std::string& email, const std::string& password, bool remember) {
     if (auto problem = validate(account, password, &email)) return {"invalid_input", *problem};
-    auto result = run(account, password, &email);
+    auto result = run("--rpcn-create-account", account, password, &email);
     if (!result.ok()) return result;
     // Sign in straight away; a server with email verification answers with token_required.
     auto signed_in = sign_in(account, password, remember);
@@ -213,11 +243,34 @@ Result Accounts::create(Account account, const std::string& email, const std::st
     return signed_in;
 }
 
+Result Accounts::request_reset(const Account& account, const std::string& email) {
+    if (auto problem = validate_identity(account)) return {"invalid_input", *problem};
+    if (!valid_email(email)) return {"invalid_input", "Enter the email address you used to create this account."};
+    return run("--rpcn-request-reset", account, {}, &email);
+}
+
+Result Accounts::reset_password(const Account& account, const std::string& code, const std::string& password) {
+    if (auto problem = validate_identity(account)) return {"invalid_input", *problem};
+    if (password.empty() || !clean(password)) return {"invalid_input", "Enter your new password (one line)."};
+    if (code.empty() || !clean(code) || code.find(' ') != std::string::npos)
+        return {"invalid_input", "Enter the reset code exactly as it was sent."};
+    auto result = run("--rpcn-reset-password", account, password, nullptr, &code);
+    if (result.code == "password_reset") {
+        try {
+            const auto existing = read_account(folder_.online() / from_utf8(account.id() + ".account"));
+            if (existing && existing->remembered) save(*existing, nullptr);
+        } catch (const std::exception&) {
+            result.message += " The old password could not be removed from this computer.";
+        }
+    }
+    return result;
+}
+
 int Accounts::play(const std::optional<std::pair<Account, std::string>>& online) {
     std::vector<fs::path> arguments{folder_.executable()};
     fs::path profile;
     if (online) {
-        profile = write_runtime_profile(online->first, online->second, nullptr);
+        profile = write_runtime_profile(online->first, online->second);
         arguments.insert(arguments.end(), {"--rpcn-profile", profile});
     }
     const int status = run_game(folder_.player(), arguments, folder_.environment(), folder_.root);

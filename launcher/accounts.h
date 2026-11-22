@@ -25,9 +25,9 @@ struct Account {
 
 // What happened, as a stable word, plus a sentence for people.
 struct Result {
-    std::string code;          // signed_in, created, or a failure word from account_command.
+    std::string code;          // Stable outcome from account_command or local validation.
     std::string message;
-    bool ok() const { return code == "signed_in" || code == "created"; }
+    bool ok() const { return code == "signed_in" || code == "created" || code == "reset_sent" || code == "password_reset"; }
 };
 
 class Accounts {
@@ -45,6 +45,8 @@ public:
     // account is saved, selected and, if requested, its password remembered.
     Result sign_in(Account account, const std::string& password, bool remember);
     Result create(Account account, const std::string& email, const std::string& password, bool remember);
+    Result request_reset(const Account& account, const std::string& email);
+    Result reset_password(const Account& account, const std::string& code, const std::string& password);
 
     // Starts the game; online with `password` for the active account when given.
     int play(const std::optional<std::pair<Account, std::string>>& online);
@@ -55,14 +57,13 @@ public:
     const Folder& folder() const { return folder_; }
 
 private:
-    Result run(const Account& account, const std::string& password, const std::string* email);
-    fs::path write_runtime_profile(const Account& account, const std::string& password, const std::string* email) const;
+    Result run(const char* command, const Account& account, const std::string& password,
+               const std::string* email = nullptr, const std::string* reset_code = nullptr);
+    fs::path write_runtime_profile(const Account& account, const std::string& password,
+                                   const std::string* email = nullptr, const std::string* reset_code = nullptr) const;
     void save(const Account& account, const std::string* password) const;
 
     Folder folder_;
 };
-
-std::optional<std::string> validate(const Account& account, const std::string& password, const std::string* email);
-std::string explain(const std::string& code, bool token_sent);
 
 }  // namespace tb::launcher

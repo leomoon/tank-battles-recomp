@@ -693,10 +693,15 @@ static int run_guest(uint32_t entry, uint32_t stack_top) { return ppu_run(entry,
 
 int tb_player_main(int argc, char** argv)
 {
+    using tb::rpcn::AccountAction;
     if (argc == 3 && std::strcmp(argv[1], "--rpcn-create-account") == 0)
-        return tb::rpcn::account_command(argv[2], true);
+        return tb::rpcn::account_command(argv[2], AccountAction::create);
     if (argc == 3 && std::strcmp(argv[1], "--rpcn-check") == 0)
-        return tb::rpcn::account_command(argv[2], false);
+        return tb::rpcn::account_command(argv[2], AccountAction::sign_in);
+    if (argc == 3 && std::strcmp(argv[1], "--rpcn-request-reset") == 0)
+        return tb::rpcn::account_command(argv[2], AccountAction::request_reset);
+    if (argc == 3 && std::strcmp(argv[1], "--rpcn-reset-password") == 0)
+        return tb::rpcn::account_command(argv[2], AccountAction::reset_password);
     if (argc < 2) {
         printf("usage: %s <PPU ELF> [--rpcn-profile FILE]\n", argv[0]);
         return 2;

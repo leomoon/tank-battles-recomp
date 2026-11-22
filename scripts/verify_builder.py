@@ -94,8 +94,8 @@ def launch(launcher: Path) -> None:
     window = subprocess.run([str(launcher)], capture_output=True, encoding="utf-8", errors="replace", timeout=60,
                             env=dict(environment, TB_LAUNCHER_UI_SMOKE=str(shots)))
     drawn = len(list(shots.glob("screen-*.bmp")))
-    if window.returncode or drawn != 3:
-        raise SystemExit(f"Launcher captured {drawn}/3 screens (exit {window.returncode}): {window.stdout}{window.stderr}")
+    if window.returncode or drawn != 5:
+        raise SystemExit(f"Launcher captured {drawn}/5 screens (exit {window.returncode}): {window.stdout}{window.stderr}")
     started = time.monotonic()
     offline = subprocess.run([str(launcher), "--offline"], capture_output=True,
                              encoding="utf-8", errors="replace", timeout=120, env=environment)

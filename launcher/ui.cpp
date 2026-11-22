@@ -1,4 +1,4 @@
-// The launcher window: Play, Play Offline, Sign In and Create Account.
+// Launcher window for starting the game and managing online accounts.
 // A small immediate-mode interface drawn with SDL's renderer and the built-in
 // 5x7 font, so the folder needs no toolkit or font files.
 #include "ui.h"
@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -30,7 +31,7 @@ constexpr Color background{18, 29, 43}, panel{28, 42, 58}, border{78, 101, 121},
 struct Input {
     int mouse_x = -1, mouse_y = -1;
     bool clicked = false, enter = false, escape = false, tab = false, backtab = false, backspace = false, space = false;
-    std::string typed, dropped;
+    std::string typed;
 };
 
 class Painter {
@@ -126,7 +127,6 @@ public:
                 if (ch >= 32 && ch < 127 && value.size() < limit) value += ch;
             if (in_.backspace && !value.empty()) value.pop_back();
             submit = in_.enter;
-            if (!in_.dropped.empty() && !masked) value = in_.dropped.substr(0, 512);
         }
         std::string shown = masked ? std::string(value.size(), '*') : value;
         const size_t visible = static_cast<size_t>((w - 8) / 6);
@@ -159,11 +159,11 @@ private:
     int count_ = 0;
 };
 
-enum class Screen { home, sign_in, create };
+enum class Screen { home, sign_in, create, request_reset, reset_password };
 
 struct State {
     Screen screen = Screen::home;
-    std::string server, npid, password, confirm, email, token, ca_path;
+    std::string server, npid, password, confirm, email, token, ca_path, reset_code;
     bool remember = true, advanced = false, show_token = false;
     std::string message;
     bool message_good = false;
@@ -179,8 +179,13 @@ struct Worker {
     template <class Job> void start(Job job, Uint32 wake) {
         running = true;
         thread = std::thread([this, job, wake] {
-            Result outcome = job();
-            { std::lock_guard guard(lock); result = outcome; }
+            Result outcome;
+            try {
+                outcome = job();
+            } catch (const std::exception& error) {
+                outcome = {"failed", error.what()};
+            }
+            { std::lock_guard guard(lock); result = std::move(outcome); }
             running = false;
             SDL_Event event{};
             event.type = wake;
@@ -296,9 +301,10 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                     break;
                 case SDL_TEXTINPUT: input.typed += event.text.text; break;
                 case SDL_DROPFILE:
-                    input.dropped = event.drop.file;
-                    state.advanced = true;
-                    state.ca_path = input.dropped;
+                    if (state.screen != Screen::home && !worker.running) {
+                        state.advanced = true;
+                        state.ca_path = event.drop.file;
+                    }
                     SDL_free(event.drop.file);
                     break;
                 case SDL_KEYDOWN: {
@@ -337,7 +343,19 @@ std::optional<Choice> run_ui(Accounts& accounts) {
             if (auto result = worker.take()) {
                 state.message = result->message;
                 state.message_good = result->ok();
-                if (result->ok()) {
+                if (result->code == "reset_sent") {
+                    state.screen = Screen::reset_password;
+                    focus = 2;
+                } else if (result->code == "password_reset") {
+                    if (state.session && state.session->first.id() == Account{state.server, state.npid, {}}.id())
+                        state.session.reset();
+                    state.reset_code.clear();
+                    state.password.clear();
+                    state.confirm.clear();
+                    state.email.clear();
+                    state.screen = Screen::sign_in;
+                    focus = 2;
+                } else if (result->ok()) {
                     state.session = std::make_pair(*accounts.active(), state.password);
                     state.password.clear();
                     state.confirm.clear();
@@ -412,9 +430,12 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                                   "Online accounts belong to the RPCN server you choose. They are not PlayStation Network accounts.",
                                   border);
             } else {
+                const bool signing_in = state.screen == Screen::sign_in;
                 const bool creating = state.screen == Screen::create;
-                if (input.escape && !busy) go(Screen::home);
-                painter.text(margin, y - 4, creating ? "Create an account" : "Sign in", accent, 2);
+                const bool requesting_reset = state.screen == Screen::request_reset;
+                const bool setting_password = state.screen == Screen::reset_password;
+                const char* heading = signing_in ? "Sign in" : creating ? "Create an account" : "Reset password";
+                painter.text(margin, y - 4, heading, accent, 2);
                 y += 16;
                 const int half = (column - 8) / 2;
                 const auto previous_server = state.server;
@@ -424,21 +445,31 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                     state.ca_path.clear();
                     state.token.clear();
                     state.show_token = false;
+                    state.reset_code.clear();
                 }
+                const auto previous_user = state.npid;
                 submit |= form.field(margin + half + 8, y, half, "Username", state.npid, false, 16, !busy);
+                if (state.npid != previous_user) state.reset_code.clear();
                 y += 30;
-                if (creating) {
-                    submit |= form.field(margin, y, column, "Email (for this server only)", state.email, false, 120, !busy);
+                if (creating || requesting_reset) {
+                    submit |= form.field(margin, y, column, requesting_reset ? "Email used for this account" : "Email (for this server only)",
+                                         state.email, false, 120, !busy);
                     y += 30;
-                    submit |= form.field(margin, y, half, "Password", state.password, true, 64, !busy);
+                } else if (setting_password) {
+                    submit |= form.field(margin, y, column, "Reset code from email", state.reset_code, true, 64, !busy);
+                    y += 30;
+                }
+                if (creating || setting_password) {
+                    submit |= form.field(margin, y, half, setting_password ? "New password" : "Password",
+                                         state.password, true, 64, !busy);
                     submit |= form.field(margin + half + 8, y, half, "Repeat password", state.confirm, true, 64, !busy);
-                } else {
+                } else if (signing_in) {
                     submit |= form.field(margin, y, half, "Password", state.password, true, 64, !busy);
                     if (state.show_token)
                         submit |= form.field(margin + half + 8, y, half, "Token from email", state.token, false, 64, !busy);
                 }
-                y += 32;
-                form.checkbox(margin, y, "Remember me on this computer", state.remember);
+                if (!requesting_reset) y += 32;
+                if (signing_in || creating) form.checkbox(margin, y, "Remember me on this computer", state.remember);
                 form.checkbox(margin + half + 8, y, "Advanced", state.advanced);
                 y += 14;
                 if (state.advanced) {
@@ -447,11 +478,32 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                     y += 30;
                 }
                 const int buttons = logical_height - 58;
-                const bool pressed = form.button(margin, buttons, half, busy ? "Contacting server..." : creating ? "Create account" : "Sign in",
-                                                 true, !busy);
-                if (form.button(margin + half + 8, buttons, half, "Back", false, !busy)) go(Screen::home);
-                if ((pressed || submit) && !busy) {
-                    if (creating && state.password != state.confirm) {
+                const bool extra_action = signing_in || requesting_reset;
+                const int button_width = extra_action ? (column - 16) / 3 : half;
+                const char* action = signing_in ? "Sign in" : creating ? "Create account" :
+                                     requesting_reset ? "Send reset code" : "Change password";
+                const bool pressed = form.button(margin, buttons, button_width, busy ? "Contacting server..." : action, true, !busy);
+                const bool extra = extra_action && form.button(margin + button_width + 8, buttons, button_width,
+                                                                signing_in ? "Forgot password?" : "I have a code", false, !busy);
+                const bool back = form.button(margin + column - button_width, buttons, button_width, "Back", false, !busy);
+                if ((back || input.escape) && !busy) {
+                    if (requesting_reset || setting_password) {
+                        state.password.clear();
+                        state.confirm.clear();
+                        state.reset_code.clear();
+                        go(setting_password ? Screen::request_reset : Screen::sign_in);
+                    } else {
+                        go(Screen::home);
+                    }
+                } else if (extra) {
+                    state.password.clear();
+                    state.confirm.clear();
+                    state.reset_code.clear();
+                    if (signing_in) state.email.clear();
+                    go(signing_in ? Screen::request_reset : Screen::reset_password);
+                    focus = 2;
+                } else if ((pressed || submit) && !busy) {
+                    if ((creating || setting_password) && state.password != state.confirm) {
                         state.message = "The two passwords are different.";
                         state.message_good = false;
                     } else {
@@ -461,7 +513,16 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                             const bool remember = state.remember;
                             state.message = "Contacting " + account.endpoint + "...";
                             state.message_good = true;
-                            if (creating)
+                            if (requesting_reset) {
+                                account.token.clear();
+                                worker.start([&accounts, account, email] {
+                                    return accounts.request_reset(account, email); }, wake);
+                            } else if (setting_password) {
+                                account.token.clear();
+                                const std::string code = state.reset_code;
+                                worker.start([&accounts, account, code, password] {
+                                    return accounts.reset_password(account, code, password); }, wake);
+                            } else if (creating)
                                 worker.start([&accounts, account, email, password, remember] {
                                     return accounts.create(account, email, password, remember); }, wake);
                             else
@@ -494,9 +555,8 @@ std::optional<Choice> run_ui(Accounts& accounts) {
             }
             SDL_RenderPresent(renderer);
             if (smoke) {
-                // Draw home, sign-in and create once each, then quit.
-                static const Screen order[] = {Screen::home, Screen::sign_in, Screen::create};
-                if (++smoke_frames >= 3) choice = Choice{};
+                static const Screen order[] = {Screen::home, Screen::sign_in, Screen::create, Screen::request_reset, Screen::reset_password};
+                if (++smoke_frames >= static_cast<int>(std::size(order))) choice = Choice{};
                 else state.screen = order[smoke_frames];
             }
         }

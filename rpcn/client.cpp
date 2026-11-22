@@ -28,7 +28,7 @@ constexpr unsigned protocol_version = 34;
 constexpr size_t header_size = 15;
 constexpr size_t max_body = 0x800000 - header_size;
 enum class Packet : unsigned char { request, reply, notification, server_info };
-enum class Command : uint16_t { login, terminate, create };
+enum class Command : uint16_t { login, terminate, create, request_reset = 5, reset_password = 6 };
 
 // The server's reason code, for front ends that explain it (account_command).
 struct Rejected : std::runtime_error {
@@ -50,7 +50,7 @@ struct ProfileError : std::runtime_error {
 };
 
 struct Profile {
-    std::string endpoint, ca, npid, password, token, email;
+    std::string endpoint, ca, npid, password, token, email, reset_code;
 };
 
 std::filesystem::path utf8_path(std::string_view value) {
@@ -69,7 +69,7 @@ std::string read_small_file(const std::filesystem::path& path, size_t limit) {
     return content;
 }
 
-Profile read_profile(const char* name, bool create) {
+Profile read_profile(const char* name, AccountAction action) {
     const auto path = utf8_path(name);
     const auto content = read_small_file(path, 4096);
     Profile profile;
@@ -93,6 +93,7 @@ Profile read_profile(const char* name, bool create) {
         else if (key == "password") target = &profile.password;
         else if (key == "token") target = &profile.token;
         else if (key == "email") target = &profile.email;
+        else if (key == "reset_code") target = &profile.reset_code;
         if (!target || !target->empty() || value.empty())
             throw ProfileError("Unknown, repeated or empty RPCN profile setting");
         *target = value;
@@ -113,8 +114,12 @@ Profile read_profile(const char* name, bool create) {
         profile.npid.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
             std::string::npos)
         throw ProfileError("RPCN NP ID must be 3 to 16 letters, digits, hyphens or underscores");
-    if (profile.password.empty() || (create && profile.email.empty()))
-        throw ProfileError("RPCN profile needs a password and account creation also needs an email");
+    if (action != AccountAction::request_reset && profile.password.empty())
+        throw ProfileError("RPCN profile needs a password");
+    if ((action == AccountAction::create || action == AccountAction::request_reset) && profile.email.empty())
+        throw ProfileError("RPCN profile needs an email address");
+    if (action == AccountAction::reset_password && profile.reset_code.empty())
+        throw ProfileError("RPCN profile needs a password reset code");
     if (!ca_path.empty())
         profile.ca = read_small_file(path.parent_path() / utf8_path(ca_path), 256 * 1024);
     return profile;
@@ -525,7 +530,7 @@ bool start(const char* profile_path) {
     std::lock_guard guard(worker_lock);
     if (active_profile) return false;
     try {
-        auto profile = read_profile(profile_path, false);
+        auto profile = read_profile(profile_path, AccountAction::sign_in);
         initialize_curl();
         active_profile.emplace(std::move(profile));
         if (!launch_worker(*active_profile)) {
@@ -593,9 +598,18 @@ std::vector<Friend> friends() {
 }
 
 // One stable word per outcome on stdout, for the launcher's account screens.
-const char* account_result(const std::exception& error, bool create) {
+const char* account_result(const std::exception& error, AccountAction action) {
     if (dynamic_cast<const ProfileError*>(&error)) return "invalid_profile";
     if (const auto* rejected = dynamic_cast<const Rejected*>(&error)) {
+        if (action == AccountAction::request_reset || action == AccountAction::reset_password) {
+            switch (rejected->reason) {
+                case 2: case 33: return "reset_unavailable";
+                case 4: return "reset_limited";
+                case 5: return action == AccountAction::request_reset ? "reset_details" : "reset_code_rejected";
+                case 25: return "reset_email_failed";
+                default: return "rejected";
+            }
+        }
         switch (rejected->reason) {
             case 6: return "already_signed_in";
             case 7: return "unknown_user";
@@ -603,7 +617,7 @@ const char* account_result(const std::exception& error, bool create) {
             case 9: return "token_required";
             case 11: return "name_taken";
             case 13: return "email_taken";
-            default: return create ? "creation_rejected" : "rejected";
+            default: return action == AccountAction::create ? "creation_rejected" : "rejected";
         }
     }
     if (const auto* transport = dynamic_cast<const TransportError*>(&error)) {
@@ -621,26 +635,40 @@ const char* account_result(const std::exception& error, bool create) {
     return "failed";
 }
 
-int account_command(const char* profile_path, bool create) {
+int account_command(const char* profile_path, AccountAction action) {
     try {
-        const auto profile = read_profile(profile_path, create);
+        const auto profile = read_profile(profile_path, action);
         initialize_curl();
-        if (create) {
-            Connection connection(profile, {});
-            connection.request(Command::create, {profile.npid, profile.password, profile.npid,
-                                                  "https://example.invalid/avatar", profile.email});
-            printf("[rpcn] Created account %s\n", profile.npid.c_str());
-            printf("[rpcn-result] created\n");
-        } else {
+        if (action == AccountAction::sign_in) {
             auto session = connect_and_login(profile, {});
             printf("[rpcn] Signed in as %s\n", profile.npid.c_str());
             printf("[rpcn-result] signed_in\n");
             session.connection->request(Command::terminate, {});
+            return 0;
+        }
+        Connection connection(profile, {});
+        switch (action) {
+        case AccountAction::create:
+            connection.request(Command::create, {profile.npid, profile.password, profile.npid,
+                                                  "https://example.invalid/avatar", profile.email});
+            printf("[rpcn] Created account %s\n", profile.npid.c_str());
+            printf("[rpcn-result] created\n");
+            break;
+        case AccountAction::request_reset:
+            connection.request(Command::request_reset, {profile.npid, profile.email});
+            printf("[rpcn-result] reset_sent\n");
+            break;
+        case AccountAction::reset_password:
+            connection.request(Command::reset_password, {profile.npid, profile.reset_code, profile.password});
+            printf("[rpcn-result] password_reset\n");
+            break;
+        case AccountAction::sign_in:
+            break;
         }
         return 0;
     } catch (const std::exception& error) {
         fprintf(stderr, "[rpcn] %s\n", error.what());
-        printf("[rpcn-result] %s\n", account_result(error, create));
+        printf("[rpcn-result] %s\n", account_result(error, action));
         return 1;
     }
 }
