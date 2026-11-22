@@ -280,6 +280,16 @@ std::optional<Choice> run_ui(Accounts& accounts) {
             state.message.clear();
             focus = 0;
         };
+        Screen recovery_back = Screen::sign_in;
+        auto start_recovery = [&](Screen back) {
+            recovery_back = back;
+            state.password.clear();
+            state.confirm.clear();
+            state.reset_code.clear();
+            state.email.clear();
+            go(Screen::request_reset);
+            focus = 2;
+        };
         // Smoke mode for tests: draw each screen once and leave.
         const auto smoke = smoke_output_directory();
         int smoke_frames = 0;
@@ -416,11 +426,9 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                         state.message = "Signed out. The game will start offline.";
                         state.message_good = true;
                     }
-                    if (form.button(margin + half + 8, y, half, "Forget " + active->npid)) {
-                        accounts.forget(*active);
-                        state.session.reset();
-                        state.message = "Removed the saved account and its password from this computer.";
-                        state.message_good = true;
+                    if (form.button(margin + half + 8, y, half, "Forgot password")) {
+                        fill_from(state, *active);
+                        start_recovery(Screen::home);
                     }
                 }
                 y += 30;
@@ -484,23 +492,24 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                                      requesting_reset ? "Send reset code" : "Change password";
                 const bool pressed = form.button(margin, buttons, button_width, busy ? "Contacting server..." : action, true, !busy);
                 const bool extra = extra_action && form.button(margin + button_width + 8, buttons, button_width,
-                                                                signing_in ? "Forgot password?" : "I have a code", false, !busy);
+                                                                signing_in ? "Forgot password" : "I have a code", false, !busy);
                 const bool back = form.button(margin + column - button_width, buttons, button_width, "Back", false, !busy);
                 if ((back || input.escape) && !busy) {
                     if (requesting_reset || setting_password) {
                         state.password.clear();
                         state.confirm.clear();
                         state.reset_code.clear();
-                        go(setting_password ? Screen::request_reset : Screen::sign_in);
+                        go(setting_password ? Screen::request_reset : recovery_back);
                     } else {
                         go(Screen::home);
                     }
+                } else if (extra && signing_in) {
+                    start_recovery(Screen::sign_in);
                 } else if (extra) {
                     state.password.clear();
                     state.confirm.clear();
                     state.reset_code.clear();
-                    if (signing_in) state.email.clear();
-                    go(signing_in ? Screen::request_reset : Screen::reset_password);
+                    go(Screen::reset_password);
                     focus = 2;
                 } else if ((pressed || submit) && !busy) {
                     if ((creating || setting_password) && state.password != state.confirm) {
