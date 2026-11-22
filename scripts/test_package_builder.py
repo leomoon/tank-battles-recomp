@@ -19,6 +19,28 @@ import builder_session
 import package_builder
 
 
+class PayloadTimestampTests(unittest.TestCase):
+    def test_future_dated_build_inputs_are_packed_with_past_timestamps(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            resources = root / "resources"
+            resources.mkdir()
+            source = resources / "CMakeLists.txt"
+            source.write_bytes(b"project(probe)\n")
+            source.chmod(0o755)
+            os.utime(source, (2524608000, 2524608000))  # 2050: a packaging clock ahead of the user.
+            stub = root / "stub.exe"
+            stub.write_bytes(b"MZ")
+            output = root / "Builder.exe"
+            package_builder.exe(types.SimpleNamespace(resources=resources, stub=stub, output=output))
+            offset, size, _ = package_builder.read_exe_payload(output)
+            with zipfile.ZipFile(io.BytesIO(output.read_bytes()[offset:offset + size])) as archive:
+                info = archive.getinfo("CMakeLists.txt")
+                self.assertEqual(info.date_time, (2000, 1, 1, 0, 0, 0))
+                self.assertEqual(archive.read(info), source.read_bytes())
+                self.assertEqual(info.external_attr >> 16, source.stat().st_mode & 0xFFFF)
+
+
 class PackagingTests(unittest.TestCase):
     def setUp(self):
         self.temporary = Path(tempfile.mkdtemp(prefix="tb builder package "))

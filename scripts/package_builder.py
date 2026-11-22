@@ -36,6 +36,9 @@ import package_gtk  # noqa: E402
 import toolchain as toolchains  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+# Resource timestamps must predate the consumer's generated Ninja files, even
+# when the packaging runner's clock is ahead of the user's machine.
+RESOURCE_EPOCH = 946684800  # 2000-01-01 UTC, also representable in ZIP/DOS time.
 APPRUN = """#!/bin/sh
 # Tank Battles builder: the staged Python runs the builder window.
 # The AppImage runtime sets APPDIR; an extracted squashfs-root uses its own path.
@@ -144,7 +147,7 @@ def appimage(args) -> None:
     output = Path(args.output).resolve()
     image = output.with_suffix(".squashfs")
     subprocess.run([mksquashfs, args.appdir, str(image), "-root-owned", "-noappend", "-comp", "zstd",
-                    "-Xcompression-level", "19", "-b", "1M", "-quiet"], check=True)
+                    "-Xcompression-level", "19", "-b", "1M", "-all-time", str(RESOURCE_EPOCH), "-quiet"], check=True)
     with output.open("wb") as stream:
         stream.write(runtime)
         stream.write(image.read_bytes())
@@ -170,7 +173,12 @@ def exe(args) -> None:
     with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path in sorted(source.rglob("*")):
             if path.is_file() and not path.is_symlink():
-                archive.write(path, path.relative_to(source).as_posix())
+                info = zipfile.ZipInfo(path.relative_to(source).as_posix(), (2000, 1, 1, 0, 0, 0))
+                info.create_system = 3
+                info.external_attr = (path.stat().st_mode & 0xFFFF) << 16
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with path.open("rb") as contents, archive.open(info, "w") as packed:
+                    shutil.copyfileobj(contents, packed, 1 << 20)
     digest = hashlib.sha256()
     with payload.open("rb") as stream:
         for block in iter(lambda: stream.read(1 << 20), b""):

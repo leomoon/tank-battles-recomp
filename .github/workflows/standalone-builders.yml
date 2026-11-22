@@ -189,7 +189,11 @@ jobs:
 
   windows-consumer:
     needs: build
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/download-artifact@v8.0.2

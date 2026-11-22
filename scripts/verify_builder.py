@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import port  # noqa: E402
 import setup_engine  # noqa: E402
 import player_folder  # noqa: E402
-from install_layout import Layout  # noqa: E402
+from install_layout import Layout, Toolchain  # noqa: E402
+from toolchain_probe import verify as verify_toolchain  # noqa: E402
 from synthetic_content import write_sfo  # noqa: E402
 
 
@@ -117,6 +118,7 @@ def main() -> int:
         raise SystemExit("Run this from an extracted builder (no package.json found)")
     port.LAYOUT.verify()
     print(f"[verify] builder files verified ({len(port.LAYOUT.package['files'])}); source {port.LAYOUT.source_commit()}")
+    verify_toolchain(Toolchain(port.LAYOUT.toolchain()), work)
     elf = synthetic_title(work)
     launcher = build(work, elf, work / "Tank Battles test folder")
     launch(launcher)

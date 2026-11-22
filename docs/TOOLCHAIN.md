@@ -6,7 +6,7 @@ The standalone builders compile each player's private executable on the player's
 
 | Component | Pinned | Role | Licence |
 | --- | --- | --- | --- |
-| Zig 0.17.1 | linux and windows host archives | The only compiler and linker: clang/lld 22.1.8, libc++, glibc 2.31 stubs, mingw-w64 | MIT; bundled LLVM Apache-2.0 with LLVM exception; mingw-w64 ZPL/public domain; glibc headers LGPL |
+| Zig 0.15.2 | linux and windows host archives | The only compiler and linker: clang/lld, libc++, glibc 2.31 stubs, mingw-w64 | MIT; bundled LLVM Apache-2.0 with LLVM exception; mingw-w64 ZPL/public domain; glibc headers LGPL |
 | CMake 4.5.1 | official binaries | Build configuration | BSD-3-Clause |
 | Ninja 1.13.2 | official binaries | Build execution | Apache-2.0 |
 | CPython 3.13.18 (python-build-standalone 20261110) | install_only_stripped | Runs setup, the PPU/SPU lifter and title patches | PSF-2.0 plus bundled notices |
@@ -147,10 +147,14 @@ Both are made on Linux. The Windows toolchain is staged there with `toolchain.py
 
 ## Continuous integration and release candidates
 
+Zig 0.15.2 is pinned for both hosts and both targets. Zig 0.17.1 stalled while preparing the MinGW runtime on a Windows desktop; a standalone C link passed with 0.15.2. Changing this pin rebuilds the runtime dependencies, runtime bundles and builder toolchains together, retaining the compiler and ABI checks between them.
+
+Both payload formats normalize resource timestamps to 2000-01-01. Otherwise a packaging machine ahead of the consumer's clock can make CMake modules newer than generated Ninja files and cause a permanent regeneration loop.
+
 `.github/workflows/standalone-builders.yml` (manual dispatch or any tag) builds both builders from one revision and caches downloads by the hashes of the toolchain and Windows GTK4 manifests.
 
 1. **build** (Ubuntu) stages the Linux- and Windows-host toolchains and builds the dependencies and both runtimes with Zig. It runs the Linux runtime's tests, links relocated synthetic consumers with only the staged tools, and runs the game-free contract suites. It then packages `Builder.AppImage` and `Builder.exe` and audits both complete payloads with `scripts/audit_builder.py`. Finally it writes `SHA256SUMS`, `provenance.json` (source, toolchain manifest digest, toolchain identity, runtime build and ABI per artifact) and the notices.
-2. **linux-consumer** and **windows-consumer** start from a clean runner that downloads only the artifact. Each checks the checksum and relocates the builder into a path with spaces and a non-ASCII character. Linux strips the runner's compilers and tools; on Windows they are not on `PATH`. With the network blocked (a network namespace on Linux, firewall rules for every builder executable on Windows), each opens the builder window and runs `scripts/verify_builder.py` from inside the download. That script translates, compiles and assembles a synthetic player with the packaged engine, then starts it through the launcher. Both jobs also confirm that a modified or damaged download is refused.
+2. **linux-consumer** and **windows-consumer** start from a clean runner that downloads only the artifact. Windows checks the same `Builder.exe` on Server 2022 and Server 2025; these are validation jobs, not additional release binaries. Each checks the checksum and relocates the builder into a path with spaces and a non-ASCII character. Linux strips the runner's compilers and tools; on Windows they are not on `PATH`. With the network blocked (a network namespace on Linux, firewall rules for every builder executable on Windows), each opens the builder window and runs `scripts/verify_builder.py` from inside the download. That script first configures, links and runs C and C++ probes using a fresh compiler cache, with a four-minute deadline and retained compiler log. It then translates, compiles and assembles a synthetic player with the packaged engine, and starts it through the launcher. Both jobs also confirm that a modified or damaged download is refused.
 3. **stage-release** (tags only, after both consumers pass) creates a draft GitHub release with the two builders, checksums, provenance and notices. Nothing is published automatically.
 
 `scripts/audit_builder.py` inspects every file of an extracted builder or of `Builder.exe`'s payload, not only those `package.json` lists. It refuses:
