@@ -426,7 +426,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                         state.message = "Signed out. The game will start offline.";
                         state.message_good = true;
                     }
-                    if (form.button(margin + half + 8, y, half, "Forgot password")) {
+                    if (!online_ready && form.button(margin + half + 8, y, half, "Forgot password")) {
                         fill_from(state, *active);
                         start_recovery(Screen::home);
                     }
