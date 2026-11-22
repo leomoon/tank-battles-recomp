@@ -23,6 +23,8 @@
 #include <immintrin.h>
 #ifdef _MSC_VER
 #include <intrin.h>
+#else
+#include <cpuid.h>
 #endif
 #define VMX_HOST_FMA 1
 #endif
@@ -305,24 +307,31 @@ VMX_INL float vmx_fmaf(float x, float z, float y) {
 #endif
 }
 #ifdef VMX_HOST_FMA
-#if defined(_MSC_VER)
-/* clang-cl's __builtin_cpu_supports needs a GCC CPU-model object that the
- * Microsoft runtime does not supply. Check both CPU and OS AVX support. */
+/* Check CPU and OS AVX support without depending on __cpu_model, which
+ * some toolchains do not provide. XGETBV is safe only after OSXSAVE. */
 __attribute__((target("xsave")))
 static uint64_t vmx_host_xcr0(void) { return _xgetbv(0); }
 
 VMX_INL int vmx_host_fma_supported(void) {
+#ifdef _MSC_VER
     static __declspec(thread) int available;
+#else
+    static __thread int available;
+#endif
     if (!available) {
+#ifdef _MSC_VER
         int features[4];
         __cpuidex(features, 1, 0);
+        const uint32_t ecx = (uint32_t)features[2];
+#else
+        uint32_t eax, ebx, ecx, edx;
+        __cpuid_count(1, 0, eax, ebx, ecx, edx);
+#endif
         const uint32_t required = (1u << 9) | (1u << 12) | (1u << 27) | (1u << 28);
-        available = ((uint32_t)features[2] & required) == required &&
-            (vmx_host_xcr0() & 6u) == 6u ? 2 : 1;
+        available = (ecx & required) == required && (vmx_host_xcr0() & 6u) == 6u ? 2 : 1;
     }
     return available == 2;
 }
-#endif
 /* A target-specific call keeps the rest of the player at its baseline ISA.
  * Shuffle bytes within each word, retaining the guest's lane order. */
 __attribute__((target("avx,fma,ssse3")))
@@ -355,12 +364,7 @@ VMX_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
 #ifdef VMX_HOST_FMA
     /* Guest flush behavior is explicit. Host DAZ/FTZ or directed rounding
      * must use the existing scalar implementation. */
-#if defined(_MSC_VER)
-    if (vmx_host_fma_supported() &&
-#else
-    if (__builtin_cpu_supports("fma") && __builtin_cpu_supports("ssse3") &&
-#endif
-        (_mm_getcsr() & 0xE040u) == 0) {
+    if (vmx_host_fma_supported() && (_mm_getcsr() & 0xE040u) == 0) {
         vmx_vmaddfp_host(d_, a_, b_, c_, vscr);
         return;
     }
