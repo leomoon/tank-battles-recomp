@@ -31,9 +31,19 @@ std::map<std::string, std::string> read_settings(const fs::path& path) {
 std::optional<Account> read_account(const fs::path& path) {
     auto settings = read_settings(path);
     if (settings["endpoint"].empty() || settings["npid"].empty()) return std::nullopt;
+    // Pre-release builds could put passwords and email verification tokens in
+    // account files. Discard them on first read.
+    const bool had_password = settings.erase("password") != 0;
+    const bool had_token = settings.erase("token") != 0;
+    if (had_password || had_token) {
+        std::string clean_content;
+        if (had_password) settings["remembered"] = "0";
+        for (const auto& [key, value] : settings) clean_content += key + "=" + value + "\n";
+        write_private(path, clean_content);
+    }
     Account account{settings["endpoint"], settings["npid"], settings["token"]};
     if (!settings["ca"].empty()) account.ca = path.parent_path() / from_utf8(settings["ca"]);
-    account.remembered = !settings["password"].empty() || load_password(account.id()).has_value();
+    account.remembered = settings["remembered"] == "1";
     return account;
 }
 
@@ -155,10 +165,7 @@ void Accounts::forget(const Account& account) {
 }
 
 std::optional<std::string> Accounts::remembered_password(const Account& account) const {
-    if (auto stored = load_password(account.id())) return stored;
-    auto settings = read_settings(folder_.online() / from_utf8(account.id() + ".account"));
-    if (!settings["password"].empty()) return settings["password"];
-    return std::nullopt;
+    return account.remembered ? load_password(account.id()) : std::nullopt;
 }
 
 fs::path Accounts::import_ca(const fs::path& source, const std::string& endpoint) const {
@@ -176,16 +183,19 @@ fs::path Accounts::import_ca(const fs::path& source, const std::string& endpoint
     return target;
 }
 
-void Accounts::save(const Account& account, const std::string* password) const {
+bool Accounts::save(const Account& account, const std::string* password) const {
+    const bool remembered = password && store_password(account.id(), *password);
+    if (!remembered) forget_password(account.id());
     std::string content = "endpoint=" + account.endpoint + "\nnpid=" + account.npid + "\n";
     if (!account.ca.empty()) content += "ca=" + utf8(account.ca.filename()) + "\n";
-    if (!account.token.empty()) content += "token=" + account.token + "\n";
-    if (password) {
-        if (!store_password(account.id(), *password)) content += "password=" + *password + "\n";
-    } else {
-        forget_password(account.id());
+    content += std::string("remembered=") + (remembered ? "1\n" : "0\n");
+    try {
+        write_private(folder_.online() / from_utf8(account.id() + ".account"), content);
+    } catch (...) {
+        if (remembered) forget_password(account.id());
+        throw;
     }
-    write_private(folder_.online() / from_utf8(account.id() + ".account"), content);
+    return remembered;
 }
 
 fs::path Accounts::write_runtime_profile(const Account& account, const std::string& password,
@@ -225,9 +235,13 @@ Result Accounts::sign_in(Account account, const std::string& password, bool reme
     if (auto problem = validate(account, password, nullptr)) return {"invalid_input", *problem};
     auto result = run("--rpcn-check", account, password);
     if (result.ok()) {
-        save(account, remember ? &password : nullptr);
+        account.token.clear();  // The email sign-in token is single-use.
+        const bool stored = save(account, remember ? &password : nullptr);
         select(account);
+        if (remember && !stored)
+            result.message += " This computer could not store the password securely. Enter it again next time.";
     } else if (result.code == "token_required") {
+        account.token.clear();  // An unaccepted token must not be saved either.
         save(account, nullptr);   // Keep the server and name for the token step; no password.
     }
     return result;
@@ -258,10 +272,22 @@ Result Accounts::reset_password(const Account& account, const std::string& code,
     if (result.code == "password_reset") {
         try {
             const auto existing = read_account(folder_.online() / from_utf8(account.id() + ".account"));
-            if (existing && existing->remembered) save(*existing, nullptr);
+            if (existing) save(*existing, nullptr);
+            else forget_password(account.id());
         } catch (const std::exception&) {
             result.message += " The old password could not be removed from this computer.";
         }
+    }
+    return result;
+}
+
+Result Accounts::verify_saved(const Account& account, const std::string& password) {
+    auto result = run("--rpcn-check", account, password);
+    if (result.code == "wrong_password" || result.code == "unknown_user") {
+        save(account, nullptr);
+        result.message = "The saved password no longer works for this server. Sign in with the current password.";
+    } else if (result.code == "signed_in") {
+        result.code = "verified";
     }
     return result;
 }

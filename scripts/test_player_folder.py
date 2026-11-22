@@ -101,14 +101,18 @@ class FolderTests(unittest.TestCase):
 FAKE_PLAYER = r"""
 import json, os, stat, sys
 args = sys.argv[1:]
-if args and args[0] in ("--rpcn-check", "--rpcn-create-account"):
+if args and args[0] in ("--rpcn-check", "--rpcn-create-account", "--rpcn-request-reset", "--rpcn-reset-password"):
     path = args[1]
     profile = dict(line.split("=", 1) for line in open(path).read().splitlines())
     mode = stat.S_IMODE(os.stat(path).st_mode)
     log = os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), "calls.jsonl")
     with open(log, "a") as stream:
         stream.write(json.dumps({"args": args, "profile": profile, "mode": mode}) + "\n")
-    if profile["password"] != "secret pw":
+    if args[0] == "--rpcn-request-reset":
+        print("[rpcn-result] reset_sent")
+    elif args[0] == "--rpcn-reset-password":
+        print("[rpcn-result] password_reset" if profile.get("reset_code") == "reset-code" else "[rpcn-result] reset_code_rejected")
+    elif profile["password"] != os.environ.get("TB_TEST_PLAYER_PASSWORD", "secret pw"):
         print("[rpcn-result] wrong_password")
     elif args[0] == "--rpcn-create-account":
         print("[rpcn-result] created" if "email" in profile else "[rpcn-result] invalid_profile")
@@ -139,9 +143,17 @@ class LauncherTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = Path(tempfile.mkdtemp(prefix="tb launcher "))
         cls.launcher = cls.temporary / "Play Tank Battles"
+        cls.secret_library = cls.temporary / "secret-library"
+        cls.secret_library.mkdir()
+        subprocess.run(["cc", "-shared", "-fPIC", str(ROOT / "scripts/launcher_secret_mock.c"),
+                        "-o", str(cls.secret_library / "libsecret-1.so.0")], check=True)
         sources = [str(ROOT / "launcher" / name) for name in ("play_tank_battles.cpp", "accounts.cpp", "platform.cpp", "ui.cpp")]
         subprocess.run(["c++", "-std=c++20", "-O1", "-I", str(ROOT / "launcher"), *sources, "-o", str(cls.launcher),
-                        *sdl_flags(), "-pthread"], check=True)
+                        *sdl_flags(), "-pthread", "-ldl"], check=True)
+
+    def setUp(self):
+        self.expected_password = "secret pw"
+        self.secret_store_fails = False
 
     @classmethod
     def tearDownClass(cls):
@@ -159,10 +171,20 @@ class LauncherTests(unittest.TestCase):
         self.runtime.mkdir(mode=0o700)
         return root
 
-    def run_launcher(self, root, *arguments, stdin=None, check=True):
+    def run_launcher(self, root, *arguments, stdin=None, check=True, runtime_dir=True):
+        secret_dir = root / "test-keyring"
+        secret_dir.mkdir(exist_ok=True)
+        temp_dir = root / "system-temp"
+        temp_dir.mkdir(exist_ok=True)
+        environment = {"PATH": "/nonexistent", "TMPDIR": str(temp_dir),
+                       "LD_LIBRARY_PATH": str(self.secret_library), "TB_TEST_SECRET_DIR": str(secret_dir),
+                       "TB_TEST_PLAYER_PASSWORD": self.expected_password}
+        if runtime_dir:
+            environment["XDG_RUNTIME_DIR"] = str(self.runtime)
+        if self.secret_store_fails:
+            environment["TB_TEST_SECRET_FAIL"] = "1"
         result = subprocess.run([str(root / "Play Tank Battles"), *arguments], capture_output=True, text=True,
-                                input=stdin, cwd="/",
-                                env={"PATH": "/nonexistent", "XDG_RUNTIME_DIR": str(self.runtime)})
+                                input=stdin, cwd="/", env=environment)
         if check:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
@@ -197,6 +219,8 @@ class LauncherTests(unittest.TestCase):
         self.assertNotIn("secret pw", " ".join(call["args"]), "password on a command line")
         account = root / "online/Player1@example.org_31313.account"
         self.assertEqual(stat_mode(account), 0o600)
+        self.assertNotIn("secret pw", account.read_text())
+        self.assertIn("remembered=1", account.read_text())
         self.assertEqual(self.run_launcher(root, "--account", "status").stdout.splitlines()[0],
                          "active=Player1@example.org_31313")
         seen = json.loads(self.run_launcher(root, "--play").stdout)
@@ -212,6 +236,85 @@ class LauncherTests(unittest.TestCase):
         self.assertNotIn("password=", (root / "online/Player2@example.org_31313.account").read_text())
         # Without a remembered password, --play cannot go online and starts offline.
         self.assertEqual(json.loads(self.run_launcher(root, "--play").stdout)["argv"][1:], [])
+
+    def test_runtime_profile_uses_private_system_temp_without_xdg_runtime(self):
+        root = self.folder("no runtime dir")
+        result = self.run_launcher(root, "--account", "sign-in", "--server", "example.org:31313",
+                                   "--user", "Player1", stdin="secret pw\n", runtime_dir=False)
+        self.assertIn("result=signed_in", result.stdout)
+        profile = Path(self.calls(root)[-1]["args"][1])
+        self.assertTrue(profile.is_relative_to(root / "system-temp"))
+        self.assertFalse(profile.exists())
+        self.assertFalse((root / "online/.session").exists())
+
+    def test_passwords_are_separate_by_server_and_user(self):
+        root = self.folder("multiple servers")
+        self.assertEqual(self.account(root, "sign-in", "--server", "one.example:31313", "--user", "SameUser", "--remember")["result"], "signed_in")
+        self.expected_password = "other secret"
+        self.assertEqual(self.account(root, "sign-in", "--server", "two.example:31313", "--user", "SameUser", "--remember",
+                                      password="other secret")["result"], "signed_in")
+        self.expected_password = "third secret"
+        self.assertEqual(self.account(root, "sign-in", "--server", "one.example:31313", "--user", "OtherUser", "--remember",
+                                      password="third secret")["result"], "signed_in")
+        keyring = root / "test-keyring"
+        self.assertEqual(len(list(keyring.iterdir())), 3)
+        self.assertEqual(self.calls(root)[-1]["profile"]["password"], "third secret")
+        self.expected_password = "secret pw"
+        self.account(root, "forget", "--server", "one.example:31313", "--user", "SameUser")
+        self.assertEqual(len(list(keyring.iterdir())), 2)
+        self.assertIn("saved=SameUser@two.example_31313 remembered=1", self.run_launcher(root, "--account", "status").stdout)
+
+    def test_changed_password_rejects_saved_login_and_allows_new_password(self):
+        root = self.folder("changed password")
+        self.assertEqual(self.account(root, "sign-in", "--server", "example.org:31313", "--user", "Player1", "--remember")["result"], "signed_in")
+        self.expected_password = "new password"
+        rejected = self.run_launcher(root, "--play", check=False)
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("saved password no longer works", rejected.stderr)
+        self.assertNotIn("password=", (root / "online/Player1@example.org_31313.account").read_text())
+        self.assertFalse(list((root / "test-keyring").iterdir()))
+        self.assertIn("remembered=0", (root / "online/Player1@example.org_31313.account").read_text())
+        self.assertEqual(self.account(root, "sign-in", "--server", "example.org:31313", "--user", "Player1", "--remember",
+                                      password="new password")["result"], "signed_in")
+        self.assertEqual(json.loads(self.run_launcher(root, "--play").stdout)["profile"]["password"], "new password")
+
+    def test_reset_clears_only_that_accounts_password(self):
+        root = self.folder("reset password")
+        for server in ("one.example:31313", "two.example:31313"):
+            self.assertEqual(self.account(root, "sign-in", "--server", server, "--user", "SameUser", "--remember")["result"], "signed_in")
+        self.assertEqual(self.account(root, "sign-in", "--server", "one.example:31313", "--user", "SameUser", "--remember",
+                                      password="bad")["result"], "wrong_password")
+        self.assertEqual(len(list((root / "test-keyring").iterdir())), 2)
+        # Reset requests and invalid codes leave both credentials intact.
+        self.assertIn("result=reset_sent", self.run_launcher(root, "--account", "request-reset", "--server", "one.example:31313",
+                                                                "--user", "SameUser", "--email", "test@example.invalid").stdout)
+        self.assertEqual(len(list((root / "test-keyring").iterdir())), 2)
+        self.assertEqual(self.account(root, "reset-password", "--server", "one.example:31313", "--user", "SameUser",
+                                      "--code", "bad-code", password="new password")["result"], "reset_code_rejected")
+        self.assertEqual(len(list((root / "test-keyring").iterdir())), 2)
+        self.assertEqual(self.account(root, "reset-password", "--server", "one.example:31313", "--user", "SameUser",
+                                      "--code", "reset-code", password="new password")["result"], "password_reset")
+        self.assertEqual(len(list((root / "test-keyring").iterdir())), 1)
+        self.assertTrue((root / "test-keyring/SameUser@two.example_31313").exists())
+
+    def test_missing_secret_service_keeps_password_for_this_run_only(self):
+        root = self.folder("keyring unavailable")
+        self.secret_store_fails = True
+        result = self.account(root, "sign-in", "--server", "example.org:31313", "--user", "Player1", "--remember")
+        self.assertEqual(result["result"], "signed_in")
+        self.assertIn("could not store", result["message"])
+        self.assertEqual(list((root / "test-keyring").iterdir()), [])
+        self.assertNotIn("password=", (root / "online/Player1@example.org_31313.account").read_text())
+        self.assertEqual(json.loads(self.run_launcher(root, "--play").stdout)["argv"][1:], [])
+
+    def test_pre_release_plaintext_is_removed_without_reusing_it(self):
+        root = self.folder("old account")
+        account = root / "online/Player1@example.org_31313.account"
+        write(account, "endpoint=example.org:31313\nnpid=Player1\npassword=old secret\n")
+        status = self.run_launcher(root, "--account", "status").stdout
+        self.assertIn("saved=Player1@example.org_31313 remembered=0", status)
+        self.assertNotIn("old secret", account.read_text())
+        self.assertEqual(list((root / "test-keyring").iterdir()), [])
 
     def test_errors_tokens_creation_and_servers(self):
         root = self.folder("errors")

@@ -165,6 +165,7 @@ struct State {
     Screen screen = Screen::home;
     std::string server, npid, password, confirm, email, token, ca_path, reset_code;
     bool remember = true, advanced = false, show_token = false;
+    bool verifying_saved = false;
     std::string message;
     bool message_good = false;
     std::optional<std::pair<Account, std::string>> session;   // Password known for this run.
@@ -351,6 +352,21 @@ std::optional<Choice> run_ui(Accounts& accounts) {
             const bool busy = worker.running;
             if (busy) input = Input{input.mouse_x, input.mouse_y};
             if (auto result = worker.take()) {
+                if (state.verifying_saved) {
+                    state.verifying_saved = false;
+                    if (result->code == "verified") {
+                        choice = Choice{Choice::online, state.session};
+                        continue;
+                    }
+                    if (result->code == "wrong_password" || result->code == "unknown_user") {
+                        state.session.reset();
+                        if (auto saved = accounts.active()) fill_from(state, *saved);
+                        go(Screen::sign_in);
+                    }
+                    state.message = result->message;
+                    state.message_good = false;
+                    continue;
+                }
                 state.message = result->message;
                 state.message_good = result->ok();
                 if (result->code == "reset_sent") {
@@ -389,15 +405,21 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                 if (input.escape) choice = Choice{};
                 std::string status = "Offline.";
                 if (active && state.session && state.session->first.id() == active->id())
-                    status = "Signed in as " + active->npid + " on " + active->endpoint + ".";
+                    status = "Saved: " + active->npid + " on " + active->endpoint + ".";
                 else if (active)
                     status = active->npid + " on " + active->endpoint + ": sign in to play online.";
                 painter.text(margin, y, status, muted);
                 y += 18;
                 const bool online_ready = active && state.session && state.session->first.id() == active->id();
                 if (online_ready) {
-                    if (form.button(margin, y, column, "Play online as " + active->npid, true))
-                        choice = Choice{Choice::online, state.session};
+                    if (form.button(margin, y, column, busy ? "Checking account..." : "Play online as " + active->npid,
+                                    true, !busy)) {
+                        const auto session = *state.session;
+                        state.verifying_saved = true;
+                        state.message = "Checking the saved password with " + session.first.endpoint + "...";
+                        worker.start([&accounts, session] {
+                            return accounts.verify_saved(session.first, session.second); }, wake);
+                    }
                     y += 24;
                     if (form.button(margin, y, column, "Play offline")) choice = Choice{Choice::offline};
                 } else {

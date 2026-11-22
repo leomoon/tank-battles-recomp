@@ -14,6 +14,7 @@
 #include <wincred.h>
 #else
 #include <cerrno>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/stat.h>
@@ -162,8 +163,10 @@ void write_private(const fs::path& path, const std::string& content) {
     }
 }
 
-fs::path private_temporary_directory(const fs::path& fallback) {
-    return fallback;   // Created owner-only by write_private.
+fs::path private_temporary_directory(const fs::path&) {
+    // The runtime profile is short-lived and must not sit beside saved accounts.
+    // write_private creates this child directory with an owner-only DACL.
+    return fs::temp_directory_path() / L"TankBattlesRecomp";
 }
 
 bool credential_store_available() { return true; }
@@ -283,15 +286,82 @@ fs::path private_temporary_directory(const fs::path& fallback) {
         const auto directory = fs::path(runtime) / "tank-battles-recomp";
         mkdir(directory.c_str(), 0700);
         struct stat info{};
-        if (stat(directory.c_str(), &info) == 0 && info.st_uid == getuid() && (info.st_mode & 077) == 0) return directory;
+        if (lstat(directory.c_str(), &info) == 0 && S_ISDIR(info.st_mode) &&
+            info.st_uid == getuid() && (info.st_mode & 077) == 0) return directory;
     }
-    return fallback;
+    // No session tmpfs: use a private per-user directory in the OS temp area.
+    // A pre-existing path must pass the same ownership and mode checks.
+    (void)fallback;
+    const auto directory = fs::temp_directory_path() / ("tank-battles-recomp-" + std::to_string(getuid()));
+    mkdir(directory.c_str(), 0700);
+    struct stat info{};
+    if (lstat(directory.c_str(), &info) == 0 && S_ISDIR(info.st_mode) &&
+        info.st_uid == getuid() && (info.st_mode & 077) == 0) return directory;
+    throw std::runtime_error("Cannot create a private temporary directory for online play");
 }
 
-bool credential_store_available() { return false; }
-bool store_password(const std::string&, const std::string&) { return false; }
-std::optional<std::string> load_password(const std::string&) { return std::nullopt; }
-void forget_password(const std::string&) {}
+namespace {
+// libsecret is optional on Linux. Load its small synchronous API at runtime so
+// the portable player has no additional link or package dependency.
+struct SecretApi {
+    void* library = dlopen("libsecret-1.so.0", RTLD_NOW | RTLD_LOCAL);
+    using Schema = void;
+    using NewSchema = Schema* (*)(const char*, int, ...);
+    using FreeSchema = void (*)(Schema*);
+    using Store = int (*)(const Schema*, const char*, const char*, const char*, void*, void**, ...);
+    using Lookup = char* (*)(const Schema*, void*, void**, ...);
+    using Clear = int (*)(const Schema*, void*, void**, ...);
+    using FreePassword = void (*)(char*);
+    NewSchema new_schema = library ? reinterpret_cast<NewSchema>(dlsym(library, "secret_schema_new")) : nullptr;
+    FreeSchema free_schema = library ? reinterpret_cast<FreeSchema>(dlsym(library, "secret_schema_unref")) : nullptr;
+    Store store = library ? reinterpret_cast<Store>(dlsym(library, "secret_password_store_sync")) : nullptr;
+    Lookup lookup = library ? reinterpret_cast<Lookup>(dlsym(library, "secret_password_lookup_sync")) : nullptr;
+    Clear clear = library ? reinterpret_cast<Clear>(dlsym(library, "secret_password_clear_sync")) : nullptr;
+    FreePassword free_password = library ? reinterpret_cast<FreePassword>(dlsym(library, "secret_password_free")) : nullptr;
+    bool ready() const { return new_schema && free_schema && store && lookup && clear && free_password; }
+};
+
+SecretApi& secret_api() {
+    static SecretApi api;
+    return api;
+}
+
+constexpr const char* secret_schema_name = "to.lmx.play.tank-battles.rpcn";
+}
+
+bool credential_store_available() { return secret_api().ready(); }
+
+bool store_password(const std::string& id, const std::string& password) {
+    auto& api = secret_api();
+    if (!api.ready()) return false;
+    auto* schema = api.new_schema(secret_schema_name, 0, "account", 0, nullptr);
+    if (!schema) return false;
+    const bool stored = api.store(schema, "default", ("Tank Battles: " + id).c_str(),
+                                  password.c_str(), nullptr, nullptr, "account", id.c_str(), nullptr);
+    api.free_schema(schema);
+    return stored;
+}
+
+std::optional<std::string> load_password(const std::string& id) {
+    auto& api = secret_api();
+    if (!api.ready()) return std::nullopt;
+    auto* schema = api.new_schema(secret_schema_name, 0, "account", 0, nullptr);
+    if (!schema) return std::nullopt;
+    char* value = api.lookup(schema, nullptr, nullptr, "account", id.c_str(), nullptr);
+    std::optional<std::string> result;
+    if (value) { result = value; api.free_password(value); }
+    api.free_schema(schema);
+    return result;
+}
+
+void forget_password(const std::string& id) {
+    auto& api = secret_api();
+    if (!api.ready()) return;
+    auto* schema = api.new_schema(secret_schema_name, 0, "account", 0, nullptr);
+    if (!schema) return;
+    api.clear(schema, nullptr, nullptr, "account", id.c_str(), nullptr);
+    api.free_schema(schema);
+}
 #endif
 
 void erase_private(const fs::path& path) {

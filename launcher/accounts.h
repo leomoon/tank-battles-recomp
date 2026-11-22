@@ -4,8 +4,7 @@
 // in the runtime's profile format; online/active names the selected one.
 //
 // Passwords never appear in command lines or logs. Remembered passwords live in
-// Windows Credential Manager, or (where no keyring is universally available) in
-// the account file restricted to this user. Every launch and check writes a
+// the operating system credential store, keyed by server and username. Every launch and check writes a
 // temporary runtime profile readable only by this user and erases it afterwards.
 #include "launcher_paths.h"
 
@@ -47,6 +46,7 @@ public:
     Result create(Account account, const std::string& email, const std::string& password, bool remember);
     Result request_reset(const Account& account, const std::string& email);
     Result reset_password(const Account& account, const std::string& code, const std::string& password);
+    Result verify_saved(const Account& account, const std::string& password);
 
     // Starts the game; online with `password` for the active account when given.
     int play(const std::optional<std::pair<Account, std::string>>& online);
@@ -61,7 +61,7 @@ private:
                const std::string* email = nullptr, const std::string* reset_code = nullptr);
     fs::path write_runtime_profile(const Account& account, const std::string& password,
                                    const std::string* email = nullptr, const std::string* reset_code = nullptr) const;
-    void save(const Account& account, const std::string* password) const;
+    bool save(const Account& account, const std::string* password) const;
 
     Folder folder_;
 };

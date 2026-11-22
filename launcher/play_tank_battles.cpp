@@ -15,6 +15,8 @@
 //   --account ACTION ...      scriptable account management, password on stdin:
 //       sign-in --server HOST:PORT --user NAME [--token T] [--ca FILE] [--remember]
 //       create  --server HOST:PORT --user NAME --email ADDRESS [--ca FILE] [--remember]
+//       request-reset --server HOST:PORT --user NAME --email ADDRESS [--ca FILE]
+//       reset-password --server HOST:PORT --user NAME --code CODE [--ca FILE]
 //       status | sign-out | forget --server HOST:PORT --user NAME
 #include "accounts.h"
 #include "launcher_paths.h"
@@ -65,7 +67,7 @@ int account_cli(Accounts& accounts, const std::vector<std::string>& arguments) {
         const auto active = accounts.active();
         printf("active=%s\n", active ? active->id().c_str() : "");
         for (const auto& account : accounts.saved())
-            printf("saved=%s remembered=%d\n", account.id().c_str(), account.remembered ? 1 : 0);
+            printf("saved=%s remembered=%d\n", account.id().c_str(), accounts.remembered_password(account).has_value() ? 1 : 0);
         return 0;
     }
     if (action == "sign-out") {
@@ -88,20 +90,28 @@ int account_cli(Accounts& accounts, const std::vector<std::string>& arguments) {
             return print({"invalid_input", error.what()});
         }
     }
+    if (action == "request-reset") return print(accounts.request_reset(account, option(arguments, "--email")));
+    if (action != "sign-in" && action != "create" && action != "reset-password") {
+        fprintf(stderr, "Unknown --account action %s\n", action.c_str());
+        return 2;
+    }
     std::string password;
     std::getline(std::cin, password);   // Never on the command line.
     if (!password.empty() && password.back() == '\r') password.pop_back();
     const bool remember = flag(arguments, "--remember");
     if (action == "sign-in") return print(accounts.sign_in(account, password, remember));
     if (action == "create") return print(accounts.create(account, option(arguments, "--email"), password, remember));
-    fprintf(stderr, "Unknown --account action %s\n", action.c_str());
+    if (action == "reset-password") return print(accounts.reset_password(account, option(arguments, "--code"), password));
     return 2;
 }
 
 void remove_stale_sessions(const Folder& folder) {
     // Profiles from a run that crashed; each is erased after a normal run.
     std::error_code error;
-    for (const auto& directory : {private_temporary_directory(folder.online() / ".session"), folder.online() / ".session"})
+    std::vector<fs::path> directories{folder.online() / ".session"};
+    try { directories.push_back(private_temporary_directory(folder.online() / ".session")); }
+    catch (const std::exception&) { /* Offline play still works without a temp area. */ }
+    for (const auto& directory : directories)
         for (const auto& entry : fs::directory_iterator(directory, error))
             if (entry.path().filename().string().rfind("session-", 0) == 0) erase_private(entry.path());
 }
@@ -122,7 +132,14 @@ int launch(const std::vector<std::string>& arguments) {
     if (flag(arguments, "--offline")) {
     } else if (flag(arguments, "--play")) {
         if (const auto active = accounts.active())
-            if (auto password = accounts.remembered_password(*active)) online = std::make_pair(*active, *password);
+            if (auto password = accounts.remembered_password(*active)) {
+                const auto checked = accounts.verify_saved(*active, *password);
+                if (checked.code != "verified") {
+                    report(checked.message);
+                    return 1;
+                }
+                online = std::make_pair(*active, *password);
+            }
     } else {
         const auto choice = run_ui(accounts);
         if (!choice) {
@@ -133,12 +150,19 @@ int launch(const std::vector<std::string>& arguments) {
             online = choice->session;
         }
     }
-    const int status = accounts.play(online);
+    int status = -1;
+    try { status = accounts.play(online); }
+    catch (const std::exception& error) { report(error.what()); return 2; }
     if (status < 0) {
         report("Could not start " + utf8(folder.player()));
         return 2;
     }
     return status;
+}
+
+int launch_safely(const std::vector<std::string>& arguments) {
+    try { return launch(arguments); }
+    catch (const std::exception& error) { report(error.what()); return 2; }
 }
 
 }  // namespace
@@ -158,10 +182,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     std::vector<std::string> arguments;
     for (int i = 1; i < count; ++i) arguments.push_back(utf8(fs::path(argv[i])));
     LocalFree(argv);
-    return launch(arguments);
+    return launch_safely(arguments);
 }
 #else
 int main(int argc, char** argv) {
-    return launch(std::vector<std::string>(argv + 1, argv + argc));
+    return launch_safely(std::vector<std::string>(argv + 1, argv + argc));
 }
 #endif

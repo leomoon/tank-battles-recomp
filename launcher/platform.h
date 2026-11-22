@@ -34,8 +34,8 @@ void erase_private(const fs::path& path);
 // A directory for short-lived secret files, readable only by this user.
 fs::path private_temporary_directory(const fs::path& fallback);
 
-// Remembered passwords. Windows uses Credential Manager. Elsewhere there is no
-// universally available keyring, so the caller keeps them in a 0600 file.
+// Remembered passwords are keyed by server and user in Windows Credential
+// Manager or the Linux Secret Service. No file fallback is allowed.
 bool credential_store_available();
 bool store_password(const std::string& id, const std::string& password);
 std::optional<std::string> load_password(const std::string& id);
