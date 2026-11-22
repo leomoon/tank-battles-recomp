@@ -2,6 +2,7 @@
 executables outside the verified trees, private keys, modified resources and
 tampered or unsafe Builder.exe payloads, and passes a clean package."""
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -15,6 +16,7 @@ import zipfile
 
 import audit_builder
 import package_builder
+from install_layout import sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,6 +76,25 @@ class AuditTests(unittest.TestCase):
         script = root / "scripts/port.py"
         script.write_text(script.read_text() + "\n# changed\n")
         self.assertIn("verification failed", " ".join(self.problems(root)))
+
+    def test_windows_gtk_dlls_must_match_the_resource_manifest(self):
+        root = self.copy("windows-gtk")
+        dll = root / "gtk/bin/libgtk-4-1.dll"
+        dll.parent.mkdir(parents=True)
+        dll.write_bytes(b"MZ synthetic DLL containing a parser delimiter: -----BEGIN PRIVATE KEY-----\0")
+        self.assertIn("Windows GTK4 files differ from the builder manifest", self.problems(root))
+
+        manifest = root / "gtk/manifest.json"
+        manifest.write_text("{}")
+        package_file = root / "package.json"
+        package = json.loads(package_file.read_text())
+        package["files"].update({path.relative_to(root).as_posix(): sha256(path) for path in [dll, manifest]})
+        package["windows_gtk4_manifest_sha256"] = sha256(manifest)
+        package_file.write_text(json.dumps(package))
+        self.assertEqual(self.problems(root), [])
+
+        dll.write_bytes(b"MZ modified DLL")
+        self.assertIn("Windows GTK4 files differ from the builder manifest", self.problems(root))
 
     def test_builder_exe_payload_tampering_and_unsafe_paths(self):
         stub = self.temporary / "stub.exe"

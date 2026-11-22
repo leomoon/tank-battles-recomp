@@ -12,9 +12,10 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import Mock, patch
 import zipfile
 
-import builder_app
+import builder_session
 import package_builder
 
 
@@ -89,8 +90,35 @@ class PackagingTests(unittest.TestCase):
 
 
 class BuilderWindowLogicTests(unittest.TestCase):
+    def test_gui_python_starts_the_console_interpreter_for_setup(self):
+        pythonw = Path("/builder with spaces/toolchain/python/pythonw.exe")
+        with patch.object(builder_session.sys, "executable", str(pythonw)):
+            command = builder_session.engine_command({})
+        self.assertEqual(command[0], str(pythonw.with_name("python.exe")))
+
+    def test_shared_session_finishes_and_remembers_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pkg = Path(directory) / "game.pkg"
+            pkg.touch()
+            output = Path(directory) / "player"
+            events = iter([{"event": "result", "ok": True}, {"event": "exit", "status": 0}])
+            engine = Mock()
+            engine.events.get_nowait.side_effect = events
+            with patch.object(builder_session, "load_settings", return_value={}), \
+                 patch.object(builder_session, "save_settings") as save, \
+                 patch.object(builder_session, "Engine", return_value=engine):
+                session = builder_session.BuilderSession()
+                self.assertFalse(session.start({"output": str(output)}))
+                self.assertIn("Choose your purchased", session.message)
+                self.assertTrue(session.start({"pkg": str(pkg), "output": str(output)}))
+                self.assertTrue(session.poll())
+                self.assertIsNone(session.engine)
+                self.assertTrue(session.success)
+                self.assertEqual(session.output, output)
+                self.assertTrue(save.call_args.args[0]["previous_build"])
+
     def test_engine_command_passes_paths_only(self):
-        command = builder_app.engine_command({"pkg": "/p/game.pkg", "unlock": "/p/key.edat", "elf": "/p/EBOOT.elf",
+        command = builder_session.engine_command({"pkg": "/p/game.pkg", "unlock": "/p/key.edat", "elf": "/p/EBOOT.elf",
                                               "output": "/games/Tank Battles", "jobs": 3, "workspace": ""})
         self.assertIn("--json", command)
         self.assertIn("--stdin-control", command)
@@ -100,13 +128,13 @@ class BuilderWindowLogicTests(unittest.TestCase):
         self.assertNotIn("--workspace", command)
 
     def test_missing_files_are_named_before_starting(self):
-        problems = builder_app.check_values({"pkg": "/nonexistent/game.pkg", "elf": ""})
+        problems = builder_session.check_values({"pkg": "/nonexistent/game.pkg", "elf": ""})
         self.assertTrue(any("Game package not found" in problem for problem in problems))
-        self.assertEqual(builder_app.check_values({"previous_build": True}), [])
-        self.assertTrue(builder_app.check_values({}))
+        self.assertEqual(builder_session.check_values({"previous_build": True}), [])
+        self.assertTrue(builder_session.check_values({}))
 
     def test_events_drive_stages_progress_and_problems(self):
-        model = builder_app.Model()
+        model = builder_session.Model()
         for event in ({"event": "stage", "stage": "inputs", "state": "started"},
                       {"event": "log", "line": "[error] EBOOT.elf: /x/EBOOT.elf"},
                       {"event": "log", "line": "  Supply your decrypted EBOOT.elf."},

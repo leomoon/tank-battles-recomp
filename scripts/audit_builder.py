@@ -30,6 +30,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import package_builder  # noqa: E402
 import package_resources  # noqa: E402
+from install_layout import sha256  # noqa: E402
 from runtime_bundle import archive_members  # noqa: E402
 
 FORBIDDEN_SUFFIXES = {".pkg", ".self", ".sprx", ".edat", ".sdat", ".rap", ".rif", ".rifkey", ".sfo", ".pup",
@@ -42,7 +43,9 @@ PPU_FUNCTION = re.compile(rb"func_00[0-9A-F]{6}")
 SPU_FUNCTION = re.compile(rb"spu_[0-9a-f]{64}_spu_func_[0-9A-F]{8}")
 TITLE_SYMBOL_LIMIT = 64
 TITLE_NAMES = re.compile(r"(^|/)ppu_recomp_\d+\.(c|cpp|o|obj)$|spu_[0-9a-f]{64}")
-PRIVATE_KEY = re.compile(rb"-----BEGIN (?:RSA |EC |ENCRYPTED |OPENSSH )?PRIVATE KEY-----")
+# A binary may contain the parser's NUL-terminated delimiter. A PEM header
+# ends its line before the key material.
+PRIVATE_KEY = re.compile(rb"-----BEGIN (?:RSA |EC |ENCRYPTED |OPENSSH )?PRIVATE KEY-----[ \t]*\r?\n")
 OBJECT_SUFFIXES = {".o", ".obj"}
 # Verified elsewhere and allowed to hold compiled code.
 TRUSTED_TREES = ("runtime/", "toolchain/")
@@ -77,6 +80,7 @@ def inspect(name: str, data: bytes | Path, problems: list[str]) -> None:
     parts = set(PurePosixPath(lower).parts[:-1])
     base = PurePosixPath(lower).name
     trusted = name.startswith(TRUSTED_TREES)
+    gtk_dll = PurePosixPath(lower).parent == PurePosixPath("gtk/bin") and lower.endswith(".dll")
     if PurePosixPath(lower).suffix in FORBIDDEN_SUFFIXES or base in FORBIDDEN_NAMES:
         problems.append(f"purchased or personal file: {name}")
     if parts & FORBIDDEN_PARTS and not name.startswith("toolchain/"):
@@ -88,7 +92,7 @@ def inspect(name: str, data: bytes | Path, problems: list[str]) -> None:
     if name.startswith("toolchain/"):
         return   # Pinned, verified upstream archives; scanning 30k files gains nothing.
     blob = data.read_bytes() if isinstance(data, Path) else data
-    if not trusted and (blob.startswith(b"\x7fELF") or blob.startswith(b"MZ")):
+    if not trusted and (blob.startswith(b"\x7fELF") or (blob.startswith(b"MZ") and not gtk_dll)):
         problems.append(f"executable outside the verified runtime/toolchain: {name}")
     if PRIVATE_KEY.search(blob):
         problems.append(f"private key: {name}")
@@ -115,15 +119,25 @@ def audit(path: Path, source: str | None = None) -> dict:
     problems: list[str] = []
     count = 0
     package = None
+    gtk_files = {}
     for name, data in files_of(path):
         count += 1
         if name == "package.json":
             package = json.loads(data.read_text() if isinstance(data, Path) else data.decode())
+        if name.startswith("gtk/"):
+            gtk_files[name] = sha256(data) if isinstance(data, Path) else hashlib.sha256(data).hexdigest()
         inspect(name, data, problems)
     if package is None:
         problems.append("package.json is missing")
     elif source and package.get("source_commit") != source:
         problems.append(f"source {package.get('source_commit')} differs from the expected {source}")
+    if package is not None:
+        gtk_expected = {name: digest for name, digest in package.get("files", {}).items() if name.startswith("gtk/")}
+        if gtk_files != gtk_expected:
+            problems.append("Windows GTK4 files differ from the builder manifest")
+        digest = package.get("windows_gtk4_manifest_sha256")
+        if gtk_files and (not digest or gtk_files.get("gtk/manifest.json") != digest):
+            problems.append("Windows GTK4 package manifest is missing or mismatched")
     if path.is_dir() and package is not None:
         try:
             package_resources.verify(path)

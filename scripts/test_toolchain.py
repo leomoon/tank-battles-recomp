@@ -46,6 +46,13 @@ class ManifestTests(unittest.TestCase):
     def test_targets_are_the_supported_baselines(self):
         self.assertEqual(toolchain.TARGETS, {"linux": "x86_64-linux-gnu.2.31", "windows": "x86_64-windows-gnu"})
 
+    def test_windows_cmake_uses_the_zig_executable_directly(self):
+        generated = toolchain.cmake_toolchain("windows", "windows", "0.17.1")
+        self.assertIn('set(CMAKE_C_COMPILER "${TB_TOOLCHAIN_ROOT}/zig/zig.exe" cc)', generated)
+        self.assertIn('set(CMAKE_CXX_COMPILER "${TB_TOOLCHAIN_ROOT}/zig/zig.exe" c++)', generated)
+        linux = toolchain.cmake_toolchain("linux", "windows", "0.17.1")
+        self.assertIn('set(CMAKE_C_COMPILER "${TB_TOOLCHAIN_ROOT}/bin/zig-cc")', linux)
+
 
 class FetchAndExtractTests(unittest.TestCase):
     def test_a_digest_mismatch_is_rejected_and_nothing_is_cached(self):

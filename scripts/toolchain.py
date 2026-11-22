@@ -161,8 +161,8 @@ set(CMAKE_SYSTEM_NAME {system})
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 set(TB_ZIG_TARGET "{target}")
 set(TB_TOOLCHAIN "zig-{zig_version}")
-set(CMAKE_C_COMPILER "${{TB_TOOLCHAIN_ROOT}}/bin/zig-cc{wrapper}")
-set(CMAKE_CXX_COMPILER "${{TB_TOOLCHAIN_ROOT}}/bin/zig-c++{wrapper}")
+set(CMAKE_C_COMPILER {c_compiler})
+set(CMAKE_CXX_COMPILER {cxx_compiler})
 set(CMAKE_AR "${{TB_TOOLCHAIN_ROOT}}/bin/zig-ar{wrapper}" CACHE FILEPATH "" FORCE)
 set(CMAKE_RANLIB "${{TB_TOOLCHAIN_ROOT}}/bin/zig-ranlib{wrapper}" CACHE FILEPATH "" FORCE)
 set(CMAKE_RC_COMPILER "${{TB_TOOLCHAIN_ROOT}}/bin/zig-rc{wrapper}" CACHE FILEPATH "" FORCE)
@@ -178,6 +178,20 @@ set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 """
+
+
+def cmake_toolchain(host, target_os, zig_version):
+    system = "Windows" if target_os == "windows" else "Linux"
+    if host == "windows":
+        # Ninja can invoke the executable directly, including paths that cmd.exe would parse again.
+        driver = '"${TB_TOOLCHAIN_ROOT}/zig/zig.exe"'
+        c_compiler, cxx_compiler = f"{driver} cc", f"{driver} c++"
+    else:
+        c_compiler = '"${TB_TOOLCHAIN_ROOT}/bin/zig-cc"'
+        cxx_compiler = '"${TB_TOOLCHAIN_ROOT}/bin/zig-c++"'
+    return TOOLCHAIN_FILE.format(target=TARGETS[target_os], system=system, zig_version=zig_version,
+                                 wrapper=".cmd" if host == "windows" else "",
+                                 c_compiler=c_compiler, cxx_compiler=cxx_compiler)
 
 
 def write_wrappers(bin_dir, host):
@@ -221,12 +235,9 @@ def stage(cache, dest, host, manifest=None):
     for name in manifest["wheels"]:
         install_wheel(paths[f"wheel:{name}"], site)
     write_wrappers(dest / "bin", host)
-    wrapper = ".cmd" if host == "windows" else ""
     zig_version = manifest["tools"]["zig"]["version"]
-    for target_os, target in TARGETS.items():
-        system = "Windows" if target_os == "windows" else "Linux"
-        (dest / "cmake" / f"zig-{target_os}.cmake").write_text(TOOLCHAIN_FILE.format(
-            target=target, system=system, wrapper=wrapper, zig_version=zig_version))
+    for target_os in TARGETS:
+        (dest / "cmake" / f"zig-{target_os}.cmake").write_text(cmake_toolchain(host, target_os, zig_version))
     identity = {
         "schema": 1,
         "host": host,

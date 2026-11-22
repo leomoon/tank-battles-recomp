@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import port  # noqa: E402
@@ -48,6 +49,8 @@ RESERVE_MB = 1536
 # Workspace footprint: translations (also staged while retranslating), build
 # outputs, imported game, compiler cache, with margin.
 WORKSPACE_MB = dict(translations=1100, build=800, game=450, cache=400)
+CONFIGURE_STATUS_SECONDS = 30
+CONFIGURE_SILENCE_LIMIT = 600
 NINJA_PROGRESS = re.compile(r"^\[(\d+)/(\d+)\]")
 LIFT_PROGRESS = re.compile(r"lifted (\d+)/(\d+) functions")
 
@@ -176,7 +179,7 @@ class Children:
         options = dict(cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", bufsize=1)
         if os.name == "nt":
-            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         else:
             options["start_new_session"] = True   # Its own group: killpg reaches its compilers too.
         with self.lock:
@@ -190,49 +193,105 @@ class Children:
         with self.lock:
             self.processes.discard(process)
 
+    @staticmethod
+    def stop(process):
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=subprocess.CREATE_NO_WINDOW, timeout=5)
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError):
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
     def terminate_all(self):
         with self.lock:
             self.cancelled = True
             processes = list(self.processes)
         for process in processes:
-            if process.poll() is not None:
-                continue
-            try:
-                if os.name == "nt":
-                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    os.killpg(process.pid, signal.SIGTERM)
-            except (OSError, ProcessLookupError):
-                pass
-        for process in processes:
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                if os.name != "nt":
-                    with contextlib.suppress(OSError):
-                        os.killpg(process.pid, signal.SIGKILL)
-                process.kill()
+            self.stop(process)
+
+
+def windows_zig_configure(command, env) -> bool:
+    return (os.name == "nt" and env is not None and "ZIG_GLOBAL_CACHE_DIR" in env
+            and Path(command[0]).stem.lower() == "cmake" and "-S" in command and "-B" in command)
 
 
 def make_executor(children: Children, reporter: Reporter):
     def execute(command, *, cwd, env=None):
         process = children.start(command, cwd, env)
+        monitor = None
+        finished = threading.Event()
+        stalled = threading.Event()
+        last_output = time.monotonic()
+        if windows_zig_configure(command, env):
+            cmake_log = Path(command[command.index("-B") + 1]) / "CMakeFiles/CMakeConfigureLog.yaml"
+
+            def watch():
+                while not finished.wait(CONFIGURE_STATUS_SECONDS) and process.poll() is None:
+                    quiet = time.monotonic() - last_output
+                    if quiet >= CONFIGURE_SILENCE_LIMIT:
+                        stalled.set()
+                        reporter.log(f"[configure] Stopping CMake after {int(quiet)} seconds without output. CMake log: {cmake_log}")
+                        children.stop(process)
+                        return
+                    if quiet >= CONFIGURE_STATUS_SECONDS:
+                        reporter.log(f"[configure] Waiting for CMake and Zig (no output for {int(quiet)} seconds).")
+
+            monitor = threading.Thread(target=watch, daemon=True)
+            monitor.start()
         try:
-            for line in process.stdout:
-                line = line.rstrip("\r\n")
-                reporter.log(line)
-                match = NINJA_PROGRESS.match(line) or LIFT_PROGRESS.search(line)
-                if match:
-                    reporter.progress(int(match[1]), int(match[2]))
+            with process.stdout:
+                for line in process.stdout:
+                    last_output = time.monotonic()
+                    line = line.rstrip("\r\n")
+                    reporter.log(line)
+                    match = NINJA_PROGRESS.match(line) or LIFT_PROGRESS.search(line)
+                    if match:
+                        reporter.progress(int(match[1]), int(match[2]))
             process.wait()
         finally:
+            finished.set()
+            if monitor:
+                monitor.join()
             children.finished(process)
         if children.cancelled:
             raise Cancelled()
+        if stalled.is_set():
+            raise TimeoutError(f"CMake and Zig stopped reporting output for {CONFIGURE_SILENCE_LIMIT // 60} minutes. See {cmake_log}.")
         if process.returncode:
             raise subprocess.CalledProcessError(process.returncode, command)
     return execute
+
+
+@contextlib.contextmanager
+def keep_system_awake():
+    if os.name != "nt":
+        yield
+        return
+    import ctypes
+    set_state = ctypes.windll.kernel32.SetThreadExecutionState
+    set_state.argtypes = [ctypes.c_uint32]
+    set_state.restype = ctypes.c_uint32
+    continuous, system_required = 0x80000000, 0x00000001
+    previous = set_state(continuous | system_required)
+    try:
+        yield
+    finally:
+        if previous:
+            set_state(continuous | previous)
 
 
 def install_cancellation(children: Children, stdin_control: bool):
@@ -431,7 +490,7 @@ def run(args, config, reporter: Reporter, stdin_control=False, setup=run_setup) 
     writer = LineWriter(reporter.log)
     try:
         install_cancellation(children, stdin_control)
-        with contextlib.redirect_stdout(writer), contextlib.redirect_stderr(writer):
+        with keep_system_awake(), contextlib.redirect_stdout(writer), contextlib.redirect_stderr(writer):
             try:
                 player = setup(args, config, reporter)
             finally:

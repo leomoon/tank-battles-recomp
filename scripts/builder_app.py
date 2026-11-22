@@ -7,153 +7,15 @@ settings and online accounts.
 """
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-import queue
-import subprocess
 import sys
-import threading
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-from player_folder import default_output, launcher_name  # noqa: E402
-from setup_engine import STAGES  # noqa: E402
-
-LOG_LINES = 4000
+from builder_session import FIELDS, ROOT, STAGE_SYMBOLS, STAGES, BuilderSession, browse_output, output_folder, play
+from player_folder import default_output, launcher_name
 
 
-def settings_path() -> Path:
-    if os.name == "nt":
-        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming") / "TankBattlesRecomp"
-    else:
-        config = os.environ.get("XDG_CONFIG_HOME")
-        base = (Path(config) if config and Path(config).is_absolute() else Path.home() / ".config") / "tank-battles-recomp"
-    return base / "builder.json"
-
-
-def load_settings() -> dict:
-    try:
-        return json.loads(settings_path().read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-def save_settings(values: dict) -> None:
-    path = settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(values, indent=2) + "\n")
-
-
-def engine_command(values: dict) -> list[str]:
-    """The setup engine invocation for the chosen inputs. Paths only; no secrets."""
-    command = [sys.executable, "-E", "-s", str(ROOT / "scripts/setup_engine.py"), "--json", "--stdin-control"]
-    if values.get("workspace"):
-        command += ["--workspace", values["workspace"]]
-    for option, key in (("--pkg", "pkg"), ("--unlock", "unlock"), ("--elf", "elf"), ("--keys", "keys"), ("--rap", "rap")):
-        if values.get(key):
-            command += [option, values[key]]
-    command += ["--output", values.get("output") or str(default_output())]
-    if values.get("jobs"):
-        command += ["--jobs", str(values["jobs"])]
-    return command
-
-
-def check_values(values: dict) -> list[str]:
-    """Problems the window can name before starting; the engine checks the rest."""
-    problems = []
-    for key, label in (("pkg", "Game package"), ("unlock", "Unlock file"), ("elf", "Decrypted EBOOT.elf"),
-                       ("keys", "SELF keys"), ("rap", "RAP file")):
-        if values.get(key) and not Path(values[key]).is_file():
-            problems.append(f"{label} not found: {values[key]}")
-    if not values.get("pkg") and not values.get("previous_build"):
-        problems.append("Choose your purchased Tank Battles package (.pkg).")
-    return problems
-
-
-class Model:
-    """Build state from engine events, independent of the window toolkit."""
-
-    def __init__(self):
-        self.stages = {name: "waiting" for name, _ in STAGES}
-        self.progress = None          # (done, total) for the running stage
-        self.lines: list[str] = []
-        self.result: dict | None = None
-        self.log_path = None
-
-    def apply(self, event: dict) -> None:
-        kind = event.get("event")
-        if kind == "stage":
-            self.stages[event["stage"]] = event["state"]
-            if event["state"] in ("started", "done", "reused"):
-                self.progress = None
-        elif kind == "progress":
-            self.progress = (event["done"], event["total"])
-        elif kind == "log":
-            self.lines.append(event["line"])
-            del self.lines[:-LOG_LINES]
-        elif kind == "result":
-            self.result = event
-            self.log_path = event.get("log")
-
-    def problems(self) -> list[str]:
-        """The failed input checks, as the engine printed them."""
-        found, lines = [], self.lines
-        for index, line in enumerate(lines):
-            if line.startswith("[error] "):
-                action = lines[index + 1].strip() if index + 1 < len(lines) and lines[index + 1].startswith("  ") else ""
-                found.append(line[len("[error] "):] + (f": {action}" if action else ""))
-        return found
-
-
-class Engine:
-    def __init__(self, command: list[str]):
-        options = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                       encoding="utf-8", errors="replace", bufsize=1)
-        if os.name == "nt":
-            options["creationflags"] = subprocess.CREATE_NO_WINDOW
-        self.process = subprocess.Popen(command, **options)
-        self.events: queue.Queue = queue.Queue()
-        threading.Thread(target=self._read, daemon=True).start()
-
-    def _read(self):
-        for line in self.process.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                self.events.put(json.loads(line))
-            except ValueError:
-                self.events.put({"event": "log", "line": line})
-        self.process.wait()
-        self.events.put({"event": "exit", "status": self.process.returncode})
-
-    def cancel(self):
-        try:
-            self.process.stdin.write("cancel\n")
-            self.process.stdin.flush()
-        except OSError:
-            pass
-
-
-def open_path(path: Path) -> None:
-    if os.name == "nt":
-        os.startfile(str(path))  # noqa: S606 - opens the user's own folder
-    else:
-        subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def play(output: Path) -> None:
-    launcher = output / launcher_name()
-    options = {"cwd": str(output)}
-    if os.name == "nt":
-        options["creationflags"] = subprocess.DETACHED_PROCESS
-    else:
-        options["start_new_session"] = True
-    subprocess.Popen([str(launcher)], **options)
-
-
-def run_window(self_test: bool = False) -> int:
+def run_tk_window(session: BuilderSession, self_test: bool) -> int:
     if os.name == "nt":
         try:
             import ctypes
@@ -172,12 +34,11 @@ def run_window(self_test: bool = False) -> int:
     root.tk.call("tk", "scaling", 96 * factor / 72)
     root.geometry(f"{int(760 * factor)}x{int(620 * factor)}")
     root.minsize(int(640 * factor), int(520 * factor))
-    saved = load_settings()
+    saved = session.saved
     fields = {key: tk.StringVar(value=saved.get(key, "")) for key in ("pkg", "unlock", "elf", "keys", "rap", "workspace")}
     fields["output"] = tk.StringVar(value=saved.get("output") or str(default_output()))
     jobs = tk.StringVar(value=str(saved.get("jobs") or ""))
     advanced = tk.BooleanVar(value=bool(saved.get("keys") or saved.get("rap") or saved.get("workspace")))
-    state = {"engine": None, "model": Model()}
 
     frame = ttk.Frame(root, padding=12)
     frame.pack(fill="both", expand=True)
@@ -209,10 +70,8 @@ def run_window(self_test: bool = False) -> int:
         if at is None:
             row += 1
 
-    picker("Game package (.pkg)", "pkg", [("PlayStation packages", "*.pkg *.PKG")])
-    picker("Unlock (.edat)", "unlock", [("Unlock files", "*.edat *.EDAT")])
-    picker("Decrypted EBOOT.elf", "elf", [("Executables", "*.elf *.ELF")])
-    picker("Install to", "output", [], folder=True)
+    for key, label, patterns in FIELDS[:4]:
+        picker(label, key, [(label, " ".join(patterns))], folder=not patterns)
     extra = ttk.Frame(frame)
     extra.columnconfigure(1, weight=1)
     toggle = ttk.Checkbutton(frame, text="Advanced", variable=advanced,
@@ -221,9 +80,8 @@ def run_window(self_test: bool = False) -> int:
     row += 1
     extra.grid(row=row, column=0, columnspan=3, sticky="ew")
     row += 1
-    picker("SELF keys (instead of an ELF)", "keys", [("Key files", "*")], parent=extra, at=0)
-    picker("RAP (license-2 unlocks only)", "rap", [("RAP files", "*.rap *.RAP")], parent=extra, at=1)
-    picker("Workspace (several GB)", "workspace", [], folder=True, parent=extra, at=2)
+    for line, (key, label, patterns) in enumerate(FIELDS[4:]):
+        picker(label, key, [(label, " ".join(patterns))], folder=not patterns, parent=extra, at=line)
     ttk.Label(extra, text="Parallel jobs (empty: automatic)").grid(row=3, column=0, sticky="w", pady=2)
     ttk.Spinbox(extra, from_=1, to=64, textvariable=jobs, width=6).grid(row=3, column=1, sticky="w", pady=2)
     if not advanced.get():
@@ -258,8 +116,6 @@ def run_window(self_test: bool = False) -> int:
     for button in (folder_button, play_button, cancel_button, build_button):
         button.pack(side="left", padx=4)
 
-    symbols = {"waiting": "  ", "started": "> ", "reused": "= ", "done": "+ ", "failed": "x ", "cancelled": "- "}
-
     def values() -> dict:
         chosen = {key: variable.get().strip() for key, variable in fields.items()}
         chosen["jobs"] = int(jobs.get()) if jobs.get().strip().isdigit() and int(jobs.get()) > 0 else None
@@ -271,99 +127,60 @@ def run_window(self_test: bool = False) -> int:
         build_button.configure(state="disabled" if running else "normal")
         cancel_button.configure(state="normal" if running else "disabled")
 
-    def refresh(model: Model):
+    def refresh():
+        model = session.model
+        running = session.engine is not None
+        message.configure(text=session.message, foreground={True: "dark green", False: "dark red", None: ""}[session.success])
+        set_running(running)
         for name, label in STAGES:
-            marks[name].configure(text=symbols.get(model.stages[name], "  ") + label)
+            marks[name].configure(text=STAGE_SYMBOLS.get(model.stages[name], "  ") + label)
         if model.progress and model.progress[1]:
-            bar.configure(mode="determinate")
             bar.stop()
-            bar["value"] = 1000 * model.progress[0] / model.progress[1]
+            bar.configure(mode="determinate", value=1000 * model.progress[0] / model.progress[1])
+        elif running:
+            if bar["mode"] != "indeterminate":
+                bar.configure(mode="indeterminate")
+                bar.start(15)
+        else:
+            bar.stop()
+            bar.configure(mode="determinate", value=1000 if session.success else 0)
         log_box.configure(state="normal")
         log_box.delete("1.0", "end")
         log_box.insert("end", "\n".join(model.lines[-400:]))
         log_box.see("end")
         log_box.configure(state="disabled")
-        if model.log_path:
-            log_label.configure(text=f"Log: {model.log_path}")
+        log_label.configure(text=f"Log: {model.log_path}" if model.log_path else "")
+        if session.success:
+            play_button.configure(state="normal")
 
     def poll():
-        engine = state["engine"]
-        if engine is None:
-            return
-        model = state["model"]
-        finished = False
-        try:
-            while True:
-                event = engine.events.get_nowait()
-                if event["event"] == "exit":
-                    finished = True
-                else:
-                    model.apply(event)
-                    if event["event"] == "stage" and event["state"] == "started":
-                        bar.configure(mode="indeterminate")
-                        bar.start(15)
-        except queue.Empty:
-            pass
-        refresh(model)
-        if not finished:
+        if session.poll():
+            refresh()
+        if session.engine:
             root.after(150, poll)
-            return
-        bar.stop()
-        state["engine"] = None
-        set_running(False)
-        result = model.result or {"ok": False, "error": "The build stopped unexpectedly.", "action": "Press Build to retry."}
-        if result.get("ok"):
-            bar.configure(mode="determinate")
-            bar["value"] = 1000
-            output = Path(values()["output"] or default_output())
-            message.configure(foreground="dark green",
-                              text=f"Done. Your game is in {output}. Press Play, or start \"{launcher_name()}\" there. "
-                                   f"Saves and settings live in {output / 'game'} and are kept when you rebuild.")
-            play_button.configure(state="normal")
-            current = values()
-            current["previous_build"] = True
-            save_settings(current)
-        else:
-            details = "\n".join(model.problems())
-            message.configure(foreground="dark red",
-                              text=f"{result.get('error', '')} {result.get('action', '')}" + (f"\n{details}" if details else ""))
 
     def start_build():
-        chosen = values()
-        chosen["previous_build"] = load_settings().get("previous_build")
-        problems = check_values(chosen)
-        if problems:
-            message.configure(foreground="dark red", text="\n".join(problems))
-            return
-        save_settings({k: v for k, v in chosen.items()})
-        state["model"] = Model()
-        message.configure(foreground="", text="Building. This takes a while the first time; you can cancel and continue later.")
-        play_button.configure(state="disabled")
-        set_running(True)
-        state["engine"] = Engine(engine_command(chosen))
-        root.after(150, poll)
+        if session.start(values()):
+            play_button.configure(state="disabled")
+            root.after(150, poll)
+        refresh()
 
     def cancel_build():
-        if state["engine"]:
-            message.configure(text="Cancelling; finished stages are kept.")
-            state["engine"].cancel()
+        session.cancel()
+        refresh()
 
     def close():
-        if state["engine"]:
+        if session.engine:
             if not messagebox.askyesno("Tank Battles Builder", "A build is running. Cancel it and close?"):
                 return
-            state["engine"].cancel()
-            state["engine"].process.wait(timeout=60)
+            session.cancel()
+            session.engine.process.wait(timeout=60)
         root.destroy()
-
-    def open_output():
-        output = Path(values()["output"] or default_output())
-        open_path(output if output.exists() else output.parent if output.parent.exists() else Path.home())
 
     build_button.configure(command=start_build)
     cancel_button.configure(command=cancel_build)
-    play_button.configure(command=lambda: play(Path(values()["output"] or default_output())))
-    folder_button.configure(command=open_output)
+    play_button.configure(command=lambda: play(output_folder(values())))
+    folder_button.configure(command=lambda: browse_output(values()))
     root.protocol("WM_DELETE_WINDOW", close)
     if (Path(fields["output"].get()) / launcher_name()).is_file():
         play_button.configure(state="normal")
@@ -371,6 +188,17 @@ def run_window(self_test: bool = False) -> int:
         root.after(500, root.destroy)
     root.mainloop()
     return 0
+
+
+def run_window(self_test: bool = False) -> int:
+    session = BuilderSession()
+    if os.name == "nt" or sys.platform == "linux":
+        from builder_gtk import run_gtk_window
+
+        status = run_gtk_window(session, self_test)
+        if status is not None:
+            return status
+    return run_tk_window(session, self_test)
 
 
 def main() -> int:

@@ -174,6 +174,9 @@ def configure(args, config) -> None:
             command = [str(toolchain.cmake), *common, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={toolchain.ninja}",
                        f"-DCMAKE_TOOLCHAIN_FILE={toolchain.toolchain_file}", f"-DCMAKE_BUILD_TYPE={args.build_type}"]
             environment = build_environment(toolchain)
+            if toolchain.target == "windows":
+                print("[configure] Checking the bundled Zig compiler. Its first link can take longer while the cache is populated.",
+                      flush=True)
         elif os.name == "nt":
             command = [tool(args.cmake), *common, "-A", "x64", "-T", "ClangCL", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"]
         else:

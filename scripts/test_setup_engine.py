@@ -155,6 +155,19 @@ class BoundsAndErrorsTests(unittest.TestCase):
         writer.flush()
         self.assertEqual(lines, ["one", "two", "tail"])
 
+    def test_a_silent_configure_reports_progress_and_stops_its_process(self):
+        children, reporter = setup_engine.Children(), mock.Mock()
+        with mock.patch.object(setup_engine, "windows_zig_configure", return_value=True), \
+             mock.patch.object(setup_engine, "CONFIGURE_STATUS_SECONDS", 0.05), \
+             mock.patch.object(setup_engine, "CONFIGURE_SILENCE_LIMIT", 0.2):
+            execute = setup_engine.make_executor(children, reporter)
+            with self.assertRaisesRegex(TimeoutError, "CMakeConfigureLog.yaml"):
+                execute([sys.executable, "-c", "import time; time.sleep(20)", "-B", "build"],
+                        cwd=ROOT)
+        self.assertTrue(any("Waiting for CMake and Zig" in call.args[0] for call in reporter.log.call_args_list))
+        self.assertFalse(children.processes)
+        self.assertFalse(children.cancelled)
+
 
 @unittest.skipIf(os.name == "nt", "POSIX process checks")
 class CancellationTests(unittest.TestCase):

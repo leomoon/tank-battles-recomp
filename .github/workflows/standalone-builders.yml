@@ -40,11 +40,13 @@ jobs:
           if [ '${{ matrix.target }}' = linux ]; then
             sudo apt-get install -y squashfs-tools libx11-dev libxext-dev libxrandr-dev libxi-dev \
               libxcursor-dev libxinerama-dev libxss-dev libxfixes-dev libxrender-dev libpulse-dev libasound2-dev libudev-dev
+          else
+            sudo apt-get install -y zstd libglib2.0-bin
           fi
       - uses: actions/cache@v6.1.0
         with:
           path: ${{ env.TB_CACHE }}
-          key: tb-toolchain-${{ matrix.target }}-${{ hashFiles('ci/toolchain/manifest.json') }}
+          key: tb-toolchain-${{ matrix.target }}-${{ hashFiles('ci/toolchain/manifest.json', 'ci/toolchain/windows-gtk4.json') }}
       - name: Fetch pinned downloads (SHA-256 verified)
         run: |
           python3 scripts/toolchain.py fetch --host linux --cache "$TB_CACHE" --sources
@@ -138,7 +140,7 @@ jobs:
       - name: Checksums and window prerequisites
         run: |
           cd download && sha256sum -c --ignore-missing SHA256SUMS
-          sudo apt-get update && sudo apt-get install -y xvfb
+          sudo apt-get update && sudo apt-get install -y xvfb weston libgtk-4-1
       - name: Relocate into a path with spaces and extract
         run: |
           DIR="$RUNNER_TEMP/down load ü"
@@ -149,8 +151,27 @@ jobs:
           for tool in gcc g++ cc c++ clang clang++ ld cmake ninja make python3 pip3; do
             for path in $(which -a $tool 2>/dev/null); do sudo chmod 000 "$(readlink -f "$path")" || true; done
           done
-      - name: Window opens
-        run: xvfb-run -a sh -c 'env -i HOME="$HOME" PATH=/usr/bin:/bin DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" "$RUNNER_TEMP/down load ü/squashfs-root/AppRun" --self-test'
+      - name: Native X11 window opens
+        run: |
+          xvfb-run -a sh -c 'env -i HOME="$HOME" PATH=/usr/bin:/bin DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" GDK_BACKEND=x11 GDK_SCALE=2 GSK_RENDERER=cairo "$RUNNER_TEMP/down load ü/squashfs-root/AppRun" --self-test' > "$RUNNER_TEMP/builder-x11.log"
+          grep -Fx 'Builder UI: X11 (scale 2)' "$RUNNER_TEMP/builder-x11.log"
+      - name: Native Wayland window opens
+        run: |
+          export XDG_RUNTIME_DIR
+          XDG_RUNTIME_DIR=$(mktemp -d)
+          export WAYLAND_DISPLAY=tb-builder-test
+          weston --backend=headless-backend.so --no-config --socket="$WAYLAND_DISPLAY" \
+            --idle-time=0 --use-pixman --width=1280 --height=800 --scale=2 > "$RUNNER_TEMP/weston.log" 2>&1 &
+          weston_pid=$!
+          trap 'kill "$weston_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..50}; do
+            test ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" || break
+            sleep 0.1
+          done
+          test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" || { cat "$RUNNER_TEMP/weston.log"; exit 1; }
+          timeout 30 env -u DISPLAY GDK_BACKEND=wayland GSK_RENDERER=cairo \
+            "$RUNNER_TEMP/down load ü/squashfs-root/AppRun" --self-test > "$RUNNER_TEMP/builder-wayland.log"
+          grep -Fx 'Builder UI: Wayland (scale 2)' "$RUNNER_TEMP/builder-wayland.log"
       - name: Build and start a synthetic player offline with only the builder's tools
         run: |
           B="$RUNNER_TEMP/down load ü/squashfs-root"
@@ -209,13 +230,15 @@ jobs:
           $b = "$env:RUNNER_TEMP\builder files"
           Get-ChildItem $b -Recurse -Include *.exe | ForEach-Object {
             New-NetFirewallRule -DisplayName "tb-offline" -Direction Outbound -Action Block -Program $_.FullName | Out-Null }
-      - name: Window opens
+      - name: Native Win32 window opens
         shell: pwsh
         run: |
           $b = "$env:RUNNER_TEMP\builder files"
           $env:PATH = "C:\Windows\System32;C:\Windows"
-          & "$b\toolchain\python\python.exe" -E -s -B "$b\scripts\builder_app.py" --self-test
+          $output = & "$b\toolchain\python\python.exe" -E -s -B "$b\scripts\builder_app.py" --self-test
+          $output | Write-Output
           if ($LASTEXITCODE -ne 0) { throw "builder window failed" }
+          if (-not ($output -match '^Builder UI: Win32 \(scale [0-9.]+\)$')) { throw "GTK4 Win32 backend was not used" }
       - name: Build and start a synthetic player with only the builder's tools
         shell: pwsh
         run: |

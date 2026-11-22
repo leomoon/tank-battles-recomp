@@ -2,7 +2,7 @@
 
 Both carry the same game-free resources (scripts/package_resources.py:
 setup scripts, SDK, a verified runtime bundle and the staged toolchain), plus
-NOTICES.txt and, for Windows, the libiconv source its LGPL licence requires.
+NOTICES.txt and the Windows GTK4 runtime and third-party sources.
 
     package_builder.py resources --target linux --runtime-bundle B --toolchain T --cache C --output R [--source COMMIT]
     package_builder.py appdir   --resources R --output AppDir
@@ -32,6 +32,7 @@ import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import package_resources  # noqa: E402
+import package_gtk  # noqa: E402
 import toolchain as toolchains  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,7 @@ def notices(target: str) -> str:
         if target in source.get("targets", ["linux", "windows"]):
             lines.append(f"  {name} {source['version']} - {source['licence']} - {source['url']}")
     if target == "windows":
+        lines += package_gtk.notices()
         lines += ["", "GNU libiconv is LGPL-2.1-or-later and is linked statically into Windows players.",
                   "Its exact source is included in sources/. Players are linked on your computer from",
                   "object files and libraries, so you can relink them against a modified libiconv."]
@@ -77,9 +79,13 @@ def notices(target: str) -> str:
 
 def resources(args) -> None:
     output = Path(args.output).resolve()
-    package_resources.assemble(output, Path(args.runtime_bundle), Path(args.toolchain), args.source)
+    package = package_resources.assemble(output, Path(args.runtime_bundle), Path(args.toolchain), args.source)
     (output / "NOTICES.txt").write_text(notices(args.target))
     if args.target == "windows":
+        package["files"].update(package_gtk.stage(output / "gtk", Path(args.cache)))
+        package["windows_gtk4_manifest_sha256"] = package["files"]["gtk/manifest.json"]
+        (output / "package.json").write_text(json.dumps(package, indent=2, sort_keys=True) + "\n")
+        package_resources.verify(output)
         source = toolchains.load_manifest()["sources"]["libiconv"]
         archive = toolchains.cached(Path(args.cache), source["sha256"])
         if not archive.is_file():
@@ -206,6 +212,8 @@ def provenance(args) -> None:
                               source_commit=package["source_commit"], abi_sha256=package.get("abi_sha256"),
                               target=package.get("target"), toolchain=package.get("toolchain_identity"),
                               runtime_build=runtime.get("build"), resource_files=len(package["files"])))
+        if gtk_manifest := package.get("windows_gtk4_manifest_sha256"):
+            artifacts[-1]["windows_gtk4_manifest_sha256"] = gtk_manifest
     record = dict(source_commit=args.source, toolchain_manifest_sha256=toolchains.manifest_digest(),
                   workflow_run=os.environ.get("GITHUB_SERVER_URL", "") and
                   f"{os.environ['GITHUB_SERVER_URL']}/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{os.environ.get('GITHUB_RUN_ID')}",

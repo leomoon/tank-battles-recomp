@@ -122,16 +122,16 @@ The launcher sets the same paths `port.py run` does, relative to its own locatio
 
 ## The standalone builders
 
-`scripts/builder_app.py` is the builder window (Tk from the staged Python). Choose the game package, the unlock EDAT and the decrypted `EBOOT.elf` (or, under Advanced, SELF keys or a RAP), and where to install; press **Build**. It runs the setup engine as a child process and shows each stage, progress from the lifter and Ninja, the log and its file, and a sentence plus action when something fails. **Cancel** stops only the build's processes, and the next **Build** continues from the finished stages. When done it offers **Play** and **Open folder**, and says where saves and settings live; rebuilding into the same folder keeps them. Choices are remembered in `~/.config/tank-battles-recomp/builder.json` (`%APPDATA%\TankBattlesRecomp\builder.json`).
+`scripts/builder_app.py` opens the shared GTK4 builder window. On Linux it uses the desktop GTK4 library on Wayland or X11, with a Tk fallback where GTK4 is unavailable. Windows loads GTK4 from inside `Builder.exe`. Choose the game package, the unlock EDAT and the decrypted `EBOOT.elf` (or, under Advanced, SELF keys or a RAP), and where to install. **Build** runs the setup engine and shows progress and the log. **Cancel** stops the builder's processes and preserves completed stages. **Play** opens the finished player, and rebuilding keeps its saves and settings. Choices are remembered in `~/.config/tank-battles-recomp/builder.json` (`%APPDATA%\TankBattlesRecomp\builder.json`).
 
 `scripts/package_builder.py` turns the resources into the two downloads:
 
 | | `Builder.AppImage` | `Builder.exe` |
 | --- | --- | --- |
-| Contents | Resources for Linux (Linux-host toolchain, Linux runtime bundle), `NOTICES.txt` | Resources for Windows (Windows-host toolchain, Windows runtime bundle), `NOTICES.txt`, `sources/libiconv-1.18.tar.gz` |
+| Contents | Resources for Linux (Linux-host toolchain, Linux runtime bundle), `NOTICES.txt` | Resources for Windows (Windows-host toolchain, Windows runtime bundle), pinned GTK4 libraries and resources, `NOTICES.txt`, and third-party sources |
 | Start | AppImage type2 runtime 20251108 (pinned in the toolchain manifest) mounts a zstd squashfs and runs `AppRun`, which starts the staged Python with the builder window | A Zig-built stub verifies the appended zip's SHA-256, unpacks it once with Windows' `tar.exe` into `%LOCALAPPDATA%\TankBattlesRecomp\builder\<digest>` and starts `pythonw.exe` with the builder window |
 | Without the default route | `./Builder.AppImage --appimage-extract`, then `squashfs-root/AppRun` (systems without FUSE) | `Builder.exe --extract FOLDER`, then `FOLDER\toolchain\python\pythonw.exe FOLDER\scripts\builder_app.py` |
-| Size | about 300 MB | about 250 MB |
+| Size | about 196 MiB | about 280 MiB |
 
 ```sh
 python scripts/package_builder.py resources --target linux --runtime-bundle build-zig/linux/runtime-bundle \
@@ -143,11 +143,11 @@ python scripts/package_builder.py stub --toolchain /opt/tb-toolchain --output ou
 python scripts/package_builder.py exe --resources out/windows-resources --stub out/BuilderStub.exe --output Builder.exe
 ```
 
-Both are made on Linux. The Windows toolchain is staged there with `toolchain.py stage --host windows`. Every extracted path stays under Windows' 260-character limit with room for a long user name.
+Both are made on Linux. The Windows toolchain is staged there with `toolchain.py stage --host windows`. Packaging its GTK4 resources also uses `zstd` and `glib-compile-schemas` (from `libglib2.0-bin` on Ubuntu). The MSYS2 UCRT64 package pins and source references are in `ci/toolchain/windows-gtk4.json`. Users get the runtime, schemas, and notices in the Windows download.
 
 ## Continuous integration and release candidates
 
-`.github/workflows/standalone-builders.yml` (manual dispatch or any tag) builds both builders from one revision. Everything comes from `ci/toolchain/manifest.json`, cached by its digest:
+`.github/workflows/standalone-builders.yml` (manual dispatch or any tag) builds both builders from one revision and caches downloads by the hashes of the toolchain and Windows GTK4 manifests.
 
 1. **build** (Ubuntu) stages the Linux- and Windows-host toolchains and builds the dependencies and both runtimes with Zig. It runs the Linux runtime's tests, links relocated synthetic consumers with only the staged tools, and runs the game-free contract suites. It then packages `Builder.AppImage` and `Builder.exe` and audits both complete payloads with `scripts/audit_builder.py`. Finally it writes `SHA256SUMS`, `provenance.json` (source, toolchain manifest digest, toolchain identity, runtime build and ABI per artifact) and the notices.
 2. **linux-consumer** and **windows-consumer** start from a clean runner that downloads only the artifact. Each checks the checksum and relocates the builder into a path with spaces and a non-ASCII character. Linux strips the runner's compilers and tools; on Windows they are not on `PATH`. With the network blocked (a network namespace on Linux, firewall rules for every builder executable on Windows), each opens the builder window and runs `scripts/verify_builder.py` from inside the download. That script translates, compiles and assembles a synthetic player with the packaged engine, then starts it through the launcher. Both jobs also confirm that a modified or damaged download is refused.
@@ -157,6 +157,6 @@ Both are made on Linux. The Windows toolchain is staged there with `toolchain.py
 
 - PlayStation packages, executables and licences; keys, saves, RPCN accounts and private keys;
 - generated title code, recognised by thousands of distinct lifted-function symbols, including object names inside static archives;
-- executables and objects outside the verified runtime and toolchain.
+- executables and objects outside the verified runtime, toolchain, and Windows GTK4 library directory.
 
 It also rejects modified resources, a mismatched source commit and tampered or unsafe `Builder.exe` payloads.

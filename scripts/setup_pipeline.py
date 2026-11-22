@@ -53,6 +53,10 @@ def packaged_inputs(args):
         root = getattr(args, "selected_" + name, None)
         if root:
             identities[name] = digest(Path(root) / filename)
+            if name == "toolchain":
+                host = "windows" if os.name == "nt" else "linux"
+                toolchain_file = Path(root) / "cmake" / f"zig-{host}.cmake"
+                identities["toolchain_file"] = digest(toolchain_file)
     return identities
 
 
