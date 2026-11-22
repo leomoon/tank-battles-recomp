@@ -17,6 +17,12 @@ P, S, I, U, D = C.c_void_p, C.c_char_p, C.c_int, C.c_uint, C.c_double
 ACCEPT, YES = -3, -8
 
 
+class GtkTextIter(C.Structure):
+    # Storage for the opaque public GtkTextIter struct in gtktextiter.h.
+    _fields_ = [("pointers", P * 2), ("ints", I * 6), ("more_pointers", P * 2),
+                ("more_ints", I * 3), ("last_pointer", P)]
+
+
 def _bind_gtk(library: C.CDLL, glib: C.CDLL, gobject: C.CDLL, gio: C.CDLL) -> SimpleNamespace:
     signatures = {
         "g_set_prgname": (None, S),
@@ -69,13 +75,21 @@ def _bind_gtk(library: C.CDLL, glib: C.CDLL, gobject: C.CDLL, gio: C.CDLL) -> Si
         "gtk_scrolled_window_set_child": (None, P, P),
         "gtk_scrolled_window_set_min_content_height": (None, P, I),
         "gtk_scrolled_window_set_policy": (None, P, I, I),
+        "gtk_scrolled_window_get_vadjustment": (P, P),
+        "gtk_adjustment_get_upper": (D, P),
+        "gtk_adjustment_get_page_size": (D, P),
+        "gtk_adjustment_get_value": (D, P),
+        "gtk_adjustment_set_value": (None, P, D),
         "gtk_text_view_new": (P,),
         "gtk_text_view_set_editable": (None, P, I),
         "gtk_text_view_set_monospace": (None, P, I),
         "gtk_text_view_get_buffer": (P, P),
-        "gtk_text_view_scroll_mark_onscreen": (None, P, P),
-        "gtk_text_buffer_get_insert": (P, P),
         "gtk_text_buffer_set_text": (None, P, S, I),
+        "gtk_text_buffer_get_start_iter": (None, P, P),
+        "gtk_text_buffer_get_end_iter": (None, P, P),
+        "gtk_text_buffer_get_iter_at_line": (I, P, P, I),
+        "gtk_text_buffer_insert": (None, P, P, S, I),
+        "gtk_text_buffer_delete": (None, P, P, P),
         "gtk_widget_set_hexpand": (None, P, I),
         "gtk_widget_set_vexpand": (None, P, I),
         "gtk_widget_set_halign": (None, P, I),
@@ -132,7 +146,9 @@ class Window:
         self.cancel_prompt = None
         self.closing = False
         self.timer = None
-        self.last_log_text = ""
+        self.log_model = session.model
+        self.log_seen = 0
+        self.follow_log = True
 
         gtk.gtk_window_set_title(self.window, b"Tank Battles Builder")
         gtk.gtk_window_set_default_size(self.window, 780, 640)
@@ -181,6 +197,10 @@ class Window:
         gtk.gtk_text_view_set_editable(self.log, False)
         gtk.gtk_text_view_set_monospace(self.log, True)
         gtk.gtk_scrolled_window_set_child(log_scroll, self.log)
+        self.log_buffer = gtk.gtk_text_view_get_buffer(self.log)
+        self.log_vertical = gtk.gtk_scrolled_window_get_vadjustment(log_scroll)
+        self.connect(self.log_vertical, "changed", self.log_size_changed)
+        self.connect(self.log_vertical, "value-changed", self.log_position_changed)
         gtk.gtk_box_append(form, log_scroll)
         self.log_label = self.label("", wrap=True)
         gtk.gtk_box_append(form, self.log_label)
@@ -317,6 +337,36 @@ class Window:
         self.session.cancel()
         self.refresh()
 
+    def log_bottom(self):
+        gtk, scroll = self.gtk, self.log_vertical
+        return gtk.gtk_adjustment_get_upper(scroll) - gtk.gtk_adjustment_get_page_size(scroll)
+
+    def log_size_changed(self, scroll, _data):
+        if self.follow_log:
+            self.gtk.gtk_adjustment_set_value(scroll, self.log_bottom())
+
+    def log_position_changed(self, scroll, _data):
+        self.follow_log = self.log_bottom() - self.gtk.gtk_adjustment_get_value(scroll) <= 2
+
+    def refresh_log(self, model):
+        gtk, buffer = self.gtk, self.log_buffer
+        if model is not self.log_model:
+            self.log_model, self.log_seen = model, 0
+            self.follow_log = True
+            gtk.gtk_text_buffer_set_text(buffer, b"", 0)
+        expired, lines = model.log_update(self.log_seen)
+        if not lines:
+            return
+        if expired:
+            start, end = GtkTextIter(), GtkTextIter()
+            gtk.gtk_text_buffer_get_start_iter(buffer, C.byref(start))
+            gtk.gtk_text_buffer_get_iter_at_line(buffer, C.byref(end), expired)
+            gtk.gtk_text_buffer_delete(buffer, C.byref(start), C.byref(end))
+        end = GtkTextIter()
+        gtk.gtk_text_buffer_get_end_iter(buffer, C.byref(end))
+        gtk.gtk_text_buffer_insert(buffer, C.byref(end), utf8("\n".join(lines) + "\n"), -1)
+        self.log_seen = model.log_count
+
     def refresh(self):
         gtk, session = self.gtk, self.session
         running = session.engine is not None
@@ -336,12 +386,7 @@ class Window:
             gtk.gtk_progress_bar_set_fraction(self.bar, max(0, min(1, done / total)))
         elif not running:
             gtk.gtk_progress_bar_set_fraction(self.bar, 1 if session.success else 0)
-        text = "\n".join(model.lines[-400:])
-        if text != self.last_log_text:
-            buffer = gtk.gtk_text_view_get_buffer(self.log)
-            gtk.gtk_text_buffer_set_text(buffer, utf8(text), -1)
-            gtk.gtk_text_view_scroll_mark_onscreen(self.log, gtk.gtk_text_buffer_get_insert(buffer))
-            self.last_log_text = text
+        self.refresh_log(model)
         gtk.gtk_label_set_text(self.log_label, utf8(f"Log: {model.log_path}" if model.log_path else ""))
 
     def poll(self, _data):

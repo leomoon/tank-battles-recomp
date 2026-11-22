@@ -85,6 +85,7 @@ class Model:
         self.stages = {name: "waiting" for name, _ in STAGES}
         self.progress = None          # (done, total) for the running stage
         self.lines: list[str] = []
+        self.log_count = 0
         self.result: dict | None = None
         self.log_path = None
 
@@ -98,10 +99,18 @@ class Model:
             self.progress = (event["done"], event["total"])
         elif kind == "log":
             self.lines.append(event["line"])
+            self.log_count += 1
             del self.lines[:-LOG_LINES]
         elif kind == "result":
             self.result = event
             self.log_path = event.get("log")
+
+    def log_update(self, seen: int) -> tuple[int, list[str]]:
+        """Return the number of expired displayed lines and the unread lines."""
+        first = self.log_count - len(self.lines)
+        previously_first = max(0, seen - LOG_LINES)
+        expired = min(first, seen) - previously_first
+        return expired, self.lines[max(0, seen - first):]
 
     def problems(self) -> list[str]:
         """The failed input checks, as the engine printed them."""

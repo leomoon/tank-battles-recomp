@@ -147,6 +147,19 @@ class BuilderWindowLogicTests(unittest.TestCase):
         self.assertEqual(model.problems(), ["EBOOT.elf: /x/EBOOT.elf: Supply your decrypted EBOOT.elf."])
         self.assertEqual(model.log_path, "/w/logs/setup.log")
 
+    def test_log_updates_append_and_drop_only_expired_lines(self):
+        model = builder_session.Model()
+        limit = builder_session.LOG_LINES
+        for index in range(limit):
+            model.apply({"event": "log", "line": str(index)})
+        self.assertEqual(model.log_update(limit), (0, []))
+
+        for index in range(limit, limit + 2):
+            model.apply({"event": "log", "line": str(index)})
+        self.assertEqual(model.log_update(limit), (2, [str(limit), str(limit + 1)]))
+        self.assertEqual(model.log_update(0), (0, [str(index) for index in range(2, limit + 2)]))
+        self.assertEqual(model.log_update(1), (1, model.lines))
+
 
 if __name__ == "__main__":
     unittest.main()

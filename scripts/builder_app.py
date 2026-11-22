@@ -102,6 +102,7 @@ def run_tk_window(session: BuilderSession, self_test: bool) -> int:
     row += 1
     log_box = tk.Text(frame, height=10, wrap="none", state="disabled", font="TkFixedFont")
     log_box.grid(row=row, column=0, columnspan=3, sticky="nsew", pady=4)
+    log_model, log_seen = session.model, 0
     frame.rowconfigure(row, weight=1)
     row += 1
     log_label = ttk.Label(frame, text="")
@@ -128,6 +129,7 @@ def run_tk_window(session: BuilderSession, self_test: bool) -> int:
         cancel_button.configure(state="normal" if running else "disabled")
 
     def refresh():
+        nonlocal log_model, log_seen
         model = session.model
         running = session.engine is not None
         message.configure(text=session.message, foreground={True: "dark green", False: "dark red", None: ""}[session.success])
@@ -144,11 +146,22 @@ def run_tk_window(session: BuilderSession, self_test: bool) -> int:
         else:
             bar.stop()
             bar.configure(mode="determinate", value=1000 if session.success else 0)
-        log_box.configure(state="normal")
-        log_box.delete("1.0", "end")
-        log_box.insert("end", "\n".join(model.lines[-400:]))
-        log_box.see("end")
-        log_box.configure(state="disabled")
+        if model is not log_model:
+            log_box.configure(state="normal")
+            log_box.delete("1.0", "end")
+            log_box.configure(state="disabled")
+            log_model, log_seen = model, 0
+        expired, lines = model.log_update(log_seen)
+        if lines:
+            following = log_box.yview()[1] >= 0.999
+            log_box.configure(state="normal")
+            if expired:
+                log_box.delete("1.0", f"{expired + 1}.0")
+            log_box.insert("end", "\n".join(lines) + "\n")
+            if following:
+                log_box.yview_moveto(1.0)
+            log_box.configure(state="disabled")
+            log_seen = model.log_count
         log_label.configure(text=f"Log: {model.log_path}" if model.log_path else "")
         if session.success:
             play_button.configure(state="normal")
