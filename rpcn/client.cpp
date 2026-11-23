@@ -149,6 +149,7 @@ struct Pending {
     Request command;
     Bytes data;
     std::promise<Reply> completion;
+    Clock::time_point deadline=Clock::time_point::max();
 };
 
 std::mutex state_lock;
@@ -232,12 +233,35 @@ void update_relationship(uint16_t command,const Bytes& body) { // Caller holds s
         if (found==state.friends.end()) {
             if (state.friends.size()>=1024) throw std::runtime_error("RPCN friend count limit exceeded");
             state.friends.push_back(std::move(update));changed=true;
+        } else if (!found->timestamp && found->online!=update.online) {
+            found->online=update.online;changed=true;
         }
         // A repeated FriendNew has no timestamp: never overwrite newer presence.
     } else if (found!=state.friends.end() && update.timestamp>found->timestamp) {
         *found=std::move(update);changed=true;
     }
     if (changed) ++state.revision;
+}
+
+void acknowledge_relationship(Request command,const Bytes& body,const Bytes& reply) {
+    if ((command!=Request::add_friend && command!=Request::remove_friend) || reply.size()!=1 || reply[0]) return;
+    Reader input{body};
+    const auto name=relationship_name(input);
+    if (!input.bytes.empty()) throw std::runtime_error("Malformed RPCN friendship request");
+    std::lock_guard guard(state_lock);
+    auto& state=relationship_state;
+    if (command==Request::remove_friend) {
+        update_relationship(7,body);
+    } else if (std::any_of(state.incoming.begin(),state.incoming.end(),[&](const auto& n){return same_name(n,name);})) {
+        // The server acknowledged acceptance. FriendNew supplies online status
+        // separately; keep the friend offline until that notification arrives.
+        Bytes notice{0};notice.insert(notice.end(),body.begin(),body.end());
+        update_relationship(6,notice);
+    } else if (std::none_of(state.friends.begin(),state.friends.end(),[&](const auto& f){return same_name(f.npid,name);}) &&
+               std::none_of(state.outgoing.begin(),state.outgoing.end(),[&](const auto& n){return same_name(n,name);})) {
+        if (state.outgoing.size()>=1024) throw std::runtime_error("RPCN outgoing friend request limit exceeded");
+        state.outgoing.push_back(name);++state.revision;
+    }
 }
 bool requested = false;
 std::mutex worker_lock;
@@ -361,8 +385,15 @@ public:
                 }
             }
             if (pending) {
+                if (Clock::now()>=pending->deadline) {
+                    pending->completion.set_value({});
+                    continue;
+                }
                 try {
-                    pending->completion.set_value({exchange(static_cast<uint16_t>(pending->command), pending->data)});
+                    const auto remaining=pending->deadline-Clock::now();
+                    auto reply=exchange(static_cast<uint16_t>(pending->command),pending->data,std::min(remaining,Clock::duration(5s)));
+                    acknowledge_relationship(pending->command,pending->data,reply);
+                    pending->completion.set_value({std::move(reply)});
                 } catch (...) {
                     pending->completion.set_value({});
                     throw;
@@ -659,10 +690,15 @@ Status status() {
 }
 
 std::future<Reply> submit(Request command, Bytes body) {
+    return submit(command,std::move(body),0,Clock::time_point::max());
+}
+
+std::future<Reply> submit(Request command, Bytes body,uint64_t generation,Clock::time_point deadline) {
     std::lock_guard guard(state_lock);
-    if (session_status.state != State::online || body.size() > max_body || requests.size() >= 32)
+    if (session_status.state != State::online || body.size() > max_body || requests.size() >= 32 ||
+        (generation && generation!=relationship_state.generation) || Clock::now()>=deadline)
         return {};
-    Pending pending{command, std::move(body), {}};
+    Pending pending{command, std::move(body), {},deadline};
     auto future = pending.completion.get_future();
     requests.push_back(std::move(pending));
     return future;

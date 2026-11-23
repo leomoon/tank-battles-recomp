@@ -332,6 +332,7 @@ set(TB_HOST_SOURCES
     entitlement.cpp
     offline_network.cpp
     rpcn/client.cpp
+    rpcn/friends.cpp
     rpcn/basic.cpp
     rpcn/basic_wire.cpp
     rpcn/score.cpp

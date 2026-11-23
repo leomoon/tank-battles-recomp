@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <future>
 #include <string>
 #include <vector>
@@ -26,7 +27,7 @@ struct Reply {
 };
 
 enum class Request : uint16_t {
-    add_friend = 8, send_message = 29,
+    add_friend = 8, remove_friend = 9, send_message = 29,
     server_list = 12, world_list = 13, create_room = 14, join_room = 15,
     leave_room = 16, search_room = 17, get_room_data = 20, set_room_data = 21,
     ping_room_owner = 25, send_room_message = 26,
@@ -41,6 +42,10 @@ struct Notification {
 };
 
 std::future<Reply> submit(Request command, std::vector<unsigned char> body);
+// Session-scoped, expiring requests for UI mutations. A queued request that
+// reaches its deadline is discarded before it can change server state.
+std::future<Reply> submit(Request command, std::vector<unsigned char> body, uint64_t generation,
+                        std::chrono::steady_clock::time_point deadline);
 std::vector<Notification> take_notifications();
 std::vector<Notification> take_basic_notifications();
 struct Friend { std::string npid; bool online=false; uint64_t timestamp=0; };
