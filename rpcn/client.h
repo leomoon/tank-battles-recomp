@@ -59,6 +59,7 @@ struct Relationships {
     std::vector<std::string> outgoing, incoming;
 };
 Relationships relationships();
+uint64_t relationships_revision();
 std::vector<Friend> friends();
 
 bool start(const char* profile_path);

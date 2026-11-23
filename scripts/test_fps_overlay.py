@@ -102,6 +102,23 @@ int main(){
  assert(toast[toast_region.width*toast_region.height]==0xa5a5a5a5);
  tb_show_invite_toast("PlayerB");
  tb_clear_invite_toast();
+ assert(tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region)); // Connection error stays visible.
+ std::this_thread::sleep_for(std::chrono::seconds(4));
+ assert(!tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
+ tb_show_friend_request_toast("RequestA");
+ tb_show_friend_request_toast("RequestA"); // Duplicate notices must not restart or queue the same toast.
+ assert(tb_friend_request_toast_visible());
+ tb_show_invite_toast("PlayerB");
+ tb_show_friend_request_toast("RequestB");
+ tb_clear_invite_toast(); // Preserve both request toasts.
+ assert(tb_friend_request_toast_visible());
+ std::this_thread::sleep_for(std::chrono::seconds(4));
+ assert(tb_friend_request_toast_visible()); // RequestB advances after RequestA expires.
+ tb_show_invite_toast("PlayerC");
+ tb_clear_friend_request_toasts();
+ assert(!tb_friend_request_toast_visible());
+ assert(tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region)); // Invitation was queued, not overwritten.
+ tb_clear_invite_toast();
  assert(!tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
  tb_panel_show(InvitePicker::rooms,friends,0);
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
@@ -159,7 +176,21 @@ int main(){
  }
  assert(tb_draw_overlay(pixels.data(),3840,2160,1,&region));
  assert(region.width==1344 && region.height==1104 && pixels.back()==0xa5a5a5a5);
- manager.editing=false;
+ manager.editing=false;manager.details=true;manager.section=FriendsSection::friends;
+ manager.rows={"FriendC  OFFLINE"};manager.selected=0;manager.confirm_remove=true;
+ manager.actions={"KEEP FRIEND","REMOVE FRIEND"};manager.action_selected=1;
+ assert(tb_friends_panel_show(manager));assert(tb_draw_overlay(pixels.data(),3840,2160,1,&region));
+ assert(pixels.back()==0xa5a5a5a5);
+ manager.status="Friend request sent. The other player needs to accept it.";
+ assert(tb_friends_panel_show(manager));assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ {
+  std::ofstream shot("friends-result.ppm",std::ios::binary);
+  shot<<"P6\n"<<region.width<<" "<<region.height<<"\n255\n";
+  for(size_t i=0;i<region.width*region.height;++i) {
+   char rgb[3]={char(pixels[i]),char(pixels[i]>>8),char(pixels[i]>>16)};shot.write(rgb,3);
+  }
+ }
+ manager.status.clear();manager.details=false;
  manager.connected=false;assert(tb_friends_panel_show(manager));
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
  manager.connected=true;manager.busy=true;assert(tb_friends_panel_show(manager));

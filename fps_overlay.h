@@ -39,6 +39,10 @@ struct FriendsPanelView {
     bool editing=false, upper=false;
     unsigned keyboard_key=0;
     std::string username;
+    std::vector<std::string> actions;
+    size_t action_selected=0;
+    bool confirm_remove=false;
+    std::string status;
     std::string message;
 };
 // Only an invitation sender can suspend its picker beneath Friends.
@@ -46,6 +50,9 @@ bool tb_friends_panel_show(const FriendsPanelView&,bool from_invite=false);
 bool tb_friends_panel_visible();
 void tb_friends_panel_close();
 bool tb_show_friends_hint();
+void tb_show_friend_request_toast(const char* sender);
+void tb_clear_friend_request_toasts();
+bool tb_friend_request_toast_visible();
 void tb_show_invite_toast(const char* sender);
 void tb_clear_invite_toast();
 void tb_show_network_toast(const char* heading,const char* detail);

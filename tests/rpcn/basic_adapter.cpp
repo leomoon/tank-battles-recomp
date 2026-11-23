@@ -57,6 +57,11 @@ static std::deque<tb_friends_input> native_inputs;
 static bool focused=true;
 static std::vector<std::string> displayed_choices;
 static std::string toast_sender;
+static std::vector<std::string> friend_toasts;
+static bool request_visible=false;
+void tb_show_friend_request_toast(const char* name) {friend_toasts.push_back(name);request_visible=true;}
+void tb_clear_friend_request_toasts() {request_visible=false;}
+bool tb_friend_request_toast_visible() {return request_visible;}
 void tb_show_invite_toast(const char* sender) { toast_sender=sender; }
 void tb_clear_invite_toast() { toast_sender.clear(); }
 void tb_panel_show(InvitePicker kind,std::span<const std::string> choices,size_t) {
@@ -72,6 +77,7 @@ bool tb_friends_panel_show(const FriendsPanelView& view,bool nested) {
 bool tb_friends_panel_visible() {return friend_panel;}
 void tb_friends_panel_close() {friend_panel=false;}
 bool tb_show_friends_hint() {return true;}
+void tb_show_network_toast(const char*,const char*) {}
 extern "C" void tb_friends_request_toggle() {toggle_requested=true;}
 extern "C" int tb_friends_take_toggle() {return std::exchange(toggle_requested,false);}
 extern "C" int tb_friends_window_focused() {return focused;}
@@ -91,18 +97,46 @@ extern "C" void tb_sdk_ps3_hle_call(uint32_t,ppu_context* c) {
     vm_write32(out,8);vm_write16(out+8,physical_buttons&0xff);vm_write16(out+10,physical_buttons>>8);c->gpr[3]=0;
 }
 namespace tb::rpcn {
+#ifndef TB_FRIENDS_UI_LIVE
 bool guest_range(uint64_t a,uint64_t size) {return a>=0x10000 && a<=memory.size() && size<=memory.size()-a;}
 static std::vector<Notification> notices;
 static bool peer_online=true;
 static unsigned submitted_messages=0;
 static bool online=true;
+static uint64_t revision=1;
+static std::vector<Friend> mutual={{"PlayerB",true,0},{"Offline",false,0}};
+static std::vector<std::string> received={"RequestA"},sent={"RequestB"};
+static std::promise<Reply> mutation;
+static Request mutation_command;
+static std::string mutation_name;
+static unsigned mutations=0;
+void complete_mutation(unsigned code=0) {
+    if (!code) {
+        auto remove=[](auto& list,const auto& name){std::erase(list,name);};
+        if (mutation_command==Request::add_friend) {
+            if (std::find(received.begin(),received.end(),mutation_name)!=received.end()) {
+                remove(received,mutation_name);mutual.push_back({mutation_name,true,0});
+            } else sent.push_back(mutation_name);
+        } else {
+            remove(received,mutation_name);remove(sent,mutation_name);
+            std::erase_if(mutual,[](const auto& f){return f.npid==mutation_name;});
+        }
+        ++revision;
+    }
+    mutation.set_value({{static_cast<unsigned char>(code)}});
+}
 static std::vector<unsigned char> submitted_payload;
 Status status() {return {online?State::online:State::offline,"PlayerA",1,"localhost:31313"};}
-std::vector<Friend> friends() {return {{"PlayerB",peer_online,0},{"Offline",false,0}};}
+std::vector<Friend> friends() {
+    auto list=mutual;
+    for (auto& f:list) if(f.npid=="PlayerB") f.online=peer_online;
+    return list;
+}
+uint64_t relationships_revision() {return revision*4+(online?1:0)+(peer_online?2:0);}
 Relationships relationships() {
-    if (!online) return {};
+    if (!online) {Relationships s;s.revision=relationships_revision();return s;}
     Relationships s;s.npid="PlayerA";s.endpoint="localhost:31313";s.generation=1;s.user_id=1;
-    s.friends=friends();s.incoming={"RequestA"};s.outgoing={"RequestB"};return s;
+    s.revision=relationships_revision();s.friends=friends();s.incoming=received;s.outgoing=sent;return s;
 }
 std::vector<Notification> take_basic_notifications() {auto result=notices;notices.clear();return result;}
 std::future<Reply> submit(Request command,std::vector<unsigned char> bytes) {
@@ -111,7 +145,15 @@ std::future<Reply> submit(Request command,std::vector<unsigned char> bytes) {
  submitted_payload=bytes;
  std::promise<Reply> completion;completion.set_value({{0}});return completion.get_future();
 }
+std::future<Reply> submit(Request command,std::vector<unsigned char> bytes,uint64_t generation,std::chrono::steady_clock::time_point) {
+ assert(generation==1 && (command==Request::add_friend || command==Request::remove_friend));
+ assert(!bytes.empty() && bytes.back()==0);
+ ++mutations;mutation_command=command;mutation_name.assign(bytes.begin(),bytes.end()-1);
+ mutation=std::promise<Reply>{};return mutation.get_future();
 }
+#endif
+}
+#ifndef TB_FRIENDS_UI_LIVE
 int main() {
  using namespace tb::rpcn;
  register_basic();
@@ -128,6 +170,7 @@ int main() {
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));assert(panel);
  assert(displayed_choices==(std::vector<std::string>{"PlayerB","MANAGE FRIENDS"}));
  const auto before_manage=callbacks.size();
+ pump_basic();request_visible=false;
  buttons=0x40;pump_basic(); // Select Manage Friends.
  buttons=0x4000;pump_basic();assert(friend_panel && panel);
  assert(callbacks.size()==before_manage && submitted_messages==0);
@@ -145,7 +188,8 @@ int main() {
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
  buttons=0x2000;pump_basic();assert(!panel && callbacks.back()[1]==UINT64_MAX);
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
- peer_online=false;buttons=0x4000;pump_basic();assert(!panel && callbacks.back()[1]==UINT64_MAX);
+ peer_online=false;pump_basic();assert(panel && displayed_choices==std::vector<std::string>{"MANAGE FRIENDS"});
+ buttons=0x2000;pump_basic();assert(!panel && callbacks.back()[1]==UINT64_MAX);
  peer_online=true;
  constexpr uint32_t recipient=0x11800;
  for (unsigned i=0;i<7;++i) vm_write8(recipient+i,"PlayerC"[i]);
@@ -206,7 +250,7 @@ int main() {
  pump_basic(true);assert(!friend_panel && callbacks.size()==before_standalone);
  toggle_requested=true;pump_basic();assert(friend_panel);
  online=false;pump_basic();assert(friend_panel && !friend_view.connected);
- online=true;buttons=0x2000;pump_basic();assert(!friend_panel);
+ online=true;buttons=0x2000;pump_basic();assert(!friend_panel);request_visible=false;
  tb_panel_show(InvitePicker::rooms,{},0);
  toggle_requested=true;pump_basic();assert(!friend_panel && panel);
  tb_panel_close();
@@ -254,5 +298,66 @@ int main() {
  focused=true;pump_basic();
  buttons=0x2000;pump_basic();assert(!friend_panel);
  assert(callbacks.size()==before_standalone && submitted_messages==1);
- puts("PASS: invite send/receive callbacks, guest events, attachment bounds and cleanup");
+ // A new request opens the Received tab through the toast shortcut exactly once.
+ received.push_back("FreshUser");++revision;pump_basic();
+ const auto toast_count=friend_toasts.size();pump_basic();assert(friend_toasts.size()==toast_count);
+ assert(request_visible);toggle_requested=true;pump_basic();
+ assert(friend_panel && friend_view.section==FriendsSection::received && !request_visible);
+ // Keep the selected username when notifications insert or reorder rows.
+ buttons=0x40;pump_basic();assert(friend_view.selected==1);
+ std::swap(received[0],received[1]);++revision;pump_basic();
+ assert(friend_view.selected==0 && friend_view.rows[0]=="FreshUser");
+ buttons=0x4000;pump_basic();assert(friend_view.details);
+ buttons=0x4000;pump_basic();assert(friend_view.busy && mutation_name=="FreshUser");
+ assert(std::find(received.begin(),received.end(),"FreshUser")!=received.end()); // No optimistic acceptance.
+ buttons=0x4000;pump_basic();assert(mutations==1); // Busy ignores repeated confirm.
+ complete_mutation();pump_basic();assert(!friend_view.busy && friend_view.status=="You are now friends.");
+ buttons=0x4000;pump_basic();assert(friend_view.status.empty() && !friend_view.details);
+ buttons=0x4000;pump_basic();buttons=0x40;pump_basic();buttons=0x4000;pump_basic();
+ assert(mutation_name=="RequestA" && mutation_command==Request::remove_friend); // Decline.
+ complete_mutation();pump_basic();assert(received.empty());
+ buttons=0x4000;pump_basic();buttons=0x20;pump_basic(); // Sent tab.
+ buttons=0x4000;pump_basic();buttons=0x4000;pump_basic();
+ assert(mutation_name=="RequestB");complete_mutation();pump_basic();assert(sent.empty());
+ buttons=0x4000;pump_basic();buttons=0x20;pump_basic(); // Add tab.
+ buttons=0x4000;pump_basic();native_inputs.push_back({TB_FRIENDS_TEXT,0,"NewUser"});
+ native_inputs.push_back({TB_FRIENDS_KEY,TB_FRIENDS_ENTER,{}});pump_basic();
+ buttons=0x40;pump_basic();buttons=0x4000;pump_basic();
+ assert(mutation_name=="NewUser" && mutation_command==Request::add_friend);
+ complete_mutation();pump_basic();assert(friend_view.status.find("other player needs to accept")!=std::string::npos);
+ buttons=0x2000;pump_basic();buttons=0x2000;pump_basic();assert(!friend_panel);
+ // Changes while managing friends refresh the suspended invite picker and retain its attachment.
+ vm_write32(message+20,0);assert(!call("sceNpBasicRegisterContextSensitiveHandler",{context,handler,123}));
+ assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
+ const auto callback_count=callbacks.size();
+ buttons=0x40;pump_basic();buttons=0x40;pump_basic(); // Manage (PlayerB and FreshUser online).
+ buttons=0x4000;pump_basic();assert(friend_panel && panel);
+ mutual.push_back({"NewestUser",true,0});++revision;pump_basic();assert(friend_panel);
+ buttons=0x2000;pump_basic();assert(panel && !friend_panel && callbacks.size()==callback_count);
+ assert(displayed_choices==(std::vector<std::string>{"PlayerB","FreshUser","NewestUser","MANAGE FRIENDS"}));
+ buttons=0x10;pump_basic();buttons=0x4000;pump_basic();
+ assert(submitted_payload==encode_basic_message(preserved,{"NewestUser"}));
+ // Removing a friend requires a separate confirmation, defaulting to Keep.
+ toggle_requested=true;pump_basic();buttons=0x4000;pump_basic();assert(friend_view.details);
+ const auto before_remove=mutations;
+ buttons=0x4000;pump_basic();assert(friend_view.confirm_remove && friend_view.action_selected==0);
+ buttons=0x4000;pump_basic();assert(!friend_view.confirm_remove && mutations==before_remove);
+ buttons=0x4000;pump_basic();buttons=0x40;pump_basic();buttons=0x4000;pump_basic();
+ assert(mutations==before_remove+1 && mutation_name=="PlayerB");
+ complete_mutation();pump_basic();buttons=0x2000;pump_basic();
+ // If the selected target disappears while its details are open, confirm cannot remove its replacement.
+ buttons=0x4000;pump_basic();assert(friend_view.details);
+ mutual.erase(mutual.begin());++revision;pump_basic();assert(!friend_view.details);
+ const auto before_stale=mutations;
+ buttons=0x4000;pump_basic();assert(mutations==before_stale);
+ buttons=0x2000;pump_basic();buttons=0x2000;pump_basic();assert(!friend_panel);
+ // A disconnected or removed invite target is replaced by Manage, never another player.
+ assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
+ mutual[0].online=false;++revision;pump_basic();
+ assert(panel && displayed_choices==(std::vector<std::string>{"NewestUser","MANAGE FRIENDS"}));
+ buttons=0x4000;pump_basic();assert(friend_panel && submitted_messages==2);
+ buttons=0x2000;pump_basic();buttons=0x2000;pump_basic();
+ puts("PASS: friend actions, live selection, request toasts and preserved invitation attachment/callbacks");
 }
+
+#endif

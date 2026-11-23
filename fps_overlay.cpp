@@ -9,7 +9,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <mutex>
+#include <string_view>
 
 namespace {
 using Clock=std::chrono::steady_clock;
@@ -33,11 +35,28 @@ struct Toast {
     std::array<char,40> heading{};
     std::array<char,40> detail{};
     bool invitation=true;
+    bool friend_request=false;
 };
 Toast toast;
+std::deque<Toast> queued_toasts;
 Clock::time_point toast_until{};
 constexpr unsigned toast_height=43;
 constexpr auto toast_duration=std::chrono::seconds(4);
+void advance_toast(Clock::time_point now) {
+    if (toast.heading[0] && now<toast_until) return;
+    toast={};
+    if (!queued_toasts.empty()) {toast=queued_toasts.front();queued_toasts.pop_front();toast_until=now+toast_duration;}
+}
+void queue_toast(const Toast& value) { // overlay_mutex held
+    const auto now=Clock::now();advance_toast(now);
+    const auto same=[&](const Toast& other) {
+        return other.heading==value.heading && other.detail==value.detail &&
+               other.invitation==value.invitation && other.friend_request==value.friend_request;
+    };
+    if (same(toast) || std::any_of(queued_toasts.begin(),queued_toasts.end(),same)) return;
+    if (!toast.heading[0]) {toast=value;toast_until=now+toast_duration;}
+    else if (queued_toasts.size()<16) queued_toasts.push_back(value);
+}
 std::atomic<bool>& enabled() {
     static std::atomic<bool> value{[] {const char* e=std::getenv("TB_FPS_OVERLAY");return e && std::atoi(e)!=0;}()};
     return value;
@@ -156,6 +175,19 @@ void draw_friends(const Canvas& canvas,unsigned height,unsigned scale,const Frie
         canvas.text(13*scale,80*scale,"CONNECT TO ONLINE BATTLE",scale,muted);
     } else if (view.busy) {
         canvas.text(13*scale,66*scale,"WAITING FOR SERVER...",scale,white);
+    } else if (!view.status.empty()) {
+        std::string_view remaining=view.status;
+        for (unsigned row=0;row<6 && !remaining.empty();++row) {
+            auto count=std::min<size_t>(33,remaining.size());
+            if (count<remaining.size()) {
+                const auto space=remaining.rfind(' ',count);
+                if (space!=std::string_view::npos && space) count=space;
+            }
+            const auto line=std::string(remaining.substr(0,count));
+            canvas.text(13*scale,(63+row*10)*scale,line.c_str(),scale,white);
+            remaining.remove_prefix(count);
+            while (!remaining.empty() && remaining.front()==' ') remaining.remove_prefix(1);
+        }
     } else if (view.section==FriendsSection::add) {
         canvas.text(13*scale,64*scale,"USERNAME",scale,muted);
         canvas.fill(13*scale,75*scale,canvas.width-26*scale,15*scale,selected_row);
@@ -170,12 +202,19 @@ void draw_friends(const Canvas& canvas,unsigned height,unsigned scale,const Frie
                 if (view.upper && text[0]>='a' && text[0]<='z') text[0]=char(text[0]-'a'+'A');
                 canvas.text(x+2*scale,y+scale,i==38?"DEL":i==39?"DONE":text,scale,i==view.keyboard_key?card:white);
             }
-        } else canvas.text(13*scale,98*scale,"X / Z OR ENTER TO EDIT USERNAME",scale,muted);
+        } else for (size_t i=0;i<view.actions.size() && i<2;++i) {
+            const auto y=static_cast<unsigned>(95+i*12)*scale;
+            if (i==view.action_selected) canvas.fill(13*scale,y,canvas.width-26*scale,11*scale,selected_row);
+            canvas.text(17*scale,y+2*scale,view.actions[i].c_str(),scale,i==view.action_selected?accent:muted);
+        }
     } else if (view.details) {
         if (!view.rows.empty()) canvas.text(13*scale,66*scale,view.rows[view.selected].c_str(),scale,white);
-        canvas.text(13*scale,84*scale,view.section==FriendsSection::friends?
-                    "INVITE FROM A PRIVATE LOBBY":view.section==FriendsSection::received?
-                    "THIS PLAYER WANTS TO BE FRIENDS":"WAITING FOR THEIR ACCEPTANCE",scale,muted);
+        if (view.confirm_remove) canvas.text(13*scale,78*scale,"REMOVE THIS FRIEND?",scale,white);
+        for (size_t i=0;i<view.actions.size() && i<2;++i) {
+            const auto y=static_cast<unsigned>(91+i*12)*scale;
+            if (i==view.action_selected) canvas.fill(13*scale,y,canvas.width-26*scale,11*scale,selected_row);
+            canvas.text(17*scale,y+2*scale,view.actions[i].c_str(),scale,i==view.action_selected?accent:muted);
+        }
     } else {
         const auto selected=view.rows.empty()?0:std::min(view.selected,view.rows.size()-1);
         const auto first=selected/visible_choices*visible_choices;
@@ -195,8 +234,10 @@ void draw_friends(const Canvas& canvas,unsigned height,unsigned scale,const Frie
         canvas.text(10*scale,163*scale,"PS X TYPE  O CANCEL  START DONE",scale,white);
         canvas.text(10*scale,174*scale,"KEYBOARD ENTER DONE  ESC CANCEL",scale,muted);
     } else {
-        canvas.text(10*scale,124*scale,view.message.empty()?"LEFT/RIGHT CATEGORY  UP/DOWN LIST":view.message.c_str(),scale,muted);
-        canvas.text(10*scale,135*scale,"PS X SELECT O BACK / KEYS Z X",scale,white);
+        const auto* help=!view.status.empty()?"CONFIRM OR BACK TO CONTINUE":view.busy?"WAITING / BACK IS AVAILABLE":
+                         view.message.empty()?"LEFT/RIGHT CATEGORY  UP/DOWN LIST":view.message.c_str();
+        canvas.text(10*scale,124*scale,help,scale,muted);
+        canvas.text(10*scale,135*scale,view.status.empty()?"PS X SELECT O BACK / KEYS Z X":"PS X OK O BACK / KEYS Z X",scale,white);
     }
 }
 
@@ -257,10 +298,10 @@ uint32_t tb_panel_take_input() {
 }
 void tb_show_invite_toast(const char* sender) {
     std::lock_guard guard(overlay_mutex);
-    std::snprintf(toast.heading.data(),toast.heading.size(),"%s",sender);
-    std::snprintf(toast.detail.data(),toast.detail.size(),"INVITED YOU");
-    toast.invitation=true;
-    toast_until=Clock::now()+toast_duration;
+    Toast value;
+    std::snprintf(value.heading.data(),value.heading.size(),"%s",sender);
+    std::snprintf(value.detail.data(),value.detail.size(),"INVITED YOU");
+    queue_toast(value);
 }
 bool tb_friends_panel_show(const FriendsPanelView& view,bool from_invite) {
     std::lock_guard guard(overlay_mutex);
@@ -282,21 +323,40 @@ void tb_friends_panel_close() {
 }
 bool tb_show_friends_hint() {
     std::lock_guard guard(overlay_mutex);
-    if (toast.heading[0] && Clock::now()<toast_until) return false;
+    advance_toast(Clock::now());
+    if (toast.heading[0] || !queued_toasts.empty()) return false;
     std::snprintf(toast.heading.data(),toast.heading.size(),"FRIENDS");
     std::snprintf(toast.detail.data(),toast.detail.size(),"F2 / SELECT+TRIANGLE / VIEW+Y");
-    toast.invitation=false;toast_until=Clock::now()+toast_duration;return true;
+    toast.invitation=false;toast.friend_request=false;toast_until=Clock::now()+toast_duration;return true;
 }
 void tb_clear_invite_toast() {
     std::lock_guard guard(overlay_mutex);
+    std::erase_if(queued_toasts,[](const auto& value){return value.invitation;});
     if (toast.invitation) toast={};
+    advance_toast(Clock::now());
 }
 void tb_show_network_toast(const char* heading,const char* detail) {
     std::lock_guard guard(overlay_mutex);
-    std::snprintf(toast.heading.data(),toast.heading.size(),"%s",heading);
-    std::snprintf(toast.detail.data(),toast.detail.size(),"%s",detail);
-    toast.invitation=false;
-    toast_until=Clock::now()+toast_duration;
+    Toast value;value.invitation=false;
+    std::snprintf(value.heading.data(),value.heading.size(),"%s",heading);
+    std::snprintf(value.detail.data(),value.detail.size(),"%s",detail);
+    queue_toast(value);
+}
+void tb_show_friend_request_toast(const char* sender) {
+    std::lock_guard guard(overlay_mutex);
+    Toast value;value.invitation=false;value.friend_request=true;
+    std::snprintf(value.heading.data(),value.heading.size(),"%s",sender);
+    std::snprintf(value.detail.data(),value.detail.size(),"FRIEND REQUEST / F2 TO VIEW");
+    queue_toast(value);
+}
+void tb_clear_friend_request_toasts() {
+    std::lock_guard guard(overlay_mutex);
+    std::erase_if(queued_toasts,[](const auto& value){return value.friend_request;});
+    if (toast.friend_request) toast={};
+    advance_toast(Clock::now());
+}
+bool tb_friend_request_toast_visible() {
+    std::lock_guard guard(overlay_mutex);advance_toast(Clock::now());return toast.heading[0] && toast.friend_request;
 }
 
 extern "C" void tb_fps_guest_flip() {flips.fetch_add(1,std::memory_order_relaxed);tb_gameplay_event(0,0);}
@@ -322,11 +382,12 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
         if (!notification && friends_active) {mode=Mode::friends;friends_panel=friends_view;}
         if (notification && toast.heading[0]) {
             const auto now=Clock::now();
+            advance_toast(now);
             if (now<toast_until) {
                 toast_view=toast;
                 remaining=std::chrono::duration<double>(toast_until-now)/toast_duration;
                 mode=Mode::invitation;
-            } else toast={};
+            }
         }
     }
     if (notification && !toast_view.heading[0]) return 0;

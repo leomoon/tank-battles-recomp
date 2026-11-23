@@ -76,7 +76,7 @@ endif()
 add_test(NAME basic_invitation_wire COMMAND basic_wire)
 
 add_executable(basic_adapter basic_adapter.cpp "${PORT_ROOT}/rpcn/basic.cpp"
-    "${PORT_ROOT}/rpcn/basic_wire.cpp")
+    "${PORT_ROOT}/rpcn/basic_wire.cpp" "${PORT_ROOT}/rpcn/friends.cpp")
 target_include_directories(basic_adapter PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/abi" "${PORT_ROOT}" "${SDK}/include")
 target_compile_definitions(basic_adapter PRIVATE PPU_NO_INLINE_LOADS NOMINMAX)
 if(MSVC)
@@ -115,3 +115,18 @@ if(WIN32)
 endif()
 add_test(NAME score_adapter COMMAND score_adapter)
 set_tests_properties(score_adapter PROPERTIES TIMEOUT 15)
+
+add_executable(friends_ui friends_ui.cpp "${PORT_ROOT}/rpcn/basic.cpp" "${PORT_ROOT}/rpcn/basic_wire.cpp"
+    "${PORT_ROOT}/rpcn/friends.cpp" "${PORT_ROOT}/rpcn/client.cpp" "${PORT_ROOT}/rpcn/matching.cpp"
+    "${PORT_ROOT}/rpcn/matching_room.cpp" "${PORT_ROOT}/rpcn/signaling.cpp" "${PORT_ROOT}/rpcn/peer_udp.cpp")
+target_include_directories(friends_ui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/abi" "${PORT_ROOT}" "${SDK}/include")
+target_compile_definitions(friends_ui PRIVATE PPU_NO_INLINE_LOADS NOMINMAX)
+target_link_libraries(friends_ui PRIVATE CURL::libcurl Threads::Threads)
+if(WIN32)
+    target_link_libraries(friends_ui PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(friends_ui PRIVATE /UNDEBUG)
+else()
+    target_compile_options(friends_ui PRIVATE -UNDEBUG)
+endif()

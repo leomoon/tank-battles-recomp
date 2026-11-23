@@ -728,6 +728,11 @@ Relationships relationships() {
     return relationship_state;
 }
 
+uint64_t relationships_revision() {
+    std::lock_guard guard(state_lock);
+    return relationship_state.revision;
+}
+
 // One stable word per outcome on stdout, for the launcher's account screens.
 const char* account_result(const std::exception& error, AccountAction action) {
     if (dynamic_cast<const ProfileError*>(&error)) return "invalid_profile";

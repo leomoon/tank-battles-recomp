@@ -1,5 +1,6 @@
 #include "basic.h"
 #include "friend_name.h"
+#include "friends.h"
 #include "matching_data.h"
 #include "fps_overlay.h"
 #include "execution_policy_api.h"
@@ -13,6 +14,7 @@
 #include <deque>
 #include <mutex>
 #include <optional>
+#include <string_view>
 
 extern "C" int np_is_initialized();
 extern "C" int32_t cellSysutilQueueGuestCallbackArgs(uint32_t,const uint64_t*);
@@ -36,10 +38,16 @@ Panel panel=Panel::none;
 std::vector<std::string> choices;
 size_t choice=0;
 BasicMessage outgoing;
+std::vector<std::string> allowed_recipients;
+Relationships observed;
+FriendsController friend_ops;
+uint64_t ui_serial=0,operation_owner=0;
 struct FriendsUi {
     FriendsSection section=FriendsSection::friends;
-    size_t selected=0;
-    bool details=false, from_invite=false;
+    size_t selected=0,action_selected=0;
+    uint64_t serial=0;
+    std::string selected_user,status;
+    bool details=false, from_invite=false,confirm_remove=false;
     FriendNameEntry name;
 };
 std::optional<FriendsUi> friends_ui;
@@ -61,37 +69,92 @@ void result(uint32_t event,int32_t status=0) {
 void show() {
     tb_panel_show(panel==Panel::send?InvitePicker::friends:InvitePicker::invitations,choices,choice);
 }
+bool same_name(std::string_view a,std::string_view b) {
+    const auto lower=[](char c){return c>='A' && c<='Z'?char(c-'A'+'a'):c;};
+    return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),[&](char x,char y){return lower(x)==lower(y);});
+}
+void refresh_choices() {
+    const auto previous=choice<choices.size()?choices[choice]:std::string{};
+    choices.clear();
+    for (const auto& f:observed.friends) {
+        if (!f.online) continue;
+        if (allowed_recipients.empty() || std::find(allowed_recipients.begin(),allowed_recipients.end(),f.npid)!=allowed_recipients.end())
+            choices.push_back(f.npid);
+    }
+    choices.push_back("MANAGE FRIENDS");
+    const auto it=std::find(choices.begin(),choices.end(),previous);
+    choice=previous.empty()?0:it==choices.end()?choices.size()-1:size_t(it-choices.begin());
+}
 FriendsPanelView friends_view() {
-    const auto state=relationships();
+    auto& ui=*friends_ui;
+    const auto& state=observed;
     FriendsPanelView view;
-    view.account=state.npid.empty()?"OFFLINE":state.npid;
-    view.endpoint=state.endpoint;
+    view.account=state.npid.empty()?"OFFLINE":state.npid;view.endpoint=state.endpoint;
     view.connected=status().state==State::online;
-    view.section=friends_ui->section;view.details=friends_ui->details;
-    view.editing=friends_ui->name.editing;view.upper=friends_ui->name.upper;
-    view.keyboard_key=friends_ui->name.key;view.username=friends_ui->name.value;
-    view.message=friends_ui->name.error;
+    view.section=ui.section;view.details=ui.details;view.busy=friend_ops.busy();
+    view.editing=ui.name.editing;view.upper=ui.name.upper;
+    view.keyboard_key=ui.name.key;view.username=ui.name.value;view.message=ui.name.error;
+    std::vector<std::string> names;
     switch (view.section) {
     case FriendsSection::friends:
-        for (const auto& f:state.friends) view.rows.push_back(f.npid+(f.online?"  ONLINE":"  OFFLINE"));
+        for (const auto& f:state.friends) {names.push_back(f.npid);view.rows.push_back(f.npid+(f.online?"  ONLINE":"  OFFLINE"));}
         break;
-    case FriendsSection::received:view.rows=state.incoming;break;
-    case FriendsSection::sent:view.rows=state.outgoing;break;
+    case FriendsSection::received:names=state.incoming;view.rows=names;break;
+    case FriendsSection::sent:names=state.outgoing;view.rows=names;break;
     case FriendsSection::add:break;
     }
-    friends_ui->selected=view.rows.empty()?0:std::min(friends_ui->selected,view.rows.size()-1);
-    view.selected=friends_ui->selected;
+    if (!ui.selected_user.empty()) {
+        const auto it=std::find_if(names.begin(),names.end(),[&](const auto& name){return same_name(name,ui.selected_user);});
+        if (it!=names.end()) ui.selected=size_t(it-names.begin());
+        else {ui.details=false;ui.confirm_remove=false;ui.action_selected=0;}
+    }
+    ui.selected=names.empty()?0:std::min(ui.selected,names.size()-1);
+    ui.selected_user=names.empty()?std::string{}:names[ui.selected];
+    view.selected=ui.selected;view.details=ui.details;view.confirm_remove=ui.confirm_remove;
+    if (view.section==FriendsSection::add) view.actions={"EDIT USERNAME","SEND REQUEST"};
+    else if (ui.details) {
+        if (ui.confirm_remove) view.actions={"KEEP FRIEND","REMOVE FRIEND"};
+        else if (view.section==FriendsSection::friends) view.actions={"REMOVE FRIEND"};
+        else if (view.section==FriendsSection::received) view.actions={"ACCEPT REQUEST","DECLINE REQUEST"};
+        else view.actions={"CANCEL REQUEST"};
+    }
+    ui.action_selected=view.actions.empty()?0:std::min(ui.action_selected,view.actions.size()-1);
+    view.action_selected=ui.action_selected;view.status=ui.status;
     return view;
 }
-void open_friends(bool from_invite) {
-    friends_ui=FriendsUi{};friends_ui->from_invite=from_invite;
+void open_friends(bool from_invite,bool received=false) {
+    friends_ui=FriendsUi{};friends_ui->from_invite=from_invite;friends_ui->serial=++ui_serial;
+    if (received) friends_ui->section=FriendsSection::received;
     if (!tb_friends_panel_show(friends_view(),from_invite)) friends_ui.reset();
 }
 void close_friends() {
+    const bool nested=friends_ui && friends_ui->from_invite;
     tb_friends_panel_close();friends_ui.reset();
+    if (nested && panel==Panel::send) {refresh_choices();show();}
+}
+void start_friend_action(FriendAction action,const std::string& name,bool confirmed=false) {
+    operation_owner=friends_ui->serial;
+    const auto reply=friend_ops.begin(action,name,confirmed);
+    friends_ui->confirm_remove=false;
+    if (reply.outcome!=FriendOutcome::pending) friends_ui->status=reply.message;
+}
+void refresh_relationships() {
+    if (observed.revision==relationships_revision()) return;
+    auto next=relationships();
+    const bool changed=!observed.npid.empty() && !next.npid.empty() &&
+        (observed.generation!=next.generation || observed.endpoint!=next.endpoint || observed.npid!=next.npid);
+    if (changed) {close_friends();tb_clear_friend_request_toasts();tb_clear_invite_toast();}
+    if (next.npid.empty()) tb_clear_friend_request_toasts();
+    else for (const auto& name:next.incoming) {
+        if (!changed && std::any_of(observed.incoming.begin(),observed.incoming.end(),[&](const auto& old){return same_name(old,name);})) continue;
+        tb_show_friend_request_toast(name.c_str());
+    }
+    observed=std::move(next);
+    if (panel==Panel::send) {refresh_choices();if (!friends_ui) show();}
 }
 void pump_friends(uint32_t buttons) {
-    auto& name=friends_ui->name;
+    auto& ui=*friends_ui;
+    auto& name=ui.name;
     tb_friends_input input{};
     while (tb_friends_take_input(&input)) {
         if (input.kind==TB_FRIENDS_FOCUS_LOST) {if(name.editing) name.cancel();buttons=0;break;}
@@ -107,8 +170,8 @@ void pump_friends(uint32_t buttons) {
             else if (scan==TB_FRIENDS_DOWN) name.move(0,1);
             else if (scan==TB_FRIENDS_LEFT) name.move(-1,0);
             else if (scan==TB_FRIENDS_RIGHT) name.move(1,0);
-            // Letters come only from SDL_TEXTINPUT, including Z and X.
-            if (!name.editing) {tb_friends_panel_show(friends_view(),friends_ui->from_invite);return;}
+            // SDL_TEXTINPUT owns Z and X while editing; never forward these as confirm/back.
+            if (!name.editing) {tb_friends_panel_show(friends_view(),ui.from_invite);return;}
         } else {
             if (scan==TB_FRIENDS_UP) buttons|=0x10;
             if (scan==TB_FRIENDS_RIGHT) buttons|=0x20;
@@ -119,7 +182,7 @@ void pump_friends(uint32_t buttons) {
         }
     }
     if (!tb_friends_window_focused()) {
-        tb_friends_panel_show(friends_view(),friends_ui->from_invite);return;
+        tb_friends_panel_show(friends_view(),ui.from_invite);return;
     }
     if (name.editing) {
         if (buttons&0x2000) name.cancel();
@@ -128,21 +191,35 @@ void pump_friends(uint32_t buttons) {
         else if (buttons&8) name.done();
         else if (buttons&0xf0) name.move(buttons&0x20?1:buttons&0x80?-1:0,buttons&0x40?1:buttons&0x10?-1:0);
         else if (buttons&0x4000) name.choose();
-        tb_friends_panel_show(friends_view(),friends_ui->from_invite);return;
+        tb_friends_panel_show(friends_view(),ui.from_invite);return;
     }
     auto view=friends_view();
-    if (buttons&0x2000) {
-        if (friends_ui->details) friends_ui->details=false;
+    if (!ui.status.empty()) {if (buttons&0x6000) ui.status.clear();}
+    else if (buttons&0x2000) {
+        if (ui.confirm_remove) {ui.confirm_remove=false;ui.action_selected=0;}
+        else if (ui.details) ui.details=false;
         else {close_friends();return;}
-    } else if (buttons&0xa0) {
-        const auto section=static_cast<unsigned>(friends_ui->section);
-        friends_ui->section=static_cast<FriendsSection>((section+(buttons&0x20?1:3))%4);
-        friends_ui->selected=0;friends_ui->details=false;
-    } else if (!friends_ui->details && !view.rows.empty() && (buttons&0x50)) {
-        friends_ui->selected=(friends_ui->selected+(buttons&0x40?1:view.rows.size()-1))%view.rows.size();
-    } else if ((buttons&0x4000) && friends_ui->section==FriendsSection::add && view.connected) name.open();
-    else if ((buttons&0x4000) && !view.rows.empty()) friends_ui->details=true;
-    tb_friends_panel_show(friends_view(),friends_ui->from_invite);
+    } else if (view.busy) {} // Back remains responsive; mutations never block this pump.
+    else if (buttons&0xa0) {
+        const auto section=static_cast<unsigned>(ui.section);
+        ui.section=static_cast<FriendsSection>((section+(buttons&0x20?1:3))%4);
+        ui.selected=ui.action_selected=0;ui.selected_user.clear();ui.details=ui.confirm_remove=false;
+    } else if (buttons&0x50) {
+        if (!view.actions.empty()) ui.action_selected=(ui.action_selected+(buttons&0x40?1:view.actions.size()-1))%view.actions.size();
+        else if (!view.rows.empty()) {ui.selected=(ui.selected+(buttons&0x40?1:view.rows.size()-1))%view.rows.size();ui.selected_user.clear();}
+    } else if ((buttons&0x4000) && view.connected) {
+        if (ui.section==FriendsSection::add) {
+            if (!ui.action_selected) name.open();
+            else start_friend_action(FriendAction::add,name.value);
+        } else if (ui.details && !ui.selected_user.empty()) {
+            if (ui.section==FriendsSection::received) start_friend_action(ui.action_selected?FriendAction::decline:FriendAction::accept,ui.selected_user);
+            else if (ui.section==FriendsSection::sent) start_friend_action(FriendAction::cancel,ui.selected_user);
+            else if (!ui.confirm_remove) {ui.confirm_remove=true;ui.action_selected=0;}
+            else if (!ui.action_selected) ui.confirm_remove=false;
+            else start_friend_action(FriendAction::remove,ui.selected_user,true);
+        } else if (!view.rows.empty()) {ui.details=true;ui.action_selected=0;}
+    }
+    tb_friends_panel_show(friends_view(),ui.from_invite);
 }
 std::optional<std::string> guest_text(uint32_t address,size_t limit) {
     if (!address) return std::string{};
@@ -183,21 +260,16 @@ uint32_t send(ppu_context* c) {
         message.id || message.type!=3 || message.subtype>1 || (message.features&0x7ff8)) return invalid;
     message.subject=*subject;message.body=*body;
     for (uint32_t i=0;i<size;++i) message.data.push_back(vm_read8(data+i));
-    choices.clear();
-    for (const auto& f:friends()) {
-        if (!f.online) continue;
-        bool allowed=!count;
-        if (count && !guest_range(npids,uint64_t(count)*36)) return invalid;
-        for (uint32_t i=0;i<count;++i) {
-            const auto name=guest_text(npids+i*36,16);
-            if (!name) return invalid;
-            if (*name==f.npid) allowed=true;
-        }
-        if (allowed) choices.push_back(f.npid);
+    allowed_recipients.clear();
+    if (count && !guest_range(npids,uint64_t(count)*36)) return invalid;
+    for (uint32_t i=0;i<count;++i) {
+        const auto name=guest_text(npids+i*36,16);
+        if (!name || name->empty()) return invalid;
+        allowed_recipients.push_back(*name);
     }
+    refresh_relationships();choices.clear();refresh_choices();
     fprintf(stderr,"[rpcn-basic] send type=%u subtype=%u features=0x%08x bytes=%zu online-friends=%zu\n",
-        message.type,message.subtype,message.features,message.data.size(),choices.size());
-    choices.push_back("MANAGE FRIENDS");
+        message.type,message.subtype,message.features,message.data.size(),choices.size()-1);
     outgoing=std::move(message);panel=Panel::send;choice=0;show();return 0;
 }
 uint32_t receive(ppu_context* c) {
@@ -278,6 +350,11 @@ void reset_basic() {
 }
 void pump_basic(bool system_dialog) {
     std::lock_guard guard(basic_lock);
+    refresh_relationships();
+    if (const auto reply=friend_ops.poll();reply && friends_ui && friends_ui->serial==operation_owner)
+        friends_ui->status=reply->message;
+    // A completed acknowledgement may have advanced the snapshot since the first read.
+    refresh_relationships();
     const auto identity=status();
     if (identity.state!=State::online) {
         hint_shown=false;
@@ -287,8 +364,13 @@ void pump_basic(bool system_dialog) {
     }
     if (friends_ui && (!tb_friends_panel_visible() || system_dialog)) close_friends();
     if (tb_friends_take_toggle() && !system_dialog && !sending.valid()) {
-        if (friends_ui) close_friends();
-        else if (panel==Panel::none || panel==Panel::send) open_friends(panel==Panel::send);
+        const bool received=tb_friend_request_toast_visible();
+        if (friends_ui && received && friends_ui->section!=FriendsSection::received) {
+            auto& ui=*friends_ui;ui.name.cancel();ui.section=FriendsSection::received;
+            ui.selected=ui.action_selected=0;ui.selected_user.clear();ui.details=ui.confirm_remove=false;ui.status.clear();
+        } else if (friends_ui) close_friends();
+        else if (panel==Panel::none || panel==Panel::send) open_friends(panel==Panel::send,received);
+        if (received) tb_clear_friend_request_toasts();
     }
     if (!system_dialog && !hint_shown && identity.state==State::online)
         hint_shown=tb_show_friends_hint();
