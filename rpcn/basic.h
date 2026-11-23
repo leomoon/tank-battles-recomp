@@ -13,6 +13,6 @@ struct BasicMessage {
 std::vector<unsigned char> encode_basic_message(const BasicMessage&, const std::vector<std::string>& recipients);
 BasicMessage decode_basic_notification(std::span<const unsigned char>);
 void register_basic();
-void pump_basic();
+void pump_basic(bool system_dialog=false);
 void reset_basic();
 }

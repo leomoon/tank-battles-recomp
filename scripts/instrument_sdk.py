@@ -3,6 +3,9 @@ import argparse,hashlib,json,re
 from pathlib import Path
 
 EDITS={
+ 'libs/system/cellMsgDialog.c':[(
+  'static int                   s_dialog_open = 0;',
+  'static int                   s_dialog_open = 0;\nint tb_system_dialog_active(void) { return s_dialog_open; }')],
  'runtime/syscalls/sys_ppu_thread.c':[(
   '    if (priority < 256)\n        SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);',
   '    /* Tank Battles SurMixer producers use guest priorities 400..404.\n     * Preserve their precedence over the main thread (1001) on Windows. */\n    if (priority < 512) {\n        SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);\n        if (getenv("AUDIO_RATE")) fprintf(stderr,"[audio-priority] guest=%d host=%d name=%s\\n",\n            priority,GetThreadPriority(t->host_thread),t->name);\n    }')],

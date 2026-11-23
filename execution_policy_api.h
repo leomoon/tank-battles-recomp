@@ -26,6 +26,8 @@ void tb_keyboard_down(uint32_t scancode);
 uint32_t tb_keyboard_take(void);
 uint32_t tb_keyboard_peek(void);
 void tb_keyboard_ack(uint32_t mask);
+void tb_friends_request_toggle(void);
+int tb_friends_take_toggle(void);
 void tb_input_sample(uint32_t kind, uint32_t port, uint32_t buttons);
 void tb_resource_read(int host_fd, uint64_t offset, const void* data, uint64_t size, uint32_t ea);
 void tb_resource_hle(uint32_t nid);

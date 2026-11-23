@@ -20,6 +20,7 @@ int np_is_initialized();
 int32_t cellSysutilQueueGuestCallbackArgs(uint32_t, const uint64_t*);
 void cellSysutilQueueEvent(int, uint32_t, uint32_t);
 void tb_sdk_ps3_hle_call(uint32_t, ppu_context*);
+int tb_system_dialog_active();
 void ppu_thread_set_startup_wait_entry(uint64_t);
 void ppu_thread_note_block(uint64_t);
 }
@@ -356,6 +357,7 @@ void check_callbacks(ppu_context* c) {
     const uint32_t lr=c->lr;
     uint32_t queue_error=0;
     bool queued=false;
+    bool system_dialog=false;
     {
         std::lock_guard guard(lock);
         if (tb::rpcn::enabled()) {
@@ -412,8 +414,9 @@ void check_callbacks(ppu_context* c) {
             if(ctx)ctx->pending=false;else voice_pending=false;
         }
         completions=std::move(retry);
+        system_dialog=dialog || tb_system_dialog_active();
     }
-    if (tb::rpcn::enabled()) { tb::rpcn::pump_matching(); tb::rpcn::pump_basic(); }
+    if (tb::rpcn::enabled()) { tb::rpcn::pump_matching(); tb::rpcn::pump_basic(system_dialog); }
     delegate("cellSysutilCheckCallback",c);
     if(!c->gpr[3] && queue_error)c->gpr[3]=queue_error;
     if (queued && offline_trace_enabled()) {

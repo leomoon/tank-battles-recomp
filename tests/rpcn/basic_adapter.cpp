@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdio>
 #include <map>
+#include <utility>
 #include <vector>
 using namespace std::chrono_literals;
 using Callback = std::array<uint64_t,8>;
@@ -47,32 +48,57 @@ uint32_t call(const char* name,std::initializer_list<uint64_t> args={}) {
 
 static uint32_t buttons=0;
 static bool panel=false;
+static bool friend_panel=false,toggle_requested=false;
+static InvitePicker panel_kind;
+static FriendsPanelView friend_view;
 static std::vector<std::string> displayed_choices;
 static std::string toast_sender;
 void tb_show_invite_toast(const char* sender) { toast_sender=sender; }
 void tb_clear_invite_toast() { toast_sender.clear(); }
-void tb_panel_show(InvitePicker,std::span<const std::string> choices,size_t) {
+void tb_panel_show(InvitePicker kind,std::span<const std::string> choices,size_t) {
     panel=true;
+    panel_kind=kind;friend_panel=false;
     displayed_choices.assign(choices.begin(),choices.end());
 }
-void tb_panel_close() { panel=false; }
+void tb_panel_close() { panel=false;friend_panel=false; }
+bool tb_friends_panel_show(const FriendsPanelView& view,bool nested) {
+    if (!friend_panel && panel && !(nested && panel_kind==InvitePicker::friends)) return false;
+    friend_panel=true;friend_view=view;return true;
+}
+bool tb_friends_panel_visible() {return friend_panel;}
+void tb_friends_panel_close() {friend_panel=false;}
+bool tb_show_friends_hint() {return true;}
+extern "C" void tb_friends_request_toggle() {toggle_requested=true;}
+extern "C" int tb_friends_take_toggle() {return std::exchange(toggle_requested,false);}
 PanelPadInput tb_panel_input(uint32_t value) {
     buttons=value;
-    return panel?PanelPadInput::captured:PanelPadInput::passthrough;
+    return panel || friend_panel?PanelPadInput::captured:PanelPadInput::passthrough;
 }
 uint32_t tb_panel_take_input() {auto value=buttons;buttons=0;return value;}
-extern "C" void tb_sdk_ps3_hle_call(uint32_t,ppu_context*) {}
+static uint32_t physical_buttons=0;
+extern "C" void tb_sdk_ps3_hle_call(uint32_t,ppu_context* c) {
+    const auto out=c->gpr[4];
+    vm_write32(out,8);vm_write16(out+8,physical_buttons&0xff);vm_write16(out+10,physical_buttons>>8);c->gpr[3]=0;
+}
 namespace tb::rpcn {
 bool guest_range(uint64_t a,uint64_t size) {return a>=0x10000 && a<=memory.size() && size<=memory.size()-a;}
 static std::vector<Notification> notices;
 static bool peer_online=true;
 static unsigned submitted_messages=0;
-Status status() {return {State::online,"PlayerA",1,"localhost:31313"};}
+static bool online=true;
+static std::vector<unsigned char> submitted_payload;
+Status status() {return {online?State::online:State::offline,"PlayerA",1,"localhost:31313"};}
 std::vector<Friend> friends() {return {{"PlayerB",peer_online,0},{"Offline",false,0}};}
+Relationships relationships() {
+    if (!online) return {};
+    Relationships s;s.npid="PlayerA";s.endpoint="localhost:31313";s.generation=1;s.user_id=1;
+    s.friends=friends();s.incoming={"RequestA"};s.outgoing={"RequestB"};return s;
+}
 std::vector<Notification> take_basic_notifications() {auto result=notices;notices.clear();return result;}
 std::future<Reply> submit(Request command,std::vector<unsigned char> bytes) {
  assert(command==Request::send_message && bytes.size()>4);
  ++submitted_messages;
+ submitted_payload=bytes;
  std::promise<Reply> completion;completion.set_value({{0}});return completion.get_future();
 }
 }
@@ -90,9 +116,22 @@ int main() {
  vm_write16(message+8,3);vm_write32(message+12,1);vm_write32(message+32,payload);vm_write32(message+36,24);
  vm_write64(payload,56);
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));assert(panel);
- assert(displayed_choices==std::vector<std::string>{"PlayerB"});
+ assert(displayed_choices==(std::vector<std::string>{"PlayerB","MANAGE FRIENDS"}));
+ const auto before_manage=callbacks.size();
+ buttons=0x40;pump_basic(); // Select Manage Friends.
+ buttons=0x4000;pump_basic();assert(friend_panel && panel);
+ assert(callbacks.size()==before_manage && submitted_messages==0);
+ assert(friend_view.account=="PlayerA" && friend_view.endpoint=="localhost:31313");
+ buttons=0x20;pump_basic();assert(friend_view.section==FriendsSection::received);
+ assert(friend_view.rows==std::vector<std::string>{"RequestA"});
+ buttons=0x2000;pump_basic();assert(!friend_panel && panel);
+ assert(callbacks.size()==before_manage);
+ buttons=0x10;pump_basic(); // Return to PlayerB; invitation bytes remain unchanged.
  buttons=0x4000;pump_basic();assert(!panel);
  assert(callbacks.back()[0]==13 && callbacks.back()[1]==0 && callbacks.back()[3]==123);
+ BasicMessage preserved;preserved.communication_id="NPWR00718_00";preserved.features=1;preserved.data.resize(24);
+ preserved.data[7]=56;
+ assert(submitted_payload==encode_basic_message(preserved,{"PlayerB"}));
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
  buttons=0x2000;pump_basic();assert(!panel && callbacks.back()[1]==UINT64_MAX);
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
@@ -102,8 +141,10 @@ int main() {
  for (unsigned i=0;i<7;++i) vm_write8(recipient+i,"PlayerC"[i]);
  vm_write32(message+16,recipient);vm_write32(message+20,1);
  assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
- assert(displayed_choices.empty());
- buttons=0x4000;pump_basic();assert(!panel && callbacks.back()[1]==UINT64_MAX);
+ assert(displayed_choices==std::vector<std::string>{"MANAGE FRIENDS"});
+ buttons=0x4000;pump_basic();assert(friend_panel && panel);
+ buttons=0x2000;pump_basic();assert(!friend_panel && panel);
+ buttons=0x2000;pump_basic();assert(!panel && callbacks.back()[1]==UINT64_MAX);
  assert(submitted_messages==1);
  BasicMessage msg;msg.communication_id="NPWR00718_00";msg.data.resize(24);msg.data[7]=56;msg.features=1;
  const auto encoded=encode_basic_message(msg,{"PlayerA"});
@@ -144,5 +185,28 @@ int main() {
  reset_basic();
  assert(toast_sender.empty());
  assert(call("sceNpBasicRecvMessageAttachmentLoad",{1,data,size})==0x8002a66d);
+ const auto before_standalone=callbacks.size();
+ toggle_requested=true;pump_basic();assert(friend_panel && !panel);
+ buttons=0x4000;pump_basic();assert(friend_view.details);
+ buttons=0x2000;pump_basic();assert(friend_panel && !friend_view.details);
+ buttons=0x2000;pump_basic();assert(!friend_panel && !panel);
+ assert(callbacks.size()==before_standalone);
+ toggle_requested=true;pump_basic(true);assert(!friend_panel); // System dialog owns input.
+ toggle_requested=true;pump_basic();assert(friend_panel);
+ pump_basic(true);assert(!friend_panel && callbacks.size()==before_standalone);
+ toggle_requested=true;pump_basic();assert(friend_panel);
+ online=false;pump_basic();assert(friend_panel && !friend_view.connected);
+ online=true;buttons=0x2000;pump_basic();assert(!friend_panel);
+ tb_panel_show(InvitePicker::rooms,{},0);
+ toggle_requested=true;pump_basic();assert(!friend_panel && panel);
+ tb_panel_close();
+ constexpr uint32_t pad=0x11900;
+ physical_buttons=0;assert(!call("cellPadGetData",{0,pad}));
+ physical_buttons=0x1001;assert(!call("cellPadGetData",{0,pad}));
+ assert(!vm_read16(pad+8) && !vm_read16(pad+10));
+ pump_basic();assert(friend_panel);
+ call("cellPadGetData",{0,pad});pump_basic();assert(friend_panel); // Held chord does not repeat.
+ physical_buttons=0;call("cellPadGetData",{0,pad});pump_basic();
+ physical_buttons=0x1001;call("cellPadGetData",{0,pad});pump_basic();assert(!friend_panel);
  puts("PASS: invite send/receive callbacks, guest events, attachment bounds and cleanup");
 }

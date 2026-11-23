@@ -12,6 +12,7 @@ out=ROOT/'build-tests/fps-overlay';out.mkdir(parents=True,exist_ok=True)
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <fstream>
 #include <thread>
 #include <vector>
 int main(){
@@ -116,8 +117,56 @@ int main(){
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
  assert(region.height==178);
  tb_panel_close();
+ FriendsPanelView manager;
+ manager.account="PlayerA";manager.endpoint="play.lmx.to:31313";manager.connected=true;
+ manager.rows={"PlayerB  ONLINE","FriendC  OFFLINE","FriendD  ONLINE","FriendE  OFFLINE","FriendF  ONLINE","FriendG  ONLINE"};
+ manager.selected=5;
+ assert(tb_friends_panel_show(manager));
+ assert(tb_friends_panel_visible());
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ assert(region.x==416 && region.y==215 && region.width==448 && region.height==290);
+ assert(pixels[123*region.width+20]==0xff66c7ffu); // Second page selection.
+ assert(tb_panel_input(0)==PanelPadInput::captured);
+ assert(tb_panel_input(0x2000)==PanelPadInput::captured); // Never forwards Back into the title.
+ assert(tb_panel_take_input()==0x2000);
+ assert(tb_draw_overlay(pixels.data(),3840,2160,1,&region));
+ assert(region.width==1344 && region.height==870 && pixels.back()==0xa5a5a5a5);
+ assert(!tb_draw_overlay(pixels.data(),200,120,0,&region));
+ manager.selected=0;
+ assert(tb_friends_panel_show(manager));
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ {
+  std::ofstream shot("friends-panel.ppm",std::ios::binary);
+  shot<<"P6\n"<<region.width<<" "<<region.height<<"\n255\n";
+  for(size_t i=0;i<region.width*region.height;++i) {
+   char rgb[3]={char(pixels[i]),char(pixels[i]>>8),char(pixels[i]>>16)};shot.write(rgb,3);
+  }
+ }
+ for(auto section:{FriendsSection::received,FriendsSection::sent,FriendsSection::add}) {
+  manager.section=section;manager.rows.clear();
+  assert(tb_friends_panel_show(manager));assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ }
+ manager.connected=false;assert(tb_friends_panel_show(manager));
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ manager.connected=true;manager.busy=true;assert(tb_friends_panel_show(manager));
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ tb_friends_panel_close();
+ assert(!tb_friends_panel_visible());
+ assert(tb_panel_input(0x2000)==PanelPadInput::captured);
+ assert(tb_panel_input(0)==PanelPadInput::passthrough);
+ assert(!tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ tb_panel_show(InvitePicker::rooms,friends,0);
+ assert(!tb_friends_panel_show(manager)); // Room browser keeps ownership.
+ tb_panel_close();
+ tb_panel_show(InvitePicker::friends,friends,1);
+ assert(!tb_friends_panel_show(manager));
+ assert(tb_friends_panel_show(manager,true));
+ tb_friends_panel_close();
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ assert(region.height==268 && pixels[85*region.width+20]==0xff66c7ffu); // Restored picker selection.
+ tb_panel_close();
 }
 ''')
 subprocess.run(['c++','-std=c++20','-O2','-I'+str(ROOT),str(out/'test.cpp'),str(ROOT/'fps_overlay.cpp'),str(ROOT/'player_settings.cpp'),str(ROOT/'rendering_profile.cpp'),'-pthread','-o',str(out/'test')],check=True)
-subprocess.run([str(out/'test')],env=dict(os.environ,TB_FPS_OVERLAY='1'),check=True)
+subprocess.run([str(out/'test')],cwd=out,env=dict(os.environ,TB_FPS_OVERLAY='1',TB_SETTINGS_FILE=''),check=True)
 print('PASS: cadence, overlay toggle, picker input, simultaneous toast and expiry')

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <vector>
 
 // Guest flips and host refreshes are deliberately independent counters.
 struct FpsSample {
@@ -28,6 +29,20 @@ void tb_panel_close();
 enum class PanelPadInput { passthrough, captured, back };
 PanelPadInput tb_panel_input(uint32_t buttons);
 uint32_t tb_panel_take_input();
+enum class FriendsSection { friends, received, sent, add };
+struct FriendsPanelView {
+    std::string account, endpoint;
+    FriendsSection section=FriendsSection::friends;
+    std::vector<std::string> rows;
+    size_t selected=0;
+    bool connected=false, busy=false, details=false;
+    std::string message;
+};
+// Only an invitation sender can suspend its picker beneath Friends.
+bool tb_friends_panel_show(const FriendsPanelView&,bool from_invite=false);
+bool tb_friends_panel_visible();
+void tb_friends_panel_close();
+bool tb_show_friends_hint();
 void tb_show_invite_toast(const char* sender);
 void tb_clear_invite_toast();
 void tb_show_network_toast(const char* heading,const char* detail);
