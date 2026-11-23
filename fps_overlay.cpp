@@ -237,6 +237,14 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
     if (notification && !toast_view.heading[0]) return 0;
     if (mode==Mode::fps && !enabled().load(std::memory_order_relaxed)) return 0;
 
+    char rate[32]="--";
+    if (mode==Mode::fps) {
+        static FpsSample sample;
+        const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+        sample.update(ns,flips.load(std::memory_order_relaxed),presents.load(std::memory_order_relaxed));
+        if (sample.ready) std::snprintf(rate,sizeof rate,"%.0f",sample.game_fps);
+    }
+
     unsigned card_width, card_height, margin;
     switch (mode) {
     case Mode::picker:
@@ -249,7 +257,7 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
         card_width=toast_view.invitation?184:224; card_height=toast_height; margin=10;
         break;
     case Mode::fps:
-        card_width=144; card_height=32; margin=8;
+        card_width=static_cast<unsigned>(std::strlen(rate))*6+5; card_height=13; margin=8;
         break;
     }
     const bool centered=mode==Mode::picker;
@@ -262,24 +270,15 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
     const unsigned draw_width=card_width*scale, draw_height=card_height*scale;
     const unsigned offset=mode==Mode::fps?margin:margin*scale;
     *region={centered?(width-draw_width)/2:offset,centered?(height-draw_height)/2:offset,draw_width,draw_height};
+    if (mode==Mode::fps) region->x=width-draw_width-offset;
     const Canvas canvas{static_cast<uint32_t*>(pixels),draw_width,bgra!=0};
     if (mode==Mode::picker) {
         draw_picker(canvas,draw_height,scale,picker_view);
     } else if (mode==Mode::invitation) {
         draw_toast(canvas,draw_height,scale,toast_view,remaining);
     } else {
-        static FpsSample sample;
-        const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
-        sample.update(ns,flips.load(std::memory_order_relaxed),presents.load(std::memory_order_relaxed));
-        char lines[3][32]={"GAME -- FPS","PRESENT -- FPS","FRAME -- MS"};
-        if (sample.ready) {
-            std::snprintf(lines[0],32,"GAME %.1f FPS",sample.game_fps);
-            std::snprintf(lines[1],32,"PRESENT %.1f FPS",sample.present_fps);
-            if (sample.game_fps>0) std::snprintf(lines[2],32,"FRAME %.1f MS",sample.frame_ms);
-        }
         canvas.fill(0,0,draw_width,draw_height,{16,16,16});
-        for (unsigned line=0;line<3;++line)
-            canvas.text(3*scale,(3+line*10)*scale,lines[line],scale,{240,240,240});
+        canvas.text(3*scale,3*scale,rate,scale,{240,240,240});
     }
     return 1;
 }

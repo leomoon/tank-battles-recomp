@@ -25,8 +25,8 @@ int main(){
  std::vector<uint32_t> pixels(TB_OVERLAY_BUFFER_SIZE/4+1,0xa5a5a5a5);
  tb_overlay_region region{};
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.x==8 && region.y==8 && region.width==288 && region.height==64);
- assert(std::count(pixels.begin(),pixels.begin()+region.width*region.height,0xfff0f0f0u)>100);
+ assert(region.x+region.width==1280-8 && region.y==8 && region.width==34 && region.height==26);
+ assert(std::count(pixels.begin(),pixels.begin()+region.width*region.height,0xfff0f0f0u)>0);
  assert(pixels[region.width*region.height]==0xa5a5a5a5);
  const auto original=pixels;
  assert(!tb_draw_overlay(pixels.data(),1,720,0,&region));assert(pixels==original);
