@@ -44,6 +44,16 @@ std::future<Reply> submit(Request command, std::vector<unsigned char> body);
 std::vector<Notification> take_notifications();
 std::vector<Notification> take_basic_notifications();
 struct Friend { std::string npid; bool online=false; uint64_t timestamp=0; };
+// Returned by value under the client lock. Each list is limited to 1024 entries.
+// Generation changes on successful login; revision changes on visible updates
+// and invalidation. An empty identity means no authenticated snapshot exists.
+struct Relationships {
+    std::string endpoint, npid;
+    uint64_t user_id=0, generation=0, revision=0;
+    std::vector<Friend> friends;
+    std::vector<std::string> outgoing, incoming;
+};
+Relationships relationships();
 std::vector<Friend> friends();
 
 bool start(const char* profile_path);

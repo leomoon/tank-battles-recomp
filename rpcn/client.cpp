@@ -155,7 +155,7 @@ std::mutex state_lock;
 Status session_status;
 std::deque<Pending> requests;
 std::vector<Notification> notifications, basic_notifications;
-std::vector<Friend> friend_list;
+Relationships relationship_state;
 
 // RPCN login/presence fields are length bounded even when sent by a private server.
 struct Reader {
@@ -175,6 +175,70 @@ struct Reader {
         bytes=bytes.subspan(count);
     }
 };
+
+bool same_name(std::string_view a,std::string_view b) {
+    const auto lower=[](char c){return c>='A' && c<='Z'?char(c-'A'+'a'):c;};
+    return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),
+        [&](char x,char y){return lower(x)==lower(y);});
+}
+
+std::string relationship_name(Reader& input) {
+    auto name=input.string(16);
+    if (name.size()<3 || name.find_first_not_of(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
+        throw std::runtime_error("Invalid RPCN friend identity");
+    return name;
+}
+
+bool erase_name(std::vector<std::string>& names,const std::string& name) {
+    return std::erase_if(names,[&](const auto& value){return same_name(value,name);})!=0;
+}
+
+void clear_relationships() { // Caller holds state_lock.
+    const auto revision=relationship_state.revision+1,generation=relationship_state.generation;
+    relationship_state={};
+    relationship_state.revision=revision;
+    relationship_state.generation=generation;
+}
+
+void update_relationship(uint16_t command,const Bytes& body) { // Caller holds state_lock.
+    Reader input{body};
+    Friend update;
+    if (command==6 || command==8) {
+        const auto online=input.integer(1);
+        if (online>1) throw std::runtime_error("Invalid RPCN friend status");
+        update.online=online!=0;
+    }
+    if (command==8) update.timestamp=input.integer(8);
+    update.npid=relationship_name(input);
+    if (!input.bytes.empty()) throw std::runtime_error("Malformed RPCN friend notification");
+    auto& state=relationship_state;
+    auto found=std::find_if(state.friends.begin(),state.friends.end(),
+        [&](const auto& f){return same_name(f.npid,update.npid);});
+    bool changed=false;
+    if (command==5) {
+        if (found==state.friends.end() && std::none_of(state.incoming.begin(),state.incoming.end(),
+            [&](const auto& name){return same_name(name,update.npid);})) {
+            if (state.incoming.size()>=1024) throw std::runtime_error("RPCN friend request limit exceeded");
+            state.incoming.push_back(update.npid);changed=true;
+        }
+    } else if (command==7) {
+        if (found!=state.friends.end()) {state.friends.erase(found);changed=true;}
+        changed=erase_name(state.outgoing,update.npid)||changed;
+        changed=erase_name(state.incoming,update.npid)||changed;
+    } else if (command==6) {
+        changed=erase_name(state.outgoing,update.npid)||changed;
+        changed=erase_name(state.incoming,update.npid)||changed;
+        if (found==state.friends.end()) {
+            if (state.friends.size()>=1024) throw std::runtime_error("RPCN friend count limit exceeded");
+            state.friends.push_back(std::move(update));changed=true;
+        }
+        // A repeated FriendNew has no timestamp: never overwrite newer presence.
+    } else if (found!=state.friends.end() && update.timestamp>found->timestamp) {
+        *found=std::move(update);changed=true;
+    }
+    if (changed) ++state.revision;
+}
 bool requested = false;
 std::mutex worker_lock;
 std::optional<Profile> active_profile;
@@ -276,6 +340,16 @@ public:
         return reply;
     }
 
+    void install_relationships(Relationships snapshot) {
+        std::lock_guard guard(state_lock);
+        snapshot.generation=relationship_state.generation+1;
+        snapshot.revision=relationship_state.revision+1;
+        relationship_state=std::move(snapshot);
+        for (const auto& frame:early_friend_notices_) update_relationship(frame.command,frame.body);
+        early_friend_notices_.clear();
+        relationships_ready_=true;
+    }
+
     void serve() {
         while (!stop_.stop_requested()) {
             std::optional<Pending> pending;
@@ -321,22 +395,17 @@ public:
 
 private:
     void notify(Frame frame) {
-        if (frame.command>3 && frame.command!=9 && frame.command!=6 && frame.command!=7 &&
+        if (frame.command>3 && frame.command!=5 && frame.command!=9 && frame.command!=6 && frame.command!=7 &&
             frame.command!=8 && frame.command!=10) return;
+        if (frame.command>=5 && frame.command<=8 && !relationships_ready_) {
+            if (early_friend_notices_.size()>=128 || frame.body.size()>26)
+                throw std::runtime_error("RPCN initial friend notification limit exceeded");
+            early_friend_notices_.push_back(std::move(frame));
+            return;
+        }
         std::lock_guard guard(state_lock);
-        if (frame.command>=6 && frame.command<=8) {
-            Reader input{frame.body};
-            Friend update;
-            if (frame.command!=7) update.online=input.integer(1)!=0;
-            if (frame.command==8) update.timestamp=input.integer(8);
-            update.npid=input.string(16);
-            if (update.npid.empty() || !input.bytes.empty()) throw std::runtime_error("Malformed RPCN friend notification");
-            auto found=std::find_if(friend_list.begin(),friend_list.end(),[&](const Friend& f){return f.npid==update.npid;});
-            if (frame.command==7) {
-                if (found!=friend_list.end()) friend_list.erase(found);
-            } else if (found!=friend_list.end()) {
-                if (update.timestamp>=found->timestamp) *found=std::move(update);
-            } else if (frame.command==6 && friend_list.size()<1024) friend_list.push_back(std::move(update));
+        if (frame.command>=5 && frame.command<=8) {
+            update_relationship(frame.command,frame.body);
             return;
         }
         if (frame.command==10) {
@@ -429,6 +498,8 @@ private:
     }
 
     std::stop_token stop_;
+    bool relationships_ready_=false;
+    std::vector<Frame> early_friend_notices_;
     std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle_{nullptr, curl_easy_cleanup};
     uint64_t next_id_ = 1;
 };
@@ -442,18 +513,37 @@ uint64_t login(Connection& connection, const Profile& profile) {
     if (avatar == reply.end() || reply.end() - avatar < 25 || !read_le(std::span(avatar + 1, 8)))
         throw std::runtime_error("Incomplete RPCN login identity");
     Reader input{std::span(avatar+9,reply.end())};
-    std::vector<Friend> snapshot;
+    Relationships snapshot;
+    snapshot.endpoint=profile.endpoint;snapshot.npid=profile.npid;
+    snapshot.user_id=read_le(std::span(avatar+1,8));
     const auto count=input.integer(4);
     if (count>1024) throw std::runtime_error("RPCN friend count limit exceeded");
     for (size_t i=0;i<count;++i) {
-        Friend f; f.npid=input.string(16); f.online=input.integer(1)!=0;
-        if (f.npid.empty()) throw std::runtime_error("Empty RPCN friend identity");
+        Friend f; f.npid=relationship_name(input);
+        const auto online=input.integer(1);
+        if (online>1) throw std::runtime_error("Invalid RPCN friend status");
+        f.online=online!=0;
+        if (std::any_of(snapshot.friends.begin(),snapshot.friends.end(),
+            [&](const auto& other){return same_name(f.npid,other.npid);}))
+            throw std::runtime_error("Duplicate RPCN friend identity");
         input.skip(12); input.string(128); input.string(192); input.string(64);
         const auto size=input.integer(4);
         if (size>128) throw std::runtime_error("RPCN presence limit exceeded");
-        input.skip(size); snapshot.push_back(std::move(f));
+        input.skip(size); snapshot.friends.push_back(std::move(f));
     }
-    { std::lock_guard guard(state_lock); friend_list=std::move(snapshot); }
+    std::vector<std::string> blocked;
+    for (auto* list:{&snapshot.outgoing,&snapshot.incoming,&blocked}) {
+        const auto count=input.integer(4);
+        if (count>1024) throw std::runtime_error("RPCN relationship count limit exceeded");
+        for (size_t i=0;i<count;++i) {
+            auto name=relationship_name(input);
+            if (std::any_of(list->begin(),list->end(),[&](const auto& other){return same_name(name,other);}))
+                throw std::runtime_error("Duplicate RPCN relationship identity");
+            list->push_back(std::move(name));
+        }
+    }
+    if (!input.bytes.empty()) throw std::runtime_error("Unexpected RPCN login relationship data");
+    connection.install_relationships(std::move(snapshot));
     return read_le(std::span(avatar + 1, 8));
 }
 
@@ -493,7 +583,7 @@ void set_status(State state, std::string npid = {}, uint64_t user_id = 0, std::s
         requests.clear();
         notifications.clear();
         basic_notifications.clear();
-        friend_list.clear();
+        clear_relationships();
     }
 }
 
@@ -594,7 +684,12 @@ std::vector<Notification> take_basic_notifications() {
 
 std::vector<Friend> friends() {
     std::lock_guard guard(state_lock);
-    return friend_list;
+    return relationship_state.friends;
+}
+
+Relationships relationships() {
+    std::lock_guard guard(state_lock);
+    return relationship_state;
 }
 
 // One stable word per outcome on stdout, for the launcher's account screens.

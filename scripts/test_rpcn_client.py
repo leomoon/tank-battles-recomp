@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the native RPCN account commands against a local TLS fixture."""
 import argparse
+import json
 from pathlib import Path
 import socket
 import ssl
@@ -24,6 +25,21 @@ def request(reader):
     if kind != 0 or not HEADER.size <= size <= 4096:
         raise AssertionError("Unexpected request header")
     return command, request_id, reader.read(size - HEADER.size)
+
+
+def relationship_login(friends=(), outgoing=(), incoming=(), blocked=()):
+    body = b"\0FixturePlayer\0\0" + struct.pack("<QI", 42, len(friends))
+    for name, online in friends:
+        body += name.encode() + b"\0" + bytes([online]) + bytes(12) + bytes(3) + bytes(4)
+    for names in (outgoing, incoming, blocked):
+        body += struct.pack("<I", len(names))
+        body += b"".join(name.encode() + b"\0" for name in names)
+    return body
+
+
+def relationship_snapshots(result):
+    return [json.loads(line[len("[relationships] "):]) for line in result.stdout.splitlines()
+            if line.startswith("[relationships] ")]
 
 
 class RpcnClientTests(unittest.TestCase):
@@ -106,6 +122,176 @@ class RpcnClientTests(unittest.TestCase):
                 self.assertIn(expected_error, result.stderr)
             else:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result
+
+    def relationship_client(self, login, stages=(), early=()):
+        if self.relationships_runner is None:
+            self.skipTest("Run with --relationships-runner for friendship state checks")
+
+        def exchange(stream, reader):
+            command, request_id, _ = request(reader)
+            self.assertEqual(command, 0)
+            for kind, data in early:
+                stream.sendall(packet(2, kind, 0, data))
+            stream.sendall(packet(1, command, request_id, login))
+            for index, notices in enumerate([(), *stages]):
+                command, request_id, _ = request(reader)
+                # Malformed login/notifications cause disconnect before another barrier.
+                self.assertEqual(command, 12)
+                for kind, data in notices:
+                    stream.sendall(packet(2, kind, 0, data))
+                stream.sendall(packet(1, command, request_id, bytes([0, index < len(stages)])))
+            command, request_id, _ = request(reader)
+            self.assertEqual(command, 1)
+            stream.sendall(packet(1, command, request_id, b"\0"))
+
+        return relationship_snapshots(self.run_client("--relationships", exchange, runner=self.relationships_runner))
+
+    def test_relationship_login_pending_and_early_requests(self):
+        snapshots = self.relationship_client(
+            relationship_login([("OnlineFriend", True), ("OfflineFriend", False)], ["SentUser"], ["ReceivedUser"], ["BlockedUser"]),
+            early=[(5, b"EarlyUser\0")])
+        initial, cleared = snapshots
+        self.assertEqual(initial["friends"], [["OnlineFriend", True, 0], ["OfflineFriend", False, 0]])
+        self.assertEqual(initial["outgoing"], ["SentUser"])
+        self.assertEqual(initial["incoming"], ["ReceivedUser", "EarlyUser"])
+        self.assertTrue(initial["endpoint"].startswith("127.0.0.1:"))
+        self.assertEqual(initial["npid"], "FixturePlayer")
+        self.assertGreater(initial["generation"], 0)
+        self.assertEqual(cleared["friends"], [])
+        self.assertEqual(cleared["incoming"], [])
+        self.assertEqual(cleared["outgoing"], [])
+        self.assertEqual(cleared["npid"], "")
+        self.assertGreater(cleared["revision"], initial["revision"])
+
+    def test_relationship_notifications_and_interleaved_other_traffic(self):
+        presence = lambda timestamp, online: bytes([online]) + struct.pack("<Q", timestamp) + b"SentUser\0"
+        snapshots = self.relationship_client(relationship_login([], ["SentUser"], ["ReceivedUser"]), [
+            [(5, b"NewUser\0"), (5, b"NewUser\0")],
+            [(6, b"\1SentUser\0"), (6, b"\1ReceivedUser\0")],
+            [(8, presence(200, False))],
+            [(8, presence(100, True)), (8, presence(200, True)), (6, b"\1SentUser\0")],
+            [(0, b"room data"), (9, b"room message"), (10, b"invitation data")],
+            [(7, b"SentUser\0"), (7, b"NewUser\0")],
+            [(7, b"SentUser\0"), (7, b"NewUser\0")],
+        ])
+        self.assertEqual(snapshots[1]["incoming"], ["ReceivedUser", "NewUser"])
+        self.assertEqual(snapshots[2]["outgoing"], [])
+        self.assertEqual(snapshots[2]["incoming"], ["NewUser"])
+        self.assertEqual(snapshots[3]["friends"][0], ["SentUser", False, 200])
+        self.assertEqual(snapshots[4]["friends"][0], ["SentUser", False, 200])
+        self.assertEqual(snapshots[4]["revision"], snapshots[3]["revision"])
+        self.assertEqual(snapshots[5]["room_notices"], 2)
+        self.assertEqual(snapshots[5]["invite_notices"], 1)
+        self.assertEqual(snapshots[6]["friends"], [["ReceivedUser", True, 0]])
+        self.assertEqual(snapshots[6]["incoming"], [])
+        self.assertEqual(snapshots[7]["revision"], snapshots[6]["revision"])
+
+    def test_malformed_relationship_login_is_rejected_without_partial_state(self):
+        if self.relationships_runner is None:
+            self.skipTest("Run with --relationships-runner")
+        valid = relationship_login([("GoodFriend", True)], ["SentUser"], ["ReceivedUser"])
+        invalid = [valid[:-1], valid + b"trailing", relationship_login([("bad/name", True)]),
+                   relationship_login([("FriendA", 2)]), relationship_login([], ["Bad@Name"]),
+                   relationship_login([("FriendA", True), ("frienda", False)]),
+                   relationship_login([], [], [], ["Bad@Name"]),
+                   relationship_login([], ["SameUser", "sameuser"]),
+                   valid[:len(b"\0FixturePlayer\0\0") + 8] + struct.pack("<I", 1025)]
+        for login in invalid:
+            with self.subTest(login_size=len(login)):
+                def exchange(stream, reader):
+                    command, request_id, _ = request(reader)
+                    stream.sendall(packet(1, command, request_id, login))
+                    self.assertEqual(stream.recv(1), b"")
+                result = self.run_client("--relationships", exchange, runner=self.relationships_runner)
+                snapshot, = relationship_snapshots(result)
+                self.assertEqual(snapshot["friends"], [])
+                self.assertEqual(snapshot["incoming"], [])
+                self.assertEqual(snapshot["npid"], "")
+
+    def test_malformed_friend_notification_disconnects_and_clears_state(self):
+        if self.relationships_runner is None:
+            self.skipTest("Run with --relationships-runner")
+        for kind, body in [(5, b"MissingTerminator"), (6, b"\2FriendA\0"),
+                           (7, b"FriendA\0trailing"), (8, b"\1short")]:
+            with self.subTest(kind=kind):
+                def exchange(stream, reader):
+                    command, request_id, _ = request(reader)
+                    stream.sendall(packet(1, command, request_id, relationship_login([("FriendA", True)])))
+                    command, request_id, _ = request(reader)
+                    stream.sendall(packet(1, command, request_id, b"\0\1"))
+                    request(reader)
+                    stream.sendall(packet(2, kind, 0, body))
+                    self.assertEqual(stream.recv(1), b"")
+                result = self.run_client("--relationships", exchange, runner=self.relationships_runner)
+                first, cleared = relationship_snapshots(result)
+                self.assertEqual(first["friends"], [["FriendA", True, 0]])
+                self.assertEqual(cleared["friends"], [])
+                self.assertEqual(cleared["npid"], "")
+
+    def test_relationship_state_isolated_between_servers_with_same_username(self):
+        if self.relationships_runner is None:
+            self.skipTest("Run with --relationships-runner")
+        errors = []
+        listeners = [socket.socket(), socket.socket()]
+        for listener in listeners:
+            self.addCleanup(listener.close)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            listener.settimeout(6)
+        profiles = []
+        for index, listener in enumerate(listeners):
+            profile = self.directory / f"server-{index}.ini"
+            profile.write_text(f"endpoint=127.0.0.1:{listener.getsockname()[1]}\nnpid=FixturePlayer\n"
+                               "password=fixture-secret\nca=cert.pem\n", encoding="utf-8")
+            profiles.append(profile)
+
+        def serve():
+            try:
+                for index, listener in enumerate(listeners):
+                    with listener.accept()[0] as tcp:
+                        tcp.settimeout(6)
+                        with self.tls.wrap_socket(tcp, server_side=True) as stream, stream.makefile("rb") as reader:
+                            stream.sendall(packet(3, 0, 0, struct.pack("<I", 34)))
+                            command, request_id, _ = request(reader)
+                            login = relationship_login([("FriendA" if index == 0 else "FriendB", True)],
+                                                       ["SentA"] if index == 0 else [], ["IncomingB"] if index else [])
+                            stream.sendall(packet(1, command, request_id, login))
+                            command, request_id, _ = request(reader)
+                            stream.sendall(packet(1, command, request_id, b"\0\0"))
+                            command, request_id, _ = request(reader)
+                            if index == 0:
+                                # Queue these during logout, after the last snapshot.
+                                # Disconnect must clear them before the next login.
+                                stream.sendall(packet(2, 0, 0, b"old room"))
+                                stream.sendall(packet(2, 10, 0, b"old invitation"))
+                            stream.sendall(packet(1, command, request_id, b"\0"))
+            except Exception as error:
+                errors.append(error)
+
+        server = threading.Thread(target=serve, daemon=True)
+        server.start()
+        result = subprocess.run([str(self.relationships_runner), "--relationships", *map(str, profiles)],
+                                capture_output=True, text=True, timeout=17)
+        server.join(timeout=7)
+        self.assertFalse(server.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        first, cleared, second, end = relationship_snapshots(result)
+        self.assertNotEqual(first["endpoint"], second["endpoint"])
+        self.assertEqual(first["npid"], second["npid"])
+        self.assertGreater(second["generation"], first["generation"])
+        self.assertGreater(second["revision"], cleared["revision"])
+        self.assertEqual(second["friends"], [["FriendB", True, 0]])
+        self.assertEqual(second["outgoing"], [])
+        self.assertEqual(second["incoming"], ["IncomingB"])
+        self.assertEqual(cleared["invite_notices"], 0)
+        self.assertEqual(cleared["room_notices"], 0)
+        self.assertEqual(second["invite_notices"], 0)
+        self.assertEqual(second["room_notices"], 0)
+        self.assertEqual(end["invite_notices"], 0)
+        self.assertEqual(end["room_notices"], 0)
+        self.assertEqual(end["endpoint"], "")
 
     def login_notification_and_logout(self, stale_login_attempts=0, *, retry_runner=None):
         def exchange(stream, reader):
@@ -180,9 +366,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runner", required=True, type=Path)
     parser.add_argument("--matching-runner", type=Path)
+    parser.add_argument("--relationships-runner", type=Path)
     parser.add_argument("--openssl", default="openssl")
     args = parser.parse_args()
     RpcnClientTests.runner = args.runner.resolve()
     RpcnClientTests.matching_runner = args.matching_runner.resolve() if args.matching_runner else None
+    RpcnClientTests.relationships_runner = args.relationships_runner.resolve() if args.relationships_runner else None
     RpcnClientTests.openssl = args.openssl
     unittest.main(argv=[__file__], verbosity=2)
