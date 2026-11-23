@@ -1,6 +1,7 @@
 #include "execution_policy_api.h"
 #include "fps_overlay.h"
 #include "player_settings.h"
+#include "launcher/font5x7.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -66,7 +67,7 @@ const unsigned char* glyph(char ch) {
         {17,17,17,21,21,21,10},{17,17,10,4,10,17,17},{17,17,10,4,4,4,4},
         {31,1,2,4,8,16,31},{0,0,0,0,0,0,31},{16,8,4,2,4,8,16},
         {1,2,2,4,8,8,16},{0,6,6,0,6,6,0},{0,4,4,31,4,4,0}};
-    if (ch>='a' && ch<='z') return glyph(ch-'a'+'A');
+    if (ch>='a' && ch<='z') return font5x7[ch-' '];
     found=std::strchr(extra,ch);
     return found && ch ? extra_rows[found-extra] : blank;
 }
@@ -158,7 +159,18 @@ void draw_friends(const Canvas& canvas,unsigned height,unsigned scale,const Frie
     } else if (view.section==FriendsSection::add) {
         canvas.text(13*scale,64*scale,"USERNAME",scale,muted);
         canvas.fill(13*scale,75*scale,canvas.width-26*scale,15*scale,selected_row);
-        canvas.text(13*scale,98*scale,"USE THE EXACT SERVER USERNAME",scale,muted);
+        const auto username=view.username+(view.editing?"_":"");
+        canvas.text(17*scale,79*scale,username.c_str(),scale,white);
+        if (view.editing) {
+            constexpr char keys[]="abcdefghijklmnopqrstuvwxyz0123456789_-";
+            for (unsigned i=0;i<40;++i) {
+                const auto x=(13+(i%8)*25)*scale,y=(95+(i/8)*11)*scale;
+                if (i==view.keyboard_key) canvas.fill(x,y,24*scale,10*scale,accent);
+                char text[2]={i<38?keys[i]:char(0),0};
+                if (view.upper && text[0]>='a' && text[0]<='z') text[0]=char(text[0]-'a'+'A');
+                canvas.text(x+2*scale,y+scale,i==38?"DEL":i==39?"DONE":text,scale,i==view.keyboard_key?card:white);
+            }
+        } else canvas.text(13*scale,98*scale,"X / Z OR ENTER TO EDIT USERNAME",scale,muted);
     } else if (view.details) {
         if (!view.rows.empty()) canvas.text(13*scale,66*scale,view.rows[view.selected].c_str(),scale,white);
         canvas.text(13*scale,84*scale,view.section==FriendsSection::friends?
@@ -178,8 +190,14 @@ void draw_friends(const Canvas& canvas,unsigned height,unsigned scale,const Frie
             canvas.text(15*scale,y+2*scale,view.rows[first+i].c_str(),scale,white);
         }
     }
-    canvas.text(10*scale,124*scale,view.message.empty()?"LEFT/RIGHT CATEGORY  UP/DOWN LIST":view.message.c_str(),scale,muted);
-    canvas.text(10*scale,135*scale,"PS X SELECT O BACK / KEYS Z X",scale,white);
+    if (view.editing) {
+        canvas.text(10*scale,152*scale,view.message.empty()?"PS TRIANGLE CASE  SQUARE DELETE":view.message.c_str(),scale,muted);
+        canvas.text(10*scale,163*scale,"PS X TYPE  O CANCEL  START DONE",scale,white);
+        canvas.text(10*scale,174*scale,"KEYBOARD ENTER DONE  ESC CANCEL",scale,muted);
+    } else {
+        canvas.text(10*scale,124*scale,view.message.empty()?"LEFT/RIGHT CATEGORY  UP/DOWN LIST":view.message.c_str(),scale,muted);
+        canvas.text(10*scale,135*scale,"PS X SELECT O BACK / KEYS Z X",scale,white);
+    }
 }
 
 void draw_toast(const Canvas& canvas,unsigned height,unsigned scale,const Toast& view,double remaining) {
@@ -197,6 +215,7 @@ void tb_panel_show(InvitePicker kind,std::span<const std::string> choices,size_t
     std::lock_guard guard(overlay_mutex);
     // Another native dialog takes ownership, including asynchronous room search.
     friends_active=false;
+    tb_friends_input_mode(0,0);
     picker.kind=kind;
     selected=choices.empty()?0:std::min(selected,choices.size()-1);
     const auto first=selected/visible_choices*visible_choices;
@@ -212,6 +231,7 @@ void tb_panel_close() {
     std::lock_guard guard(overlay_mutex);
     if (panel_active || friends_active) panel_waits_for_release=panel_previous!=0;
     friends_active=false;
+    tb_friends_input_mode(0,0);
     panel_active=false; panel_pressed=panel_previous=0;
 }
 PanelPadInput tb_panel_input(uint32_t buttons) {
@@ -247,6 +267,7 @@ bool tb_friends_panel_show(const FriendsPanelView& view,bool from_invite) {
     if (!friends_active && panel_active && !(from_invite && picker.kind==InvitePicker::friends)) return false;
     if (!friends_active) {panel_pressed=0;panel_previous=UINT32_MAX;}
     friends_active=true;friends_view=view;
+    tb_friends_input_mode(1,view.editing);
     friends_view.selected=view.rows.empty()?0:std::min(view.selected,view.rows.size()-1);
     return true;
 }
@@ -255,6 +276,7 @@ void tb_friends_panel_close() {
     std::lock_guard guard(overlay_mutex);
     if (!friends_active) return;
     friends_active=false;
+    tb_friends_input_mode(0,0);
     if (panel_active) {panel_pressed=0;panel_previous=UINT32_MAX;}
     else {panel_waits_for_release=panel_previous!=0;panel_pressed=panel_previous=0;}
 }
@@ -321,7 +343,7 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
     unsigned card_width, card_height, margin;
     switch (mode) {
     case Mode::friends:
-        card_width=224;card_height=145;margin=0;
+        card_width=224;card_height=friends_panel.editing?184:145;margin=0;
         break;
     case Mode::picker:
         card_width=224;

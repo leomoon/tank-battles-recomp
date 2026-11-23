@@ -37,6 +37,9 @@ void tb_fps_present(void){} uint64_t tb_fps_guest_serial(void){return 0;} void t
 int tb_draw_overlay(void* p,uint32_t w,uint32_t h,int bgra,tb_overlay_region* region){return 0;} void tb_fps_toggle(void){}
 int tb_draw_notification_toast(void* p,uint32_t w,uint32_t h,int bgra,tb_overlay_region* region){return 0;}
 void tb_keyboard_down(uint32_t s){} uint32_t tb_keyboard_take(void){return 0;}
+int tb_friends_text_requested(void){return 0;} int tb_friends_key(uint32_t s,int p,int r,uint32_t m){return 0;}
+void tb_friends_text(const char* t){} void tb_friends_focus(int f){} void tb_friends_update_keyboard(const uint8_t* k,int n){}
+
 ''')
 subprocess.run(['cmake','-S',str(out),'-B',str(out/'build'),'-G','Ninja'],check=True)
 subprocess.run(['cmake','--build',str(out/'build'),'--parallel','2'],check=True)

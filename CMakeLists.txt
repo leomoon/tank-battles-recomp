@@ -213,6 +213,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_network_events.py"
     "${RECOMP_DIR}" COMMAND_ERROR_IS_FATAL ANY)
 set(EXECUTION_SDK "${CMAKE_BINARY_DIR}/instrumented_sdk")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/friends_input.inc")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_memory_copy.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_texture_coherence.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/depth_path_trace.inc"

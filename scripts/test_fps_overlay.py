@@ -146,6 +146,20 @@ int main(){
   manager.section=section;manager.rows.clear();
   assert(tb_friends_panel_show(manager));assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
  }
+ manager.editing=true;manager.username="zx_User-42";manager.keyboard_key=39;
+ assert(tb_friends_panel_show(manager));
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ assert(region.width==448 && region.height==368 && region.x==416 && region.y==176);
+ {
+  std::ofstream shot("friends-keyboard.ppm",std::ios::binary);
+  shot<<"P6\n"<<region.width<<" "<<region.height<<"\n255\n";
+  for(size_t i=0;i<region.width*region.height;++i) {
+   char rgb[3]={char(pixels[i]),char(pixels[i]>>8),char(pixels[i]>>16)};shot.write(rgb,3);
+  }
+ }
+ assert(tb_draw_overlay(pixels.data(),3840,2160,1,&region));
+ assert(region.width==1344 && region.height==1104 && pixels.back()==0xa5a5a5a5);
+ manager.editing=false;
  manager.connected=false;assert(tb_friends_panel_show(manager));
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
  manager.connected=true;manager.busy=true;assert(tb_friends_panel_show(manager));
@@ -167,6 +181,6 @@ int main(){
  tb_panel_close();
 }
 ''')
-subprocess.run(['c++','-std=c++20','-O2','-I'+str(ROOT),str(out/'test.cpp'),str(ROOT/'fps_overlay.cpp'),str(ROOT/'player_settings.cpp'),str(ROOT/'rendering_profile.cpp'),'-pthread','-o',str(out/'test')],check=True)
+subprocess.run(['c++','-std=c++20','-O2','-I'+str(ROOT),str(out/'test.cpp'),str(ROOT/'fps_overlay.cpp'),str(ROOT/'input_events.cpp'),str(ROOT/'player_settings.cpp'),str(ROOT/'rendering_profile.cpp'),'-pthread','-o',str(out/'test')],check=True)
 subprocess.run([str(out/'test')],cwd=out,env=dict(os.environ,TB_FPS_OVERLAY='1',TB_SETTINGS_FILE=''),check=True)
 print('PASS: cadence, overlay toggle, picker input, simultaneous toast and expiry')

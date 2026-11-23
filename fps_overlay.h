@@ -36,6 +36,9 @@ struct FriendsPanelView {
     std::vector<std::string> rows;
     size_t selected=0;
     bool connected=false, busy=false, details=false;
+    bool editing=false, upper=false;
+    unsigned keyboard_key=0;
+    std::string username;
     std::string message;
 };
 // Only an invitation sender can suspend its picker beneath Friends.

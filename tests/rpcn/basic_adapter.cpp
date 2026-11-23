@@ -1,5 +1,6 @@
 #include "rpcn/basic.h"
 #include "fps_overlay.h"
+#include "execution_policy_api.h"
 #include "ppu_recomp.h"
 #include "ps3emu/nid.h"
 #include "stubs.h"
@@ -8,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <deque>
 #include <map>
 #include <utility>
 #include <vector>
@@ -51,6 +53,8 @@ static bool panel=false;
 static bool friend_panel=false,toggle_requested=false;
 static InvitePicker panel_kind;
 static FriendsPanelView friend_view;
+static std::deque<tb_friends_input> native_inputs;
+static bool focused=true;
 static std::vector<std::string> displayed_choices;
 static std::string toast_sender;
 void tb_show_invite_toast(const char* sender) { toast_sender=sender; }
@@ -70,13 +74,19 @@ void tb_friends_panel_close() {friend_panel=false;}
 bool tb_show_friends_hint() {return true;}
 extern "C" void tb_friends_request_toggle() {toggle_requested=true;}
 extern "C" int tb_friends_take_toggle() {return std::exchange(toggle_requested,false);}
+extern "C" int tb_friends_window_focused() {return focused;}
+extern "C" int tb_friends_take_input(tb_friends_input* input) {
+    if(native_inputs.empty()) return 0;*input=native_inputs.front();native_inputs.pop_front();return 1;
+}
 PanelPadInput tb_panel_input(uint32_t value) {
     buttons=value;
     return panel || friend_panel?PanelPadInput::captured:PanelPadInput::passthrough;
 }
 uint32_t tb_panel_take_input() {auto value=buttons;buttons=0;return value;}
 static uint32_t physical_buttons=0;
+static bool physical_connected=true;
 extern "C" void tb_sdk_ps3_hle_call(uint32_t,ppu_context* c) {
+    if (!physical_connected) {c->gpr[3]=0x80121107;return;}
     const auto out=c->gpr[4];
     vm_write32(out,8);vm_write16(out+8,physical_buttons&0xff);vm_write16(out+10,physical_buttons>>8);c->gpr[3]=0;
 }
@@ -208,5 +218,41 @@ int main() {
  call("cellPadGetData",{0,pad});pump_basic();assert(friend_panel); // Held chord does not repeat.
  physical_buttons=0;call("cellPadGetData",{0,pad});pump_basic();
  physical_buttons=0x1001;call("cellPadGetData",{0,pad});pump_basic();assert(!friend_panel);
+ physical_buttons=0;call("cellPadGetData",{0,pad});
+ toggle_requested=true;pump_basic();assert(friend_panel);
+ for (unsigned i=0;i<3;++i) {buttons=0x20;pump_basic();}
+ assert(friend_view.section==FriendsSection::add);
+ buttons=0x4000;pump_basic();assert(friend_view.editing);
+ native_inputs.push_back({TB_FRIENDS_KEY,TB_FRIENDS_CONFIRM,{}});
+ native_inputs.push_back({TB_FRIENDS_TEXT,0,"z"});
+ native_inputs.push_back({TB_FRIENDS_KEY,TB_FRIENDS_BACK,{}});
+ native_inputs.push_back({TB_FRIENDS_TEXT,0,"xUser"});
+ pump_basic();assert(friend_view.editing && friend_view.username=="zxUser");
+ native_inputs.push_back({TB_FRIENDS_TEXT,0,"bad@name"});
+ pump_basic();assert(friend_view.username=="zxUser" && !friend_view.message.empty());
+ native_inputs.push_back({TB_FRIENDS_KEY,TB_FRIENDS_BACKSPACE,{}});
+ native_inputs.push_back({TB_FRIENDS_KEY,TB_FRIENDS_ENTER,{}});
+ pump_basic();assert(!friend_view.editing && friend_view.username=="zxUse");
+ buttons=0x4000;pump_basic();assert(friend_view.editing);
+ native_inputs.push_back({TB_FRIENDS_TEXT,0,"-2"});
+ native_inputs.push_back({TB_FRIENDS_KEY,TB_FRIENDS_ESCAPE,{}});
+ pump_basic();assert(!friend_view.editing && friend_view.username=="zxUse");
+ buttons=0x4000;pump_basic();
+ buttons=0x1000;pump_basic();assert(friend_view.upper);
+ buttons=0x4000;pump_basic();assert(friend_view.username=="zxUseA");
+ buttons=0x8000;pump_basic();assert(friend_view.username=="zxUse");
+ buttons=0x20;pump_basic();buttons=0x4000;pump_basic();assert(friend_view.username=="zxUseB");
+ buttons=8;pump_basic();assert(!friend_view.editing);
+ buttons=0x4000;pump_basic();
+ physical_connected=false;call("cellPadGetData",{0,pad});pump_basic();
+ assert(friend_view.editing && friend_view.username=="zxUseB");
+ physical_connected=true;physical_buttons=0;call("cellPadGetData",{0,pad});pump_basic();
+ assert(friend_view.editing && friend_view.username=="zxUseB");
+ native_inputs.push_back({TB_FRIENDS_TEXT,0,"Tmp"});pump_basic();
+ focused=false;native_inputs.push_back({TB_FRIENDS_FOCUS_LOST,0,{}});pump_basic();
+ assert(!friend_view.editing && friend_view.username=="zxUseB");
+ focused=true;pump_basic();
+ buttons=0x2000;pump_basic();assert(!friend_panel);
+ assert(callbacks.size()==before_standalone && submitted_messages==1);
  puts("PASS: invite send/receive callbacks, guest events, attachment bounds and cleanup");
 }

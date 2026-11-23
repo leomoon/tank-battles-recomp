@@ -15,7 +15,7 @@ uint64_t tb_fps_guest_serial(void);
 void tb_fps_present(void);
 void tb_fps_toggle(void);
 #define TB_OVERLAY_MAX_SCALE 6u
-#define TB_OVERLAY_BUFFER_SIZE (224u * 145u * TB_OVERLAY_MAX_SCALE * TB_OVERLAY_MAX_SCALE * 4u)
+#define TB_OVERLAY_BUFFER_SIZE (224u * 184u * TB_OVERLAY_MAX_SCALE * TB_OVERLAY_MAX_SCALE * 4u)
 #define TB_NOTIFICATION_BUFFER_SIZE (224u * 43u * TB_OVERLAY_MAX_SCALE * TB_OVERLAY_MAX_SCALE * 4u)
 typedef struct tb_overlay_region { uint32_t x, y, width, height; } tb_overlay_region;
 // Writes a tightly packed rectangle into TB_OVERLAY_BUFFER_SIZE bytes of storage.
@@ -28,6 +28,19 @@ uint32_t tb_keyboard_peek(void);
 void tb_keyboard_ack(uint32_t mask);
 void tb_friends_request_toggle(void);
 int tb_friends_take_toggle(void);
+enum { TB_FRIENDS_KEY=1, TB_FRIENDS_TEXT=2, TB_FRIENDS_FOCUS_LOST=3 };
+enum { TB_FRIENDS_UP=1, TB_FRIENDS_RIGHT, TB_FRIENDS_DOWN, TB_FRIENDS_LEFT,
+       TB_FRIENDS_CONFIRM, TB_FRIENDS_BACK, TB_FRIENDS_ENTER, TB_FRIENDS_ESCAPE, TB_FRIENDS_BACKSPACE };
+typedef struct tb_friends_input { uint32_t kind, value; char text[64]; } tb_friends_input;
+void tb_friends_input_mode(int captured,int editing);
+int tb_friends_keyboard_captured(void);
+int tb_friends_text_requested(void);
+int tb_friends_window_focused(void);
+int tb_friends_key(uint32_t scan,int pressed,int repeat,uint32_t modifiers);
+void tb_friends_text(const char* text);
+void tb_friends_focus(int focused);
+void tb_friends_update_keyboard(const uint8_t* keys,int count);
+int tb_friends_take_input(tb_friends_input* input);
 void tb_input_sample(uint32_t kind, uint32_t port, uint32_t buttons);
 void tb_resource_read(int host_fd, uint64_t offset, const void* data, uint64_t size, uint32_t ea);
 void tb_resource_hle(uint32_t nid);

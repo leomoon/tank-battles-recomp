@@ -1,4 +1,5 @@
 #include "basic.h"
+#include "friend_name.h"
 #include "matching_data.h"
 #include "fps_overlay.h"
 #include "execution_policy_api.h"
@@ -39,6 +40,7 @@ struct FriendsUi {
     FriendsSection section=FriendsSection::friends;
     size_t selected=0;
     bool details=false, from_invite=false;
+    FriendNameEntry name;
 };
 std::optional<FriendsUi> friends_ui;
 bool hint_shown=false;
@@ -66,6 +68,9 @@ FriendsPanelView friends_view() {
     view.endpoint=state.endpoint;
     view.connected=status().state==State::online;
     view.section=friends_ui->section;view.details=friends_ui->details;
+    view.editing=friends_ui->name.editing;view.upper=friends_ui->name.upper;
+    view.keyboard_key=friends_ui->name.key;view.username=friends_ui->name.value;
+    view.message=friends_ui->name.error;
     switch (view.section) {
     case FriendsSection::friends:
         for (const auto& f:state.friends) view.rows.push_back(f.npid+(f.online?"  ONLINE":"  OFFLINE"));
@@ -86,6 +91,45 @@ void close_friends() {
     tb_friends_panel_close();friends_ui.reset();
 }
 void pump_friends(uint32_t buttons) {
+    auto& name=friends_ui->name;
+    tb_friends_input input{};
+    while (tb_friends_take_input(&input)) {
+        if (input.kind==TB_FRIENDS_FOCUS_LOST) {if(name.editing) name.cancel();buttons=0;break;}
+        if (!tb_friends_window_focused()) continue;
+        if (input.kind==TB_FRIENDS_TEXT) {if(name.editing) name.append(input.text);continue;}
+        if (input.kind!=TB_FRIENDS_KEY) continue;
+        const auto scan=input.value;
+        if (name.editing) {
+            if (scan==TB_FRIENDS_BACKSPACE) name.erase();
+            else if (scan==TB_FRIENDS_ENTER) name.done();
+            else if (scan==TB_FRIENDS_ESCAPE) name.cancel();
+            else if (scan==TB_FRIENDS_UP) name.move(0,-1);
+            else if (scan==TB_FRIENDS_DOWN) name.move(0,1);
+            else if (scan==TB_FRIENDS_LEFT) name.move(-1,0);
+            else if (scan==TB_FRIENDS_RIGHT) name.move(1,0);
+            // Letters come only from SDL_TEXTINPUT, including Z and X.
+            if (!name.editing) {tb_friends_panel_show(friends_view(),friends_ui->from_invite);return;}
+        } else {
+            if (scan==TB_FRIENDS_UP) buttons|=0x10;
+            if (scan==TB_FRIENDS_RIGHT) buttons|=0x20;
+            if (scan==TB_FRIENDS_DOWN) buttons|=0x40;
+            if (scan==TB_FRIENDS_LEFT) buttons|=0x80;
+            if (scan==TB_FRIENDS_CONFIRM || scan==TB_FRIENDS_ENTER) buttons|=0x4000;
+            if (scan==TB_FRIENDS_BACK || scan==TB_FRIENDS_ESCAPE) buttons|=0x2000;
+        }
+    }
+    if (!tb_friends_window_focused()) {
+        tb_friends_panel_show(friends_view(),friends_ui->from_invite);return;
+    }
+    if (name.editing) {
+        if (buttons&0x2000) name.cancel();
+        else if (buttons&0x8000) name.erase();
+        else if (buttons&0x1000) name.upper=!name.upper;
+        else if (buttons&8) name.done();
+        else if (buttons&0xf0) name.move(buttons&0x20?1:buttons&0x80?-1:0,buttons&0x40?1:buttons&0x10?-1:0);
+        else if (buttons&0x4000) name.choose();
+        tb_friends_panel_show(friends_view(),friends_ui->from_invite);return;
+    }
     auto view=friends_view();
     if (buttons&0x2000) {
         if (friends_ui->details) friends_ui->details=false;
@@ -96,7 +140,8 @@ void pump_friends(uint32_t buttons) {
         friends_ui->selected=0;friends_ui->details=false;
     } else if (!friends_ui->details && !view.rows.empty() && (buttons&0x50)) {
         friends_ui->selected=(friends_ui->selected+(buttons&0x40?1:view.rows.size()-1))%view.rows.size();
-    } else if ((buttons&0x4000) && !view.rows.empty()) friends_ui->details=true;
+    } else if ((buttons&0x4000) && friends_ui->section==FriendsSection::add && view.connected) name.open();
+    else if ((buttons&0x4000) && !view.rows.empty()) friends_ui->details=true;
     tb_friends_panel_show(friends_view(),friends_ui->from_invite);
 }
 std::optional<std::string> guest_text(uint32_t address,size_t limit) {
@@ -322,6 +367,7 @@ void register_basic() {
         const auto port=c->gpr[3];
         const auto out=c->gpr[4];
         tb_sdk_ps3_hle_call(ps3_compute_nid("cellPadGetData"),c);
+        if (!port && c->gpr[3]) (void)tb_panel_input(0); // Release a disconnected controller's held buttons.
         if (!port && !c->gpr[3] && guest_range(out,12) && vm_read32(out)>0) {
             const auto buttons=vm_read16(out+8)|(vm_read16(out+10)<<8);
             static bool shortcut_held=false;
