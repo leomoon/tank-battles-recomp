@@ -8,6 +8,15 @@
 #include <fstream>
 #include <thread>
 #include <vector>
+static void save_overlay(const char* path,const tb_overlay_region& region,const std::vector<uint32_t>& pixels) {
+    std::ofstream shot(path,std::ios::binary);
+    shot<<"P6\n"<<region.width<<" "<<region.height<<"\n255\n";
+    for (size_t i=0;i<region.width*region.height;++i) {
+        const char rgb[3]={char(pixels[i]),char(pixels[i]>>8),char(pixels[i]>>16)};
+        shot.write(rgb,3);
+    }
+}
+
 int main(){
  FpsSample s;s.update(0,100,200);assert(!s.ready);
  s.update(1000000000,130,260);assert(s.ready&&s.game_fps==30&&s.present_fps==60);
@@ -28,21 +37,33 @@ int main(){
  tb_fps_toggle();assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
  tb_fps_toggle();
  const std::array<std::string,6> friends{"PlayerB","FriendC","FriendD","FriendE","FriendF","FriendG"};
- tb_panel_show(InvitePicker::friends,friends,1);
+ std::vector<std::string> invite_choices(friends.begin(),friends.end());
+ invite_choices.emplace_back("MANAGE FRIENDS");
+ tb_panel_show(InvitePicker::friends,invite_choices,1);
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.width==448 && region.height==268 && region.x==416 && region.y==226);
- assert(pixels[57*region.width+20]==0xff2b1d12u);
- assert(pixels[85*region.width+20]==0xff66c7ffu); // Selected row accent.
+ assert(region.width==640 && region.height==360 && region.x==320 && region.y==180);
+ assert(pixels[85*region.width+20]==0xff2b1d12u);
+ assert(pixels[125*region.width+20]==0xff66c7ffu); // Selected row accent.
  assert(pixels[region.width*region.height]==0xa5a5a5a5);
+ save_overlay("friends-invite.ppm",region,pixels);
  assert(tb_draw_overlay(pixels.data(),320,180,1,&region));
- assert(region.x==48 && region.y==23 && region.width==224 && region.height==134);
+ assert(region.x==4 && region.y==4 && region.width==312 && region.height==172);
  assert(pixels[0]==0xffffc766u); // Swapchain channel order.
  assert(tb_draw_overlay(pixels.data(),3840,2160,0,&region));
- assert(region.x==1248 && region.y==678 && region.width==1344 && region.height==804);
+ assert(region.x==960 && region.y==540 && region.width==1920 && region.height==1080);
  assert(pixels.back()==0xa5a5a5a5);
- tb_panel_show(InvitePicker::friends,friends,5);
+ tb_panel_show(InvitePicker::friends,invite_choices,5);
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.height==156);
+ assert(pixels[89*region.width+20]==0xff66c7ffu); // First row on the next page.
+ tb_panel_update(InvitePicker::friends,invite_choices,6);
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ assert(pixels[279*region.width+20]==0xff66c7ffu); // Manage Friends keeps its own row.
+ const std::array<std::string,1> no_online_friends{"MANAGE FRIENDS"};
+ tb_panel_update(InvitePicker::friends,no_online_friends,0);
+ assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
+ assert(region.height==360 && pixels[89*region.width+20]==0xff2b1d12u);
+ assert(pixels[279*region.width+20]==0xff66c7ffu);
+ save_overlay("friends-invite-empty.ppm",region,pixels);
  assert(tb_panel_input(0x4000)==PanelPadInput::captured);assert(!tb_panel_take_input()); // Opening button is still held.
  assert(tb_panel_input(0)==PanelPadInput::captured);assert(tb_panel_input(0x4000)==PanelPadInput::captured);assert(tb_panel_take_input()==0x4000);
  assert(tb_panel_input(0x4000)==PanelPadInput::captured);assert(!tb_panel_take_input());
@@ -134,24 +155,19 @@ int main(){
  assert(tb_friends_panel_show(manager));
  assert(tb_friends_panel_visible());
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.x==416 && region.y==215 && region.width==448 && region.height==290);
- assert(pixels[123*region.width+20]==0xff66c7ffu); // Second page selection.
+ assert(region.x==320 && region.y==180 && region.width==640 && region.height==360);
+ assert(pixels[114*region.width+20]==0xff66c7ffu); // Active category.
+ assert(pixels[243*region.width+20]==0xff66c7ffu); // Sixth row on the first page.
  assert(tb_panel_input(0)==PanelPadInput::captured);
  assert(tb_panel_input(0x2000)==PanelPadInput::captured); // Never forwards Back into the title.
  assert(tb_panel_take_input()==0x2000);
  assert(tb_draw_overlay(pixels.data(),3840,2160,1,&region));
- assert(region.width==1344 && region.height==870 && pixels.back()==0xa5a5a5a5);
+ assert(region.width==1920 && region.height==1080 && pixels.back()==0xa5a5a5a5);
  assert(!tb_draw_overlay(pixels.data(),200,120,0,&region));
  manager.selected=0;
  assert(tb_friends_panel_show(manager));
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- {
-  std::ofstream shot("friends-panel.ppm",std::ios::binary);
-  shot<<"P6\n"<<region.width<<" "<<region.height<<"\n255\n";
-  for(size_t i=0;i<region.width*region.height;++i) {
-   char rgb[3]={char(pixels[i]),char(pixels[i]>>8),char(pixels[i]>>16)};shot.write(rgb,3);
-  }
- }
+ save_overlay("friends-panel.ppm",region,pixels);
  for(auto section:{FriendsSection::received,FriendsSection::sent,FriendsSection::add}) {
   manager.section=section;manager.rows.clear();
   assert(tb_friends_panel_show(manager));assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
@@ -159,16 +175,10 @@ int main(){
  manager.editing=true;manager.username="User-0123456789_";manager.keyboard_key=39;
  assert(tb_friends_panel_show(manager));
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.width==448 && region.height==368 && region.x==416 && region.y==176);
- {
-  std::ofstream shot("friends-keyboard.ppm",std::ios::binary);
-  shot<<"P6\n"<<region.width<<" "<<region.height<<"\n255\n";
-  for(size_t i=0;i<region.width*region.height;++i) {
-   char rgb[3]={char(pixels[i]),char(pixels[i]>>8),char(pixels[i]>>16)};shot.write(rgb,3);
-  }
- }
+ assert(region.width==640 && region.height==432 && region.x==320 && region.y==144);
+ save_overlay("friends-keyboard.ppm",region,pixels);
  assert(tb_draw_overlay(pixels.data(),3840,2160,1,&region));
- assert(region.width==1344 && region.height==1104 && pixels.back()==0xa5a5a5a5);
+ assert(region.width==1920 && region.height==1296 && pixels.back()==0xa5a5a5a5);
  manager.editing=false;manager.details=true;manager.section=FriendsSection::friends;
  manager.rows={"FriendC  OFFLINE"};manager.selected=0;manager.confirm_remove=true;
  manager.actions={"KEEP FRIEND","REMOVE FRIEND"};manager.action_selected=1;
@@ -176,13 +186,7 @@ int main(){
  assert(pixels.back()==0xa5a5a5a5);
  manager.status="Friend request sent. The other player needs to accept it.";
  assert(tb_friends_panel_show(manager));assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- {
-  std::ofstream shot("friends-result.ppm",std::ios::binary);
-  shot<<"P6\n"<<region.width<<" "<<region.height<<"\n255\n";
-  for(size_t i=0;i<region.width*region.height;++i) {
-   char rgb[3]={char(pixels[i]),char(pixels[i]>>8),char(pixels[i]>>16)};shot.write(rgb,3);
-  }
- }
+ save_overlay("friends-result.ppm",region,pixels);
  manager.status.clear();manager.details=false;
  manager.connected=false;assert(tb_friends_panel_show(manager));
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
@@ -196,12 +200,12 @@ int main(){
  tb_panel_show(InvitePicker::rooms,friends,0);
  assert(!tb_friends_panel_show(manager)); // Room browser keeps ownership.
  tb_panel_close();
- tb_panel_show(InvitePicker::friends,friends,1);
+ tb_panel_show(InvitePicker::friends,invite_choices,1);
  assert(!tb_friends_panel_show(manager));
  assert(tb_friends_panel_show(manager,true));
  tb_friends_panel_close();
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.height==268 && pixels[85*region.width+20]==0xff66c7ffu); // Restored picker selection.
+ assert(region.height==360 && pixels[125*region.width+20]==0xff66c7ffu); // Restored picker selection.
  tb_panel_close();
 
  // The largest legal roster still paints only the selected page.
@@ -217,6 +221,7 @@ int main(){
  assert(pixels[195*region.width+20]==0xff66c7ffu);
  assert(pixels[region.width*region.height]==0xa5a5a5a5);
  assert(tb_draw_overlay(pixels.data(),3840,2160,1,&region));
- assert(region.width==1344 && region.height==870 && pixels.back()==0xa5a5a5a5);
+ assert(region.width==1920 && region.height==1080 && pixels.back()==0xa5a5a5a5);
+ assert(pixels[871*region.width+60]==0xffffc766u); // Eighth row on the last page.
  tb_friends_panel_close();
 }

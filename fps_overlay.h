@@ -24,6 +24,7 @@ struct FpsSample {
 
 // A small native selection panel shares the window-only overlay surface.
 enum class InvitePicker { friends, invitations, rooms, searching_rooms };
+// The send picker ends its choices with the Manage Friends action.
 void tb_panel_show(InvitePicker kind, std::span<const std::string> choices, size_t selected);
 void tb_panel_update(InvitePicker kind, std::span<const std::string> choices, size_t selected);
 void tb_panel_close();

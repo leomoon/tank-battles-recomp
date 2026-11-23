@@ -1,16 +1,44 @@
-# Native RPCN rooms
+# Online Battle and Friends
 
-The optional RPCN profile selects the server. The runtime contains no fixed LAN address. [Player settings](RUNTIME.md#private-rpcn-sign-in) describes the profile, certificate and account commands. The default player stays offline.
+In **Play Tank Battles**, choose **Sign in** or **Create account**. For the public server, enter `play.lmx.to:31313` in **Server**. Each player needs a distinct account on the same server. Choose **Play online as** your username to start the game, or **Play offline** for local play. [Account and server settings](RUNTIME.md#private-rpcn-sign-in)
 
-The port implements Matching2 context creation, discovery, room creation/search/join/leave, internal room updates and room messages against stock RPCN protocol 34. It uses the title's communication ID from guest memory. RPCS3's NP interfaces and RPCN's `np2_structs.proto` are the reference for the wire and guest ABI. RPCS3 is not required to run the native player.
+Friendships and invitations belong to the server you signed into. The Friends panel shows your current account and server.
 
-Room search also requests RPCN's owner-ping record before joining. Stock RPCN supplies a fixed 20 ms value; this is not a measurement of the connection between the players. The adapter now implements peer endpoint discovery and signaling activation. Live two-computer gameplay acceptance is still pending.
+Type directly into a focused field in the launcher. To use the on-screen keyboard, click **KB** or focus the field with the D-pad and press **PlayStation X** or **Xbox A**. Select characters with the D-pad, then choose **Done** or press **Start** to keep your edits. **Cancel** discards the edit.
 
-Select **Online Battle**, create a room, confirm the map and mode, then choose **Go Public** in the lobby. **Join Game** opens a public-room list showing each host and player count. Use Up/Down to select, PlayStation X or keyboard Z to join, Square or keyboard A to refresh, and PlayStation O or keyboard X to return. Even a single result requires confirmation. An empty list stays open for refresh. A newly created room is private and appears after its host chooses Go Public.
+## Open Friends
+
+Press **F2** in the game window. On the first controller, hold **Select** and press **Triangle** on a PlayStation-style pad, or hold **View** and press **Y** on an Xbox-style pad. From a private lobby, you can also open **Invite Friends → Manage Friends**.
+
+Use Left and Right to switch between **Friends**, **Received Requests**, **Sent Requests**, and **Add Friend**. Use Up and Down to select a username or action. Confirm with **PlayStation X**, **Xbox A**, or **keyboard Z**. Go back with **PlayStation O**, **Xbox B**, or **keyboard X**. The match keeps running while Friends is open.
+
+## Add a friend
+
+1. Open **Add Friend** and confirm **Edit Username**. Enter the other player's RPCN username exactly as it appears on that server.
+2. With a keyboard, press **Enter** to finish editing, **Backspace** to delete, or **Esc** to cancel. While editing, Z and X type letters. With the on-screen keyboard, use the D-pad to select characters and **PlayStation X** or **Xbox A** to type. **Triangle / Y** changes case, **Square / Xbox X** deletes, and **Start / Menu** or **Done** finishes.
+3. Select **Send Request** and confirm. The request appears under **Sent Requests**. Select it there to **Cancel Request**.
+4. The other player opens **Received Requests**, picks your name, and chooses **Accept Request** or **Decline Request**. The shortcut opens **Received Requests** directly while the incoming request toast is visible. Requests sent to an offline player appear after they sign in.
+
+After acceptance, the **Friends** list updates for both players during the same session. To remove a friend, select their name, choose **Remove Friend**, and confirm. If the connection drops, reopen **Online Battle** to reconnect and refresh the list.
+
+## Invite a friend to a private Battle
+
+1. In **Online Battle**, create a game and choose the level and mode. Leave the room private and select **Invite Friends**.
+2. Choose an online friend and confirm. If you still need to add them, choose **Manage Friends** from the invite list. Once they accept, go back to the same picker. Your chosen level stays selected and the friend appears in the invite list while they are online.
+3. The recipient sees a short invitation toast. In **Online Battle → Accept Invitation**, select the sender and confirm to join their room. If the inbox says **No invitations**, press Back once to return to Online Battle. New invites appear while the inbox is open.
+4. Start the match from the host's lobby.
+
+## Join a public Battle
+
+The host chooses **Go Public** after creating a room. Other players open **Online Battle → Join Game** to see the host and player count for each room. Select a room and confirm to join. Refresh an open list with **PlayStation Square**, **Xbox X**, or **keyboard A**, including when the list is empty.
 
 ## Peer transport
 
+The port implements Matching2 discovery, room creation, search, joining and leaving, internal room updates, and room messages against RPCN protocol 34. It uses the title's communication ID from guest memory. RPCS3's NP interfaces and RPCN's `np2_structs.proto` are the reference for the wire and guest ABI. The native player runs independently of RPCS3.
+
 Each computer needs its own RPCN account and UDP port 3658 available for the native player. RPCN uses TLS on the configured TCP endpoint and UDP 3657 for endpoint discovery. Gameplay travels directly between players. Forwarding only RPCN's ports through a web reverse proxy does not carry that traffic. Stock RPCN reports local peers on port 3658, so two players on the same computer cannot currently share that port.
+
+Room search requests the owner's ping record before joining. Stock RPCN supplies a fixed 20 ms value. The adapter checks the real peer's reachability through endpoint discovery and signaling.
 
 The signaling adapter retains the server-issued login user ID and registers its bound UDP socket with RPCN. It requests the other account's endpoint, then exchanges native-only `TBP1` challenge/ack packets. It promptly retransmits its challenge on the first incoming challenge to handle either peer starting first. A connection becomes active once the client has answered the peer's challenge and received a matching acknowledgment for its own. The adapter delivers established and extended activation events through the guest callback queue. Activation fails after eight seconds and an active peer that stops acknowledging fails after five seconds.
 
@@ -56,24 +84,21 @@ matching_rooms /private/this-player.ini peer OTHER_PLAYER_NPID
 
 The fixture waits up to two minutes for the other account's UDP registration, then checks real peer activation, the primary/extended callback arguments, the reported peer address and shared-context cleanup. Close any game using that account first. The Windows runtime bundle includes `bin/matching_rooms.exe`, `peer_udp_fixture.exe` and `sysnet_fixture.exe`, so this check needs no game or separate fixture build. Run `matching_rooms PROFILE signal UNUSED_NPID` to verify bounded failure for an unreachable peer.
 
-Local checks cover malformed discovery responses, real loopback challenge/ack exchanges, nonce rejection and guest socket handoff/filtering through the production SDK. The LAN service has confirmed the Linux player's registration. Lobby agreement, actual game traffic and synchronized movement/hits on two computers remain unverified.
+Local checks cover malformed discovery responses, loopback challenge and acknowledgment exchanges, nonce rejection, and guest socket handoff and filtering through the production SDK.
 
-## Friend invitations
+## Friends and invitation diagnostics
 
-With an online RPCN profile selected, **F2** opens the centered Friends panel while the game runs. On the first controller, hold **Select/View + Triangle/Y**. A short toast shows these shortcuts after sign-in. **Invite Friends → Manage Friends** opens the same panel and returns to the preserved invitation picker and selected level when closed. Left/Right changes between Friends, Received Requests, Sent Requests, and Add Friend; Up/Down selects a row. PlayStation X / keyboard Z opens its details, and PlayStation O / keyboard X goes back. The panel shows the active account and server, because relationships belong to that server. Public room search, invitation acceptance, and system dialogs retain their own input. The roster shows which friends are offline. Received and Sent Requests stay separate from mutual friends, and the selected username stays selected when another player changes the list.
+Friends actions use the running game's RPCN connection. The panel shows success after the server acknowledges a change. If the server times out, reconnect and check the list to confirm what happened. Leaving the lobby closes Friends and cancels a pending invite picker. If a guest leaves and the host keeps the room, the host can continue using the same picker.
 
-In **Add Friend**, press PlayStation X, keyboard Z, or Enter to edit the username. Type its exact capitalization with a physical keyboard, even if a controller is connected. Enter finishes editing, Backspace deletes, and Escape cancels the edit and restores the previous value. While editing, Z and X are letters. Controller users navigate the on-screen keyboard with the D-pad, press X to type a character, Triangle to switch letter case, Square to delete, Start or the on-screen Done key to finish, and O to cancel. Usernames require 3–16 letters, digits, hyphens or underscores. After finishing the username, select **Send Request** and confirm separately. The sender sees that the other player must accept it; the request appears in Sent Requests. Leaving the window cancels an unfinished edit; holding a closing key cannot activate a game control when the panel returns.
+The game-free `friends_ui` fixture drives the production Friends controller, Basic callbacks, RPCN transport, and Matching2 against two authorized test accounts. It checks request and acceptance, live invite choices, delivery of the 24-byte room attachment, joining the same private room, and panel cleanup when either player leaves.
 
-With both accounts signed in, the host can leave the lobby private and choose **Invite Friends**. The centered invite dialog lists online mutual friends and highlights the selected account. Its controls are labeled separately for PlayStation controllers and keyboard. Use Up/Down to choose, PlayStation X or keyboard Z to send, and PlayStation O or keyboard X to cancel. The picker consumes the closing button until release so it cannot also activate a lobby control. An incoming invitation shows the sender and a four-second countdown bar. The recipient can then choose **Online Battle → Accept Invitation**, select the sender and confirm. An empty inbox shows **No invitations**. Press PlayStation O or keyboard X once to return to the Online Battle menu. New invitations appear in the dialog if it stays open. The original game attachment supplies the room ID to Matching2.
+```bash
+python scripts/test_rpcn_friends_ui.py \
+  --runner build-rpcn-tests/friends_ui \
+  --host-profile /private/player-a.ini \
+  --peer-profile /private/player-b.ini
+```
 
-Accounts must be mutual friends. An incoming friend request displays a four-second toast at the top left. Press F2 or the controller shortcut while it is visible to open **Received Requests**, select the sender, and choose **Accept Request** or **Decline Request**. In **Sent Requests**, select a request to cancel it. In **Friends**, select a player to remove them; a separate confirmation defaults to keeping the friend. Requests and invitations queue in arrival order rather than replacing an unread toast. These actions use the running game's connection, and success is shown only after the server acknowledges the change.
+Enable `TB_OFFLINE_TRACE=1` for guest menu and network traces. The `[rpcn-basic]` lines record invitation fields, callback results, and attachment reads.
 
-Accepting a request updates both signed-in players without a restart. The invitation picker refreshes when friends come online, go offline, are accepted, or are removed. A disappearing selected invite target returns selection to **Manage Friends**. Opening management keeps the pending invitation and its room attachment; return to the picker to invite a newly accepted online friend. Results from an abandoned management panel cannot reopen it.
-
-Friends leaves the match running and captures player one's keyboard and controller input, including stick movement. Back closes a pending action's panel immediately. If the server never acknowledges a change, Friends reports that it could not confirm the result. Reopen **Online Battle** after losing the connection to retry the existing sign-in. The server supplies a fresh relationship list on reconnect.
-
-Leaving the lobby closes Friends and cancels a pending invitation picker. If a guest leaves and the host keeps the room, the host can continue using the same picker. A closed room dismisses the panel for its remaining players.
-
-The game-free `friends_ui` fixture drives the production Friends UI logic, basic callbacks, RPCN transport, and Matching2 against two unrelated LAN test accounts. It verified request/accept, live invite choices, preservation of the 24-byte room attachment, and joining the exact hidden room with two members without restarting either process. It also verified that guest departure preserves the host’s picker and host departure closes both Friends panels. Run `python scripts/test_rpcn_friends_ui.py --runner build-tests/rpcn/friends_ui --host-profile HOST.ini --peer-profile PEER.ini` against profiles authorized for test-server relationship and room changes. This fixture replaces the renderer and physical input; acceptance through the rendered game on Linux and Windows remains a separate check.
-
-The Linux sender has delivered its original type-3, subtype-0, flags-1 invitation and 24-byte attachment through stock RPCN. The Linux recipient has read a test invitation through the game's real receive/event/attachment calls and displayed “The game room is unavailable” for a deliberately nonexistent room. A Linux host invited Windows to private room 60, and a Windows host invited Linux to private room 61. Both rooms reached Battle over the LAN. A Linux host also invited two Windows players to private room 64 and played Battle with both guests and one CPU tank. Separate validation of the updated picker on Windows is pending. Enable `TB_OFFLINE_TRACE=1` for guest menu/network traces. `[rpcn-basic]` lines record invitation fields, callback results and attachment reads, without passwords or tokens.
+The maintainer tested Friends with two accounts. Earlier LAN playtests reached private Battle with invitations in both directions between Linux and Windows, and with a Linux host and two Windows guests.

@@ -1,6 +1,6 @@
 # Guided Linux setup
 
-Use Python 3.11 or newer in the virtual environment described in [README](../README.md). The repository contains the recompiler and runtime, but no game, purchased license, private key or generated game code.
+Use Python 3.11 or newer in the virtual environment described in the [source-build guide](BUILD_FROM_SOURCE.md). The repository contains the recompiler and runtime, but no game, purchased license, private key or generated game code.
 
 Put your original NPUB30154 PKG and purchased unlock EDAT in `game/input/`, then run:
 

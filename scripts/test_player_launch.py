@@ -28,14 +28,16 @@ int main(int argc,char** argv) {
  if(!strcmp(argv[1],"antialiasing")) tb_settings_note_antialiasing(!tb_settings_antialiasing());
  printf("antialiasing=%d\n",tb_settings_antialiasing());
  int w=0,h=0;int valid=tb_settings_window_size(&w,&h);
- uint32_t pixels[TB_OVERLAY_BUFFER_SIZE/4];
+ static uint32_t pixels[TB_OVERLAY_BUFFER_SIZE/4];
  tb_overlay_region region{};
  printf("overlay=%d size=%d,%d,%d fullscreen=%s\n",tb_draw_overlay(pixels,288,180,0,&region),valid,w,h,getenv("PS3RECOMP_FULLSCREEN")?getenv("PS3RECOMP_FULLSCREEN"):"unset");
 }
 ''')
         cls.exe=cls.build/'fixture'
+        sources = ('player_settings.cpp', 'player_session.cpp', 'fps_overlay.cpp', 'input_events.cpp',
+                   'rendering_profile.cpp')
         subprocess.run(['c++','-std=c++20','-O2','-I'+str(ROOT),str(source),
-                        *[str(ROOT/p) for p in ('player_settings.cpp','player_session.cpp','fps_overlay.cpp','rendering_profile.cpp')],
+                        *[str(ROOT/p) for p in sources],
                         '-pthread','-o',str(cls.exe)],check=True)
 
     def setUp(self):
