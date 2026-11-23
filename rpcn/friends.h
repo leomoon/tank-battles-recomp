@@ -26,7 +26,7 @@ struct FriendResult {
 class FriendsController {
 public:
     using Clock=std::chrono::steady_clock;
-    FriendResult begin(FriendAction action,std::string npid,bool confirmed=false);
+    FriendResult begin(FriendAction action,std::string npid,bool confirmed=false,uint64_t expected_generation=0);
     std::optional<FriendResult> poll(Clock::time_point now=Clock::now());
     bool busy() const { return pending_.has_value(); }
 

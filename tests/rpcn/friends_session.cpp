@@ -31,7 +31,7 @@ const char* outcome(FriendOutcome code) {
 
 void emit(const char* code) {
     const auto s=relationships();
-    std::printf("{\"result\":\"%s\",\"friends\":[",code);
+    std::printf("{\"result\":\"%s\",\"generation\":%llu,\"friends\":[",code,static_cast<unsigned long long>(s.generation));
     for (size_t i=0;i<s.friends.size();++i)
         std::printf("%s\"%s\"",i?",":"",s.friends[i].npid.c_str());
     std::printf("],\"online\":[");
@@ -55,6 +55,16 @@ int main(int argc,char** argv) {
         std::istringstream input(line);
         std::string action,name;input>>action>>name;
         if (action=="quit") break;
+        if (action=="reconnect") {
+            deadline=std::chrono::steady_clock::now()+6s;
+            while (status().state!=State::offline && std::chrono::steady_clock::now()<deadline)
+                std::this_thread::sleep_for(2ms);
+            retry_sign_in();
+            while (status().state==State::connecting && std::chrono::steady_clock::now()<deadline)
+                std::this_thread::sleep_for(2ms);
+            if (status().state!=State::online) {stop();return 7;}
+            emit("reconnected");continue;
+        }
         if (action=="expire-queued") {
             auto barrier=submit(Request::server_list,{});
             const auto generation=relationships().generation;

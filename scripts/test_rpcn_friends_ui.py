@@ -121,10 +121,38 @@ def check(runner, host_profile, peer_profile, output):
         state = b.command("join")
         assert state["room"] == room
         a.wait(lambda s: s["sent_callbacks"] == 1)
+
+        # A guest leaving keeps the host's lobby and suspended picker intact.
+        a.command("invite")
+        assert a.command("toggle")["friends_open"]
+        assert b.command("toggle")["friends_open"]
+        assert not b.command("leave")["friends_open"]
+        state = a.wait(lambda s: s["member_left"] == 1)
+        assert state["room"] == room and state["friends_open"] and state["picker_open"]
+        assert state["canceled_sends"] == 0
+        a.press(0x2000)
+        a.press(0x4000)
+        a.wait(lambda s: s["sent_callbacks"] == 2)
+        b.command("snapshot")
+        assert b.command("receive")["choices"] == [host_name]
+        b.press(0x4000)
+        assert b.command("join")["room"] == room
+
+        # Closing the lobby as host dismisses both Friends panels.
+        a.command("invite")
+        assert a.command("toggle")["friends_open"]
+        assert b.command("toggle")["friends_open"]
+        state = a.command("leave")
+        assert not state["friends_open"] and not state["picker_open"] and state["canceled_sends"] == 1
+        state = b.wait(lambda s: s["room_closed"] == 1)
+        assert not state["friends_open"] and not state["picker_open"]
+        assert a.command("snapshot")["canceled_sends"] == 1
+
         report = {"passed": True, "room": room, "host": host_name, "peer": peer_name,
                   "checks": ["in-session request and acceptance", "request toast route", "live invite choices",
                              "preserved 24-byte room attachment", "single invitation completion callback",
-                             "exact hidden room joined with two members"],
+                             "exact hidden room joined with two members", "guest leave preserves host's picker",
+                             "host departure closes stale Friends panels and cancels the local invite once"],
                   "scope": "Production HLE/UI and real RPCN; excludes rendered title and physical input acceptance"}
         (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report, indent=2))

@@ -19,10 +19,14 @@ constexpr uint32_t event=0x32000,from=0x32100,data=0x32200,capacity=0x32300;
 uint16_t room_context=0;
 uint64_t room_id=0;
 
+void pump() {
+    const bool exited=pump_matching();
+    pump_basic(false,exited);
+}
 Callback wait_callback(unsigned index,unsigned code) {
     const auto deadline=std::chrono::steady_clock::now()+6s;
     while (std::chrono::steady_clock::now()<deadline) {
-        pump_basic();pump_matching();
+        pump();
         const auto it=std::find_if(callbacks.begin(),callbacks.end(),[&](const auto& cb){return cb[index]==code;});
         if(it!=callbacks.end()) {const auto cb=*it;callbacks.erase(it);return cb;}
         std::this_thread::sleep_for(2ms);
@@ -41,6 +45,7 @@ void setup_matching() {
     assert(!call("sceNpMatching2CreateContext",{comm+64,comm,comm+128,comm+300,3}));
     room_context=vm_read16(comm+300);
     assert(!call("sceNpMatching2RegisterContextCallback",{room_context,handler,0}));
+    assert(!call("sceNpMatching2RegisterRoomEventCallback",{room_context,handler,0}));
     assert(!call("sceNpMatching2ContextStartAsync",{room_context,0}));
     assert(wait_callback(1,0x6f02)[3]==0);
     assert(call("sceNpMatching2GetServerIdListLocal",{room_context,request,1})==1);
@@ -54,10 +59,10 @@ void barrier() {
     auto future=submit(Request::server_list,{id.begin(),id.end()});
     if(!future.valid() || future.wait_for(6s)!=std::future_status::ready || future.get().body.empty())
         throw std::runtime_error("RPCN barrier failed");
-    pump_basic();
+    pump();
 }
 void emit(const std::string& code) {
-    pump_basic();
+    pump();
     const auto state=relationships();
     auto list=[](const auto& rows){
         std::cout<<'[';
@@ -74,6 +79,9 @@ void emit(const std::string& code) {
              <<",\"friends_open\":"<<(friend_panel?"true":"false")<<",\"picker_open\":"<<(panel?"true":"false")
              <<",\"status\":"<<std::quoted(friend_view.status)<<",\"room\":"<<room_id
              <<",\"sent_callbacks\":"<<std::count_if(callbacks.begin(),callbacks.end(),[](const auto& cb){return cb[0]==13 && !cb[1];})
+             <<",\"canceled_sends\":"<<std::count_if(callbacks.begin(),callbacks.end(),[](const auto& cb){return cb[0]==13 && cb[1]==UINT64_MAX;})
+             <<",\"member_left\":"<<std::count_if(callbacks.begin(),callbacks.end(),[](const auto& cb){return cb[2]==0x1102;})
+             <<",\"room_closed\":"<<std::count_if(callbacks.begin(),callbacks.end(),[](const auto& cb){return cb[2]==0x1104;})
              <<",\"request_toasts\":"<<friend_toasts.size()<<",\"invite_toast\":"<<std::quoted(toast_sender)<<"}\n"<<std::flush;
 }
 int main(int argc,char** argv) {
@@ -125,6 +133,10 @@ int main(int argc,char** argv) {
                 assert(!call("sceNpMatching2JoinRoom",{room_context,request,options,request_id}));answer(0x102);
                 const auto room=vm_read32(result);room_id=vm_read64(room+16);
                 assert(room_id==invited && vm_read32(room+40)==2);
+            } else if(command=="leave") {
+                assert(room_id);std::memset(memory.data()+request,0,28);vm_write64(request,room_id);
+                assert(!call("sceNpMatching2LeaveRoom",{room_context,request,options,request_id}));
+                answer(0x103);room_id=0;
             } else throw std::runtime_error("Unknown fixture input");
             emit(command);
         }

@@ -25,7 +25,10 @@ struct FpsSample {
 // A small native selection panel shares the window-only overlay surface.
 enum class InvitePicker { friends, invitations, rooms, searching_rooms };
 void tb_panel_show(InvitePicker kind, std::span<const std::string> choices, size_t selected);
+void tb_panel_update(InvitePicker kind, std::span<const std::string> choices, size_t selected);
 void tb_panel_close();
+bool tb_panel_visible(InvitePicker kind);
+void tb_panel_close_if(InvitePicker kind);
 enum class PanelPadInput { passthrough, captured, back };
 PanelPadInput tb_panel_input(uint32_t buttons);
 uint32_t tb_panel_take_input();
@@ -36,6 +39,7 @@ struct FriendsPanelView {
     std::vector<std::string> rows;
     size_t selected=0;
     bool connected=false, busy=false, details=false;
+    bool connecting=false;
     bool editing=false, upper=false;
     unsigned keyboard_key=0;
     std::string username;

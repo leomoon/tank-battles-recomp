@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <utility>
 
 extern "C" int np_is_initialized();
 extern "C" int32_t cellSysutilQueueGuestCallbackArgs(uint32_t, const uint64_t*);
@@ -95,6 +96,7 @@ struct RoomBrowser {
 
 std::mutex lock;
 bool initialized;
+bool room_exited=false;
 uint32_t next_context=1, next_request=1, next_event=1;
 std::map<uint16_t,Context> contexts;
 std::map<uint32_t,Event> events;
@@ -138,6 +140,7 @@ void clear_matching() {
     discovery_event_pending=false;
     discovery_event_node=0;
     for (const auto& [id,context]:contexts) {
+        if (context.room) room_exited=true;
         leave(context.communication_id,context.room);
         drop_context_work(id);
     }
@@ -335,6 +338,7 @@ uint32_t perform(Op operation, const ppu_context& c) {
     switch (operation) {
     case Op::destroy:
         discovery_event_pending=false;
+        if (ctx.room) room_exited=true;
         leave(ctx.communication_id,ctx.room);
         drop_context_work(ctx_id);
         contexts.erase(it);
@@ -353,6 +357,7 @@ uint32_t perform(Op operation, const ppu_context& c) {
         if (!ctx.started && !ctx.discovery.valid()) return not_started;
         ctx.discovery={};
         ctx.started=false;
+        if (ctx.room) room_exited=true;
         leave(ctx.communication_id,ctx.room);
         ctx.room=0;
         ctx.servers.clear();
@@ -454,6 +459,7 @@ uint32_t perform(Op operation, const ppu_context& c) {
         else packet=frame_protobuf(std::move(packet),data);
         auto reply=submit(command,browse?packet:std::move(packet));
         if (!reply.valid()) return server_unavailable;
+        if (operation==Op::leave_room && ctx.room && vm_read64(req)==ctx.room) room_exited=true;
         const auto request=request_id(opt);
         if (browse) {
             browser.emplace(ctx_id,request,cb,std::move(packet),std::move(reply),Image{},std::vector<PublicRoom>{},0,
@@ -488,7 +494,7 @@ void reset_matching() {
     clear_matching();
 }
 
-void pump_matching() {
+bool pump_matching() {
     pump_signaling();
     std::lock_guard guard(lock);
     for (auto& [id,ctx]:contexts)
@@ -585,6 +591,7 @@ void pump_matching() {
                 notice.result.image=std::move(closure);
             }
             if (notice.event==0x1104) {
+                room_exited=true;
                 room.room=0;
                 room.owner=0;
                 room.room_flags=0;
@@ -617,6 +624,7 @@ void pump_matching() {
     std::erase_if(calls,[](const auto& call) {
         return !cellSysutilQueueGuestCallbackArgs(call.opd,call.args.data());
     });
+    return std::exchange(room_exited,false);
 }
 
 void register_matching() {

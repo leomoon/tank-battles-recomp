@@ -416,7 +416,10 @@ void check_callbacks(ppu_context* c) {
         completions=std::move(retry);
         system_dialog=dialog || tb_system_dialog_active();
     }
-    if (tb::rpcn::enabled()) { tb::rpcn::pump_matching(); tb::rpcn::pump_basic(system_dialog); }
+    if (tb::rpcn::enabled()) {
+        const bool room_exited=tb::rpcn::pump_matching();
+        tb::rpcn::pump_basic(system_dialog,room_exited);
+    }
     delegate("cellSysutilCheckCallback",c);
     if(!c->gpr[3] && queue_error)c->gpr[3]=queue_error;
     if (queued && offline_trace_enabled()) {

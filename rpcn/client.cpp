@@ -711,9 +711,11 @@ std::vector<Notification> take_notifications() {
     return result;
 }
 
-std::vector<Notification> take_basic_notifications() {
+std::vector<Notification> take_basic_notifications(uint64_t generation) {
     std::lock_guard guard(state_lock);
     std::vector<Notification> result;
+    if (generation && (session_status.state!=State::online || generation!=relationship_state.generation))
+        return result;
     result.swap(basic_notifications);
     return result;
 }

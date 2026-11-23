@@ -78,6 +78,9 @@ int main() {
     ++current.generation;current.endpoint="two.example:31313";
     response->set_value({{0}});
     assert(controller.poll()->outcome==FriendOutcome::session_changed);
+    const auto before_switch=submissions;
+    assert(controller.begin(FriendAction::add,"OtherUser",false,current.generation-1).outcome==FriendOutcome::session_changed);
+    assert(submissions==before_switch);
     reject_submission=true;
     assert(controller.begin(FriendAction::add,"OtherUser").outcome==FriendOutcome::not_online);
     reject_submission=false;connection=State::offline;

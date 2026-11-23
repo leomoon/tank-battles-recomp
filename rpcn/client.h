@@ -47,7 +47,7 @@ std::future<Reply> submit(Request command, std::vector<unsigned char> body);
 std::future<Reply> submit(Request command, std::vector<unsigned char> body, uint64_t generation,
                         std::chrono::steady_clock::time_point deadline);
 std::vector<Notification> take_notifications();
-std::vector<Notification> take_basic_notifications();
+std::vector<Notification> take_basic_notifications(uint64_t generation=0);
 struct Friend { std::string npid; bool online=false; uint64_t timestamp=0; };
 // Returned by value under the client lock. Each list is limited to 1024 entries.
 // Generation changes on successful login; revision changes on visible updates

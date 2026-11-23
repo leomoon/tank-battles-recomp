@@ -215,8 +215,13 @@ class FriendTests(unittest.TestCase):
             rejected = self.command(a, f"add {peer}", expected)
             self.assertEqual(rejected["friends"], [])
             self.assertEqual(rejected["outgoing"], [])
-        self.command(a, "add LostUser", "unknown")
+        lost = self.command(a, "add LostUser", "unknown")
+        self.assertEqual(lost["outgoing"], [])
         self.assertIn(("PlayerA", "LostUser"), self.pending)
+        recovered = self.command(a, "reconnect", "reconnected")
+        self.assertEqual(recovered["generation"], lost["generation"] + 1)
+        self.assertEqual(recovered["outgoing"], ["LostUser"])
+        self.command(a, "add LostUser", "already_pending")
         self.assertEqual(self.errors, [])
 
     def test_reciprocal_requests_become_mutual_without_restart(self):

@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string_view>
 
@@ -26,8 +27,7 @@ struct Picker {
     bool multiple=false;
 };
 Picker picker;
-FriendsPanelView friends_view;
-bool friends_active=false;
+std::shared_ptr<const FriendsPanelView> friends_view;
 bool panel_active=false;
 uint32_t panel_previous=0,panel_pressed=0;
 bool panel_waits_for_release=false;
@@ -165,17 +165,13 @@ void draw_friends(const Canvas& canvas,unsigned height,unsigned scale,const Frie
     canvas.fill(0,0,canvas.width,2*scale,accent);
     canvas.text(10*scale,8*scale,"FRIENDS",scale+scale/2,white);
     canvas.text(10*scale,23*scale,view.account.c_str(),scale,white);
+    canvas.text(128*scale,23*scale,"GAME CONTINUES",scale,muted);
     canvas.text(10*scale,34*scale,view.endpoint.c_str(),scale,muted);
     const char* sections[]={"FRIENDS","RECEIVED REQUESTS","SENT REQUESTS","ADD FRIEND"};
     canvas.fill(10*scale,46*scale,canvas.width-20*scale,12*scale,selected_row);
     canvas.text(13*scale,49*scale,sections[static_cast<unsigned>(view.section)],scale,accent);
     canvas.text(canvas.width-22*scale,49*scale,"L/R",scale,muted);
-    if (!view.connected) {
-        canvas.text(13*scale,66*scale,"NOT CONNECTED",scale,white);
-        canvas.text(13*scale,80*scale,"CONNECT TO ONLINE BATTLE",scale,muted);
-    } else if (view.busy) {
-        canvas.text(13*scale,66*scale,"WAITING FOR SERVER...",scale,white);
-    } else if (!view.status.empty()) {
+    if (!view.status.empty()) {
         std::string_view remaining=view.status;
         for (unsigned row=0;row<6 && !remaining.empty();++row) {
             auto count=std::min<size_t>(33,remaining.size());
@@ -188,6 +184,11 @@ void draw_friends(const Canvas& canvas,unsigned height,unsigned scale,const Frie
             remaining.remove_prefix(count);
             while (!remaining.empty() && remaining.front()==' ') remaining.remove_prefix(1);
         }
+    } else if (!view.connected) {
+        canvas.text(13*scale,66*scale,view.connecting?"CONNECTING...":"NOT CONNECTED",scale,white);
+        if (!view.connecting) canvas.text(13*scale,80*scale,"REOPEN ONLINE BATTLE TO RETRY",scale,muted);
+    } else if (view.busy) {
+        canvas.text(13*scale,66*scale,"WAITING FOR SERVER...",scale,white);
     } else if (view.section==FriendsSection::add) {
         canvas.text(13*scale,64*scale,"USERNAME",scale,muted);
         canvas.fill(13*scale,75*scale,canvas.width-26*scale,15*scale,selected_row);
@@ -252,11 +253,7 @@ void draw_toast(const Canvas& canvas,unsigned height,unsigned scale,const Toast&
 }
 }
 
-void tb_panel_show(InvitePicker kind,std::span<const std::string> choices,size_t selected) {
-    std::lock_guard guard(overlay_mutex);
-    // Another native dialog takes ownership, including asynchronous room search.
-    friends_active=false;
-    tb_friends_input_mode(0,0);
+static void set_picker_locked(InvitePicker kind,std::span<const std::string> choices,size_t selected) {
     picker.kind=kind;
     selected=choices.empty()?0:std::min(selected,choices.size()-1);
     const auto first=selected/visible_choices*visible_choices;
@@ -268,16 +265,38 @@ void tb_panel_show(InvitePicker kind,std::span<const std::string> choices,size_t
     if (!panel_active) { panel_pressed=0;panel_previous=UINT32_MAX; }
     panel_active=true;
 }
-void tb_panel_close() {
+void tb_panel_show(InvitePicker kind,std::span<const std::string> choices,size_t selected) {
     std::lock_guard guard(overlay_mutex);
-    if (panel_active || friends_active) panel_waits_for_release=panel_previous!=0;
-    friends_active=false;
+    // Another native dialog takes ownership, including asynchronous room search.
+    friends_view.reset();
+    tb_friends_input_mode(0,0);
+    set_picker_locked(kind,choices,selected);
+}
+void tb_panel_update(InvitePicker kind,std::span<const std::string> choices,size_t selected) {
+    std::lock_guard guard(overlay_mutex);
+    if (panel_active && picker.kind==kind) set_picker_locked(kind,choices,selected);
+}
+static void close_picker_locked() {
+    if (panel_active || friends_view) panel_waits_for_release=panel_previous!=0;
+    friends_view.reset();
     tb_friends_input_mode(0,0);
     panel_active=false; panel_pressed=panel_previous=0;
 }
+void tb_panel_close() {
+    std::lock_guard guard(overlay_mutex);
+    close_picker_locked();
+}
+bool tb_panel_visible(InvitePicker kind) {
+    std::lock_guard guard(overlay_mutex);
+    return panel_active && picker.kind==kind;
+}
+void tb_panel_close_if(InvitePicker kind) {
+    std::lock_guard guard(overlay_mutex);
+    if (panel_active && picker.kind==kind) close_picker_locked();
+}
 PanelPadInput tb_panel_input(uint32_t buttons) {
     std::lock_guard guard(overlay_mutex);
-    if (!panel_active && !friends_active) {
+    if (!panel_active && !friends_view) {
         if (!buttons) panel_waits_for_release=false;
         return panel_waits_for_release?PanelPadInput::captured:PanelPadInput::passthrough;
     }
@@ -286,7 +305,7 @@ PanelPadInput tb_panel_input(uint32_t buttons) {
     panel_previous=buttons;
     // Let the title unwind its search screen or empty inbox on the same Back
     // press that dismisses the panel, then suppress held input until release.
-    const bool title_back=!friends_active && (picker.kind==InvitePicker::rooms || picker.kind==InvitePicker::searching_rooms ||
+    const bool title_back=!friends_view && (picker.kind==InvitePicker::rooms || picker.kind==InvitePicker::searching_rooms ||
         (picker.kind==InvitePicker::invitations && !picker.count));
     if (title_back && (pressed&0x2000))
         return PanelPadInput::back;
@@ -305,18 +324,19 @@ void tb_show_invite_toast(const char* sender) {
 }
 bool tb_friends_panel_show(const FriendsPanelView& view,bool from_invite) {
     std::lock_guard guard(overlay_mutex);
-    if (!friends_active && panel_active && !(from_invite && picker.kind==InvitePicker::friends)) return false;
-    if (!friends_active) {panel_pressed=0;panel_previous=UINT32_MAX;}
-    friends_active=true;friends_view=view;
+    if (!friends_view && panel_active && !(from_invite && picker.kind==InvitePicker::friends)) return false;
+    if (!friends_view) {panel_pressed=0;panel_previous=UINT32_MAX;}
+    auto snapshot=std::make_shared<FriendsPanelView>(view);
+    snapshot->selected=view.rows.empty()?0:std::min(view.selected,view.rows.size()-1);
+    friends_view=std::move(snapshot);
     tb_friends_input_mode(1,view.editing);
-    friends_view.selected=view.rows.empty()?0:std::min(view.selected,view.rows.size()-1);
     return true;
 }
-bool tb_friends_panel_visible() {std::lock_guard guard(overlay_mutex);return friends_active;}
+bool tb_friends_panel_visible() {std::lock_guard guard(overlay_mutex);return bool(friends_view);}
 void tb_friends_panel_close() {
     std::lock_guard guard(overlay_mutex);
-    if (!friends_active) return;
-    friends_active=false;
+    if (!friends_view) return;
+    friends_view.reset();
     tb_friends_input_mode(0,0);
     if (panel_active) {panel_pressed=0;panel_previous=UINT32_MAX;}
     else {panel_waits_for_release=panel_previous!=0;panel_pressed=panel_previous=0;}
@@ -371,7 +391,7 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
     Mode mode=Mode::fps;
     Picker picker_view;
     Toast toast_view;
-    FriendsPanelView friends_panel;
+    std::shared_ptr<const FriendsPanelView> friends_panel;
     double remaining=0;
     {
         std::lock_guard guard(overlay_mutex);
@@ -379,7 +399,7 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
             mode=Mode::picker;
             picker_view=picker;
         }
-        if (!notification && friends_active) {mode=Mode::friends;friends_panel=friends_view;}
+        if (!notification && friends_view) {mode=Mode::friends;friends_panel=friends_view;}
         if (notification && toast.heading[0]) {
             const auto now=Clock::now();
             advance_toast(now);
@@ -404,7 +424,7 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
     unsigned card_width, card_height, margin;
     switch (mode) {
     case Mode::friends:
-        card_width=224;card_height=friends_panel.editing?184:145;margin=0;
+        card_width=224;card_height=friends_panel->editing?184:145;margin=0;
         break;
     case Mode::picker:
         card_width=224;
@@ -432,7 +452,7 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
     if (mode==Mode::fps) region->x=width-draw_width-offset;
     const Canvas canvas{static_cast<uint32_t*>(pixels),draw_width,bgra!=0};
     if (mode==Mode::friends) {
-        draw_friends(canvas,draw_height,scale,friends_panel);
+        draw_friends(canvas,draw_height,scale,*friends_panel);
     } else if (mode==Mode::picker) {
         draw_picker(canvas,draw_height,scale,picker_view);
     } else if (mode==Mode::invitation) {

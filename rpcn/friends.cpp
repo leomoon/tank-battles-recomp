@@ -49,13 +49,14 @@ FriendResult result(FriendAction action,FriendOutcome outcome,const std::string&
 
 }
 
-FriendResult FriendsController::begin(FriendAction action,std::string name,bool confirmed) {
+FriendResult FriendsController::begin(FriendAction action,std::string name,bool confirmed,uint64_t expected_generation) {
     if (pending_) return result(action,FriendOutcome::busy,name);
     if (name.size()<3 || name.size()>16 || name.find_first_not_of(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
         return result(action,FriendOutcome::invalid_name,name);
     const auto state=relationships();
     if (status().state!=State::online || state.npid.empty()) return result(action,FriendOutcome::not_online,name);
+    if (expected_generation && expected_generation!=state.generation) return result(action,FriendOutcome::session_changed,name);
     if (same(state.npid,name)) return result(action,FriendOutcome::self,name);
     // Use the server's spelling when the user selected an existing relationship.
     for (const auto& f:state.friends) if (same(f.npid,name)) name=f.npid;

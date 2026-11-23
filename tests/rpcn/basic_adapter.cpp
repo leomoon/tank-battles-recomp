@@ -18,12 +18,14 @@ using Callback = std::array<uint64_t,8>;
 static std::array<uint8_t,1 << 20> memory;
 static std::map<uint32_t,tank_battles_override_fn> hle;
 static std::vector<Callback> callbacks;
+static bool callback_queue_busy=false;
 
 
 extern "C" {
 uint32_t ppu_vm_size=memory.size();
 int np_is_initialized() { return 1; }
 int32_t cellSysutilQueueGuestCallbackArgs(uint32_t, const uint64_t* args) {
+    if (callback_queue_busy) return -1;
     Callback callback;
     std::copy_n(args,callback.size(),callback.begin());
     callbacks.push_back(callback);
@@ -53,6 +55,7 @@ static bool panel=false;
 static bool friend_panel=false,toggle_requested=false;
 static InvitePicker panel_kind;
 static FriendsPanelView friend_view;
+static unsigned friend_renders=0;
 static std::deque<tb_friends_input> native_inputs;
 static bool focused=true;
 static std::vector<std::string> displayed_choices;
@@ -70,9 +73,14 @@ void tb_panel_show(InvitePicker kind,std::span<const std::string> choices,size_t
     displayed_choices.assign(choices.begin(),choices.end());
 }
 void tb_panel_close() { panel=false;friend_panel=false; }
+bool tb_panel_visible(InvitePicker kind) {return panel && panel_kind==kind;}
+void tb_panel_close_if(InvitePicker kind) {if(tb_panel_visible(kind)) tb_panel_close();}
+void tb_panel_update(InvitePicker kind,std::span<const std::string> choices,size_t) {
+    if(tb_panel_visible(kind)) displayed_choices.assign(choices.begin(),choices.end());
+}
 bool tb_friends_panel_show(const FriendsPanelView& view,bool nested) {
     if (!friend_panel && panel && !(nested && panel_kind==InvitePicker::friends)) return false;
-    friend_panel=true;friend_view=view;return true;
+    friend_panel=true;friend_view=view;++friend_renders;return true;
 }
 bool tb_friends_panel_visible() {return friend_panel;}
 void tb_friends_panel_close() {friend_panel=false;}
@@ -94,7 +102,10 @@ static bool physical_connected=true;
 extern "C" void tb_sdk_ps3_hle_call(uint32_t,ppu_context* c) {
     if (!physical_connected) {c->gpr[3]=0x80121107;return;}
     const auto out=c->gpr[4];
-    vm_write32(out,8);vm_write16(out+8,physical_buttons&0xff);vm_write16(out+10,physical_buttons>>8);c->gpr[3]=0;
+    vm_write32(out,20);vm_write16(out+8,physical_buttons&0xff);vm_write16(out+10,physical_buttons>>8);
+    for (unsigned i=4;i<8;++i) vm_write16(out+4+i*2,255);
+    for (unsigned i=8;i<20;++i) vm_write16(out+4+i*2,17);
+    c->gpr[3]=0;
 }
 namespace tb::rpcn {
 #ifndef TB_FRIENDS_UI_LIVE
@@ -104,9 +115,13 @@ static bool peer_online=true;
 static unsigned submitted_messages=0;
 static bool online=true;
 static uint64_t revision=1;
+static uint64_t generation=1;
+static bool connecting=false,delay_send=false;
+static std::string account="PlayerA",endpoint="localhost:31313";
 static std::vector<Friend> mutual={{"PlayerB",true,0},{"Offline",false,0}};
 static std::vector<std::string> received={"RequestA"},sent={"RequestB"};
 static std::promise<Reply> mutation;
+static std::promise<Reply> invite_reply;
 static Request mutation_command;
 static std::string mutation_name;
 static unsigned mutations=0;
@@ -126,7 +141,7 @@ void complete_mutation(unsigned code=0) {
     mutation.set_value({{static_cast<unsigned char>(code)}});
 }
 static std::vector<unsigned char> submitted_payload;
-Status status() {return {online?State::online:State::offline,"PlayerA",1,"localhost:31313"};}
+Status status() {return {online?State::online:connecting?State::connecting:State::offline,account,1,endpoint};}
 std::vector<Friend> friends() {
     auto list=mutual;
     for (auto& f:list) if(f.npid=="PlayerB") f.online=peer_online;
@@ -134,19 +149,26 @@ std::vector<Friend> friends() {
 }
 uint64_t relationships_revision() {return revision*4+(online?1:0)+(peer_online?2:0);}
 Relationships relationships() {
-    if (!online) {Relationships s;s.revision=relationships_revision();return s;}
-    Relationships s;s.npid="PlayerA";s.endpoint="localhost:31313";s.generation=1;s.user_id=1;
+    Relationships s;s.revision=relationships_revision();s.generation=generation;
+    if (!online) return s;
+    s.npid=account;s.endpoint=endpoint;s.user_id=1;
     s.revision=relationships_revision();s.friends=friends();s.incoming=received;s.outgoing=sent;return s;
 }
-std::vector<Notification> take_basic_notifications() {auto result=notices;notices.clear();return result;}
-std::future<Reply> submit(Request command,std::vector<unsigned char> bytes) {
- assert(command==Request::send_message && bytes.size()>4);
- ++submitted_messages;
- submitted_payload=bytes;
- std::promise<Reply> completion;completion.set_value({{0}});return completion.get_future();
+std::vector<Notification> take_basic_notifications(uint64_t requested) {
+    if (requested!=generation || !online) return {};
+    return std::exchange(notices,{});
 }
-std::future<Reply> submit(Request command,std::vector<unsigned char> bytes,uint64_t generation,std::chrono::steady_clock::time_point) {
- assert(generation==1 && (command==Request::add_friend || command==Request::remove_friend));
+std::future<Reply> submit(Request command,std::vector<unsigned char> bytes,uint64_t requested,std::chrono::steady_clock::time_point) {
+ assert(requested==generation);
+ if (command==Request::send_message) {
+     assert(bytes.size()>4);
+     ++submitted_messages;
+     submitted_payload=std::move(bytes);
+     invite_reply=std::promise<Reply>{};
+     if (!delay_send) invite_reply.set_value({{0}});
+     return invite_reply.get_future();
+ }
+ assert(command==Request::add_friend || command==Request::remove_friend);
  assert(!bytes.empty() && bytes.back()==0);
  ++mutations;mutation_command=command;mutation_name.assign(bytes.begin(),bytes.end()-1);
  mutation=std::promise<Reply>{};return mutation.get_future();
@@ -249,6 +271,17 @@ int main() {
  toggle_requested=true;pump_basic();assert(friend_panel);
  pump_basic(true);assert(!friend_panel && callbacks.size()==before_standalone);
  toggle_requested=true;pump_basic();assert(friend_panel);
+ const auto previous_renders=friend_renders;
+ for (int i=0;i<100;++i) pump_basic();
+ assert(friend_renders==previous_renders); // Idle callback pumps do not rebuild the panel.
+ physical_buttons=0x4000;
+ call("cellPadGetData",{1,0x11900});
+ assert(vm_read16(0x11900+10)==0x40 && vm_read16(0x11900+12)==255);
+ call("cellPadGetData",{0,0x11900});
+ assert(vm_read16(0x11900+10)==0);
+ for (unsigned i=4;i<8;++i) assert(vm_read16(0x11900+4+i*2)==128);
+ for (unsigned i=8;i<20;++i) assert(vm_read16(0x11900+4+i*2)==0);
+ buttons=0;physical_buttons=0;
  online=false;pump_basic();assert(friend_panel && !friend_view.connected);
  online=true;buttons=0x2000;pump_basic();assert(!friend_panel);request_visible=false;
  tb_panel_show(InvitePicker::rooms,{},0);
@@ -357,7 +390,87 @@ int main() {
  assert(panel && displayed_choices==(std::vector<std::string>{"NewestUser","MANAGE FRIENDS"}));
  buttons=0x4000;pump_basic();assert(friend_panel && submitted_messages==2);
  buttons=0x2000;pump_basic();buttons=0x2000;pump_basic();
- puts("PASS: friend actions, live selection, request toasts and preserved invitation attachment/callbacks");
+ // A real menu transition closes either overlay without touching another picker.
+ const auto press=[](uint32_t mask){buttons=mask;pump_basic();};
+ assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
+ toggle_requested=true;pump_basic();assert(friend_panel && panel);
+ tb_panel_show(InvitePicker::rooms,{},0);
+ const auto before_preempt=callbacks.size();
+ pump_basic();assert(!friend_panel && tb_panel_visible(InvitePicker::rooms));
+ assert(callbacks.size()==before_preempt+1 && callbacks.back()[0]==13 && callbacks.back()[1]==UINT64_MAX);
+ tb_panel_close();
+
+ // Cancel a send in flight on room exit and ignore its later server success.
+ assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
+ delay_send=true;press(0x4000);
+ const auto before_exit=callbacks.size();
+ pump_basic(false,true);
+ assert(!friend_panel && !panel && callbacks.size()==before_exit+1 && callbacks.back()[1]==UINT64_MAX);
+ invite_reply.set_value({{0}});pump_basic();
+ assert(callbacks.size()==before_exit+1);
+ delay_send=false;
+ assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
+ callback_queue_busy=true;press(0x4000);
+ const auto before_queued_exit=callbacks.size();
+ callback_queue_busy=false;pump_basic(false,true);
+ assert(callbacks.size()==before_queued_exit+1 && callbacks.back()[1]==UINT64_MAX);
+
+ // Back during a nested mutation returns immediately to the original invitation.
+ const auto start_accept=[] {
+     std::erase_if(mutual,[](const auto& f){return f.npid=="LateFriend";});
+     ++revision;received={"LateFriend"};pump_basic();
+     request_visible=true;toggle_requested=true;pump_basic();
+     assert(friend_panel && friend_view.section==FriendsSection::received);
+     buttons=0x4000;pump_basic();buttons=0x4000;pump_basic();
+     assert(friend_view.busy);
+ };
+ assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
+ start_accept();press(0x2000);
+ assert(!friend_panel && panel);
+ complete_mutation();pump_basic();assert(!friend_panel && panel);
+ press(0x2000);
+
+ // After disconnect, a lost acknowledgement is visible even with actions disabled.
+ start_accept();
+ online=false;pump_basic();
+ assert(friend_panel && !friend_view.connected && !friend_view.busy && friend_view.rows.empty());
+ assert(friend_view.status.find("could not be confirmed")!=std::string::npos);
+ const auto before_offline=mutations;
+ press(0x4000);press(0x4000);assert(mutations==before_offline);
+ connecting=true;pump_basic();assert(friend_panel && friend_view.connecting);
+ complete_mutation(); // Only the next login's snapshot can confirm that it applied.
+ ++generation;online=true;connecting=false;++revision;pump_basic();assert(!friend_panel);
+ toggle_requested=true;pump_basic();
+ assert(friend_panel && friend_view.account==account &&
+        std::find(friend_view.rows.begin(),friend_view.rows.end(),"LateFriend  ONLINE")!=friend_view.rows.end());
+ press(0x2000);
+
+ // The worker may publish the empty reply just before it publishes offline.
+ start_accept();
+ mutation.set_value({});pump_basic();
+ assert(friend_view.connected && friend_view.status.find("could not be confirmed")!=std::string::npos);
+ online=false;pump_basic();
+ assert(!friend_view.connected && friend_view.status.find("could not be confirmed")!=std::string::npos);
+ ++generation;online=true;++revision;received.clear();pump_basic();
+ assert(!friend_panel);
+
+ // Switching server/account while work is pending never displays the old reply.
+ start_accept();
+ ++generation;account="OtherPlayer";endpoint="other.example:31313";
+ received.clear();mutual={{"OtherFriend",false,0}};sent.clear();++revision;
+ mutation.set_value({{0}});pump_basic();assert(!friend_panel);
+ toggle_requested=true;pump_basic();
+ assert(friend_panel && friend_view.account==account && friend_view.endpoint==endpoint &&
+        friend_view.rows==std::vector<std::string>{"OtherFriend  OFFLINE"} && friend_view.status.empty());
+ press(0x2000);
+
+ // Guest teardown abolishes a pending invitation and prevents a callback into its old handler.
+ assert(!call("sceNpBasicSendMessageGui",{message,0xffffffff}));
+ toggle_requested=true;pump_basic();assert(friend_panel && panel);
+ const auto before_teardown=callbacks.size();
+ reset_basic();pump_basic();
+ assert(!panel && !friend_panel && callbacks.size()==before_teardown);
+ puts("PASS: friend actions, input, connection transitions and invitation callback lifetime");
 }
 
 #endif
