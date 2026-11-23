@@ -1,8 +1,8 @@
 name: Standalone builders
 # Builder.AppImage and Builder.exe from one source revision and the pinned
 # toolchain manifest, audited, then downloaded and exercised on clean Linux and
-# Windows runners without network or installed development tools. Tags stage a
-# draft release only after every check passes.
+# Windows runners without network or installed development tools. Tags publish
+# a release with commit notes after every check passes.
 on:
   workflow_dispatch:
   push:
@@ -303,6 +303,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
       - uses: actions/download-artifact@v8.0.2
         with:
           name: standalone-builder-linux-${{ github.sha }}
@@ -352,13 +357,29 @@ jobs:
           path: release/final/
           if-no-files-found: error
           retention-days: 14
-      - name: Draft release candidate (not published)
+      - name: Generate release notes from tagged commits
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          PREVIOUS_TAG=''
+          if git rev-parse --verify "${RELEASE_COMMIT}^" >/dev/null 2>&1; then
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' "${RELEASE_COMMIT}^" 2>/dev/null || true)
+          fi
+          RANGE="$RELEASE_COMMIT"
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RANGE="$PREVIOUS_TAG..$RELEASE_COMMIT"
+          fi
+          git log "$RANGE" --format="- %s ([\`%h\`]($REPOSITORY_URL/commit/%H) by %an)" > release-notes.md
+      - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
         run: |
           cd release/final && sha256sum -c SHA256SUMS
-          gh release create '${{ github.ref_name }}' --repo '${{ github.repository }}' --draft --verify-tag \
-            --title 'Tank Battles builders ${{ github.ref_name }}' \
-            --notes 'Release candidate. The builders contain no game; they build your own copy from your purchased files.' \
+          gh release create "$RELEASE_TAG" --verify-tag \
+            --title "$RELEASE_TAG" --notes-file ../../release-notes.md \
             Builder.AppImage Builder.exe SHA256SUMS provenance.json NOTICES-linux.txt NOTICES-windows.txt

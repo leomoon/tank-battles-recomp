@@ -145,7 +145,7 @@ python scripts/package_builder.py exe --resources out/windows-resources --stub o
 
 Both are made on Linux. The Windows toolchain is staged there with `toolchain.py stage --host windows`. Packaging its GTK4 resources also uses `zstd` and `glib-compile-schemas` (from `libglib2.0-bin` on Ubuntu). The MSYS2 UCRT64 package pins and source references are in `ci/toolchain/windows-gtk4.json`. Users get the runtime, schemas, and notices in the Windows download.
 
-## Continuous integration and release candidates
+## Continuous integration and releases
 
 Zig 0.15.2 is pinned for both hosts and both targets. Zig 0.17.1 stalled while preparing the MinGW runtime on a Windows desktop; a standalone C link passed with 0.15.2. Changing this pin rebuilds the runtime dependencies, runtime bundles and builder toolchains together, retaining the compiler and ABI checks between them.
 
@@ -155,7 +155,7 @@ Both payload formats normalize resource timestamps to 2000-01-01. Otherwise a pa
 
 1. **build** (Ubuntu) stages the Linux- and Windows-host toolchains and builds the dependencies and both runtimes with Zig. It runs the Linux runtime's tests, links relocated synthetic consumers with only the staged tools, and runs the game-free contract suites. It then packages `Builder.AppImage` and `Builder.exe` and audits both complete payloads with `scripts/audit_builder.py`. Finally it writes `SHA256SUMS`, `provenance.json` (source, toolchain manifest digest, toolchain identity, runtime build and ABI per artifact) and the notices.
 2. **linux-consumer** and **windows-consumer** start from a clean runner that downloads only the artifact. Windows checks the same `Builder.exe` on Server 2022 and Server 2025; these are validation jobs, not additional release binaries. Each checks the checksum and relocates the builder into a path with spaces and a non-ASCII character. Linux strips the runner's compilers and tools; on Windows they are not on `PATH`. With the network blocked (a network namespace on Linux, firewall rules for every builder executable on Windows), each opens the builder window and runs `scripts/verify_builder.py` from inside the download. That script first configures, links and runs C and C++ probes using a fresh compiler cache, with a four-minute deadline and retained compiler log. It then translates, compiles and assembles a synthetic player with the packaged engine, and starts it through the launcher. Both jobs also confirm that a modified or damaged download is refused.
-3. **stage-release** (tags only, after both consumers pass) creates a draft GitHub release with the two builders, checksums, provenance and notices. Nothing is published automatically.
+3. **stage-release** combines the checked artifacts after both consumers pass. A tag push publishes a GitHub release named after the tag, with both builders, checksums, provenance and notices. Its notes list each commit's subject, linked short hash and author since the previous stable tag. The first release includes all commits through its tagged revision. Manual builds provide the combined Actions artifact.
 
 `scripts/audit_builder.py` inspects every file of an extracted builder or of `Builder.exe`'s payload, not only those `package.json` lists. It refuses:
 
