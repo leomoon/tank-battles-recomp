@@ -483,23 +483,38 @@ bool smoke_keyboard(Painter& painter) {
 std::optional<Choice> run_ui(Accounts& accounts) {
     SDL_SetMainReady();
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) return std::nullopt;
+#ifdef __linux__
+    if (std::getenv("WAYLAND_DISPLAY")) SDL_SetHint(SDL_HINT_VIDEODRIVER, "wayland,x11");
+#endif
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        std::fprintf(stderr, "[launcher] SDL video init failed: %s\n", SDL_GetError());
+        return std::nullopt;
+    }
+    std::fprintf(stderr, "[launcher] SDL video driver: %s\n", SDL_GetCurrentVideoDriver());
     SDL_DisplayMode mode{};
     int scale = 2;
     if (SDL_GetDesktopDisplayMode(0, &mode) == 0)
         scale = std::clamp((mode.h + 180) / 360, 1, 6);
     SDL_Window* window = SDL_CreateWindow("Tank Battles", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                          logical_width * scale, logical_height * scale, SDL_WINDOW_RESIZABLE);
-    if (!window) { SDL_Quit(); return std::nullopt; }
+                                          logical_width * scale, logical_height * scale,
+                                          SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    if (!window) {
+        std::fprintf(stderr, "[launcher] SDL window creation failed: %s\n", SDL_GetError());
+        SDL_Quit(); return std::nullopt;
+    }
     SDL_SetWindowMinimumSize(window, logical_width, logical_height);
     SDL_SetWindowMaximumSize(window, logical_width * scale, logical_height * scale);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC |
                                                             SDL_RENDERER_TARGETTEXTURE);
     if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE | SDL_RENDERER_TARGETTEXTURE);
-    if (!renderer) { SDL_DestroyWindow(window); SDL_Quit(); return std::nullopt; }
+    if (!renderer) {
+        std::fprintf(stderr, "[launcher] SDL renderer creation failed: %s\n", SDL_GetError());
+        SDL_DestroyWindow(window); SDL_Quit(); return std::nullopt;
+    }
     SDL_Texture* canvas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
                                             logical_width, logical_height);
     if (!canvas) {
+        std::fprintf(stderr, "[launcher] SDL canvas creation failed: %s\n", SDL_GetError());
         SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit(); return std::nullopt;
     }
     SDL_StartTextInput();

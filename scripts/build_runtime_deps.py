@@ -10,11 +10,11 @@ everything it links against share one compiler and one C++ standard library
 (libc++), and the standalone builders can link players without any installed
 development tools.
 
-Linux: SDL2 loads X11, PulseAudio, ALSA and udev at run time but needs their
+Linux: SDL2 loads Wayland, X11, PulseAudio, ALSA and udev at run time but needs their
 headers to build. They come from --system-headers (default: the build
 machine's /usr/include), copied into a private include directory; glibc
-headers always come from Zig's own glibc 2.31 baseline. SDL2's native Wayland
-backend is not built: Wayland desktops run the player through XWayland.
+headers always come from Zig's own glibc 2.31 baseline. The build host supplies
+pkg-config and wayland-scanner to generate SDL2's Wayland protocol bindings.
 
 This runs on a Linux CI machine for both targets. It needs Perl and make for
 OpenSSL and libiconv; those are build-machine tools, never shipped.
@@ -33,7 +33,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from toolchain import TARGETS, cached, load_manifest, manifest_digest, safe_extract, verify  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-LINUX_HEADER_SETS = ("X11", "pulse", "alsa", "libudev.h")
+LINUX_HEADER_SETS = ("X11", "pulse", "alsa", "libudev.h", "GL", "EGL", "KHR", "xkbcommon",
+                     "wayland-client.h", "wayland-client-core.h", "wayland-client-protocol.h",
+                     "wayland-cursor.h", "wayland-egl.h", "wayland-egl-core.h",
+                     "wayland-util.h", "wayland-version.h")
 
 
 def run(command, cwd=None, env=None):
@@ -64,7 +67,7 @@ class Builder:
             for name in LINUX_HEADER_SETS:
                 source = Path(system_headers) / name
                 if not source.exists():
-                    raise ValueError(f"Missing build-machine header set {source}; install the X11, PulseAudio, ALSA and udev development headers")
+                    raise ValueError(f"Missing build-machine header set {source}; install the Wayland, X11, OpenGL, EGL, xkbcommon, PulseAudio, ALSA and udev development headers")
                 (shutil.copytree if source.is_dir() else shutil.copy2)(source, self.headers / name)
         self.env = dict(os.environ)
         self.env["ZIG_GLOBAL_CACHE_DIR"] = str(self.work / "zig-cache")
@@ -90,7 +93,7 @@ class Builder:
         source = self.source(name) / source_subdir
         build = self.work / "build" / name
         # SDL2 reads the sonames of the system libraries it loads at run time
-        # (X11, ALSA, PulseAudio, udev) and never links them; only for it may
+        # (Wayland, X11, ALSA, PulseAudio, udev) and never links them; only for it may
         # find_library see the build machine. Headers and glibc stay Zig's.
         roots = f"{self.prefix};/" if system_libraries else str(self.prefix)
         if system_libraries and Path("/usr/lib/x86_64-linux-gnu").is_dir():
@@ -165,7 +168,11 @@ class Builder:
     def require_sdl_backends(self):
         """Fail rather than ship an SDL without a window or sound backend."""
         config = (self.prefix / "include/SDL2/SDL_config.h").read_text()
-        needed = ("SDL_VIDEO_DRIVER_X11 1", "SDL_VIDEO_DRIVER_X11_DYNAMIC ", "SDL_AUDIO_DRIVER_PULSEAUDIO 1",
+        needed = ("SDL_VIDEO_DRIVER_WAYLAND 1", "SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC ",
+                  "SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_EGL ", "SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_CURSOR ",
+                  "SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_XKBCOMMON ",
+                  "SDL_VIDEO_OPENGL_EGL 1", "SDL_VIDEO_OPENGL_GLX 1", "SDL_VIDEO_RENDER_OGL_ES2 1",
+                  "SDL_VIDEO_DRIVER_X11 1", "SDL_VIDEO_DRIVER_X11_DYNAMIC ", "SDL_AUDIO_DRIVER_PULSEAUDIO 1",
                   "SDL_AUDIO_DRIVER_ALSA 1", "SDL_JOYSTICK_LINUX 1", "HAVE_LIBUDEV_H 1", "SDL_UDEV_DYNAMIC ",
                   "SDL_VIDEO_VULKAN 1")
         missing = [item.split()[0] for item in needed if f"#define {item}" not in config]
@@ -184,11 +191,12 @@ class Builder:
                                        "-DENABLE_GLSLANG_BINARIES=OFF", "-DENABLE_HLSL=ON", "-DGLSLANG_ENABLE_INSTALL=ON"])
         sdl = ["-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST=OFF", "-DSDL_STATIC_PIC=ON"]
         if self.target == "linux":
-            sdl += ["-DSDL_WAYLAND=OFF", "-DSDL_KMSDRM=OFF", "-DSDL_JACK=OFF", "-DSDL_PIPEWIRE=OFF",
+            sdl += ["-DSDL_WAYLAND=ON", "-DSDL_WAYLAND_SHARED=ON", "-DSDL_WAYLAND_LIBDECOR=OFF",
+                    "-DSDL_KMSDRM=OFF", "-DSDL_JACK=OFF", "-DSDL_PIPEWIRE=OFF",
                     "-DSDL_SNDIO=OFF", "-DSDL_ESD=OFF", "-DSDL_ARTS=OFF", "-DSDL_NAS=OFF", "-DSDL_DBUS=OFF",
                     "-DSDL_IBUS=OFF", "-DSDL_FCITX=OFF", "-DSDL_X11=ON", "-DSDL_X11_SHARED=ON",
                     "-DSDL_PULSEAUDIO=ON", "-DSDL_PULSEAUDIO_SHARED=ON", "-DSDL_ALSA=ON", "-DSDL_ALSA_SHARED=ON",
-                    "-DSDL_LIBUDEV=ON", "-DSDL_VULKAN=ON", "-DSDL_OPENGL=OFF", "-DSDL_OPENGLES=OFF"]
+                    "-DSDL_LIBUDEV=ON", "-DSDL_VULKAN=ON", "-DSDL_OPENGL=ON", "-DSDL_OPENGLES=ON"]
         self.cmake_project("sdl2", sdl, system_libraries=self.target == "linux")
         if self.target == "linux":
             self.require_sdl_backends()

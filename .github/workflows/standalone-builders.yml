@@ -43,7 +43,8 @@ jobs:
           sudo apt-get install -y perl make
           if [ '${{ matrix.target }}' = linux ]; then
             sudo apt-get install -y squashfs-tools libx11-dev libxext-dev libxrandr-dev libxi-dev \
-              libxcursor-dev libxinerama-dev libxss-dev libxfixes-dev libxrender-dev libpulse-dev libasound2-dev libudev-dev
+              libxcursor-dev libxinerama-dev libxss-dev libxfixes-dev libxrender-dev libpulse-dev libasound2-dev libudev-dev \
+              pkg-config libwayland-dev libwayland-bin libxkbcommon-dev libegl-dev libgl-dev libglx-dev
           else
             sudo apt-get install -y zstd libglib2.0-bin
           fi
@@ -187,11 +188,19 @@ jobs:
           timeout 30 env -u DISPLAY GDK_BACKEND=wayland GSK_RENDERER=cairo \
             "$RUNNER_TEMP/down load ü/squashfs-root/AppRun" --self-test > "$RUNNER_TEMP/builder-wayland.log"
           grep -Fx 'Builder UI: Wayland (scale 2)' "$RUNNER_TEMP/builder-wayland.log"
+          B="$RUNNER_TEMP/down load ü/squashfs-root"
+          sudo unshare -n sudo -u "$USER" env -i HOME="$HOME" PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+            "$B/toolchain/python/bin/python3" -E -s -B "$B/scripts/verify_builder.py" \
+              --work "$RUNNER_TEMP/wayland work dir ü" --window-driver wayland
       - name: Build and start a synthetic player offline with only the builder's tools
         run: |
           B="$RUNNER_TEMP/down load ü/squashfs-root"
-          sudo unshare -n sudo -u "$USER" env -i HOME="$HOME" PATH=/usr/bin:/bin LANG=C.UTF-8 \
-            "$B/toolchain/python/bin/python3" -E -s -B "$B/scripts/verify_builder.py" --work "$RUNNER_TEMP/work dir ü"
+          export TB_BUILDER_ROOT="$B"
+          xvfb-run -a sh -c 'sudo unshare -n sudo -u "$USER" env -i HOME="$HOME" PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+            "$TB_BUILDER_ROOT/toolchain/python/bin/python3" -E -s -B "$TB_BUILDER_ROOT/scripts/verify_builder.py" \
+              --work "$RUNNER_TEMP/work dir ü" --window-driver x11'
       - name: A modified download is rejected
         run: |
           B="$RUNNER_TEMP/down load ü/squashfs-root"

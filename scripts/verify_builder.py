@@ -82,10 +82,11 @@ def build(work: Path, elf: Path, output: Path) -> Path:
     return output / player_folder.launcher_name()
 
 
-def launch(launcher: Path) -> None:
+def launch(launcher: Path, window_driver: str = "dummy") -> None:
     folder = launcher.parent
     environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE",
-                                                    "LOCALAPPDATA", "APPDATA", "XDG_RUNTIME_DIR") if key in os.environ}
+                                                    "LOCALAPPDATA", "APPDATA", "XDG_RUNTIME_DIR",
+                                                    "DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY") if key in os.environ}
     environment.update(SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy", PATH=os.defpath)
     status = subprocess.run([str(launcher), "--account", "status"], capture_output=True,
                             encoding="utf-8", errors="replace", env=environment, timeout=60)
@@ -94,10 +95,13 @@ def launch(launcher: Path) -> None:
     shots = folder.parent / "launcher-screens"
     shots.mkdir(exist_ok=True)
     window = subprocess.run([str(launcher)], capture_output=True, encoding="utf-8", errors="replace", timeout=60,
-                            env=dict(environment, TB_LAUNCHER_UI_SMOKE=str(shots)))
+                            env=dict(environment, SDL_VIDEODRIVER=window_driver, TB_LAUNCHER_UI_SMOKE=str(shots)))
     drawn = len(list(shots.glob("screen-*.bmp")))
     if window.returncode or drawn != 6:
         raise SystemExit(f"Launcher captured {drawn}/6 screens (exit {window.returncode}): {window.stdout}{window.stderr}")
+    if f"[launcher] SDL video driver: {window_driver}" not in window.stderr:
+        raise SystemExit(f"Launcher did not use the requested {window_driver} backend: {window.stderr}")
+    print(f"[verify] launcher rendered all six screens using {window_driver}")
     started = time.monotonic()
     offline = subprocess.run([str(launcher), "--offline"], capture_output=True,
                              encoding="utf-8", errors="replace", timeout=120, env=environment)
@@ -132,6 +136,8 @@ def audit_player(launcher: Path, source: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--work", required=True, help="Writable directory for the workspace and player folder")
+    parser.add_argument("--window-driver", choices=("dummy", "wayland", "x11"), default="dummy",
+                        help="SDL backend for the launcher window smoke check")
     args = parser.parse_args()
     work = Path(args.work).resolve()
     port.LAYOUT = Layout(port.ROOT, work / "workspace")
@@ -144,7 +150,7 @@ def main() -> int:
     run = Path(tempfile.mkdtemp(prefix="player-check-", dir=work))
     launcher = build(work, elf, run / "Tank Battles test folder")
     audit_player(launcher, port.LAYOUT.source_commit())
-    launch(launcher)
+    launch(launcher, args.window_driver)
     print("PASS: the downloaded builder built and started a synthetic player with only its own tools")
     return 0
 

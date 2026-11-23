@@ -14,7 +14,7 @@ The standalone builders compile each player's private executable on the player's
 
 Every URL and SHA-256 is in [`ci/toolchain/manifest.json`](../ci/toolchain/manifest.json). Most digests are the publisher's own (Zig's index, GitHub release asset digests, PyPI). The Khronos tag archives and libiconv publish no digest; theirs were recorded when pinned and are marked so in the manifest.
 
-Targets: x86_64 Linux with a glibc 2.31 baseline (Ubuntu 20.04, Debian 11, Fedora 32 and newer), and x86_64 Windows 10 or newer with the mingw-w64 GNU ABI and the Universal CRT. Windows players import only Windows system DLLs (Universal CRT, kernel/user/GDI, Winsock, D3D12, DXGI, D3DCompiler_47). No libc++ or mingw runtime DLL is shipped or needed. Linux players link `libc`, `libm`, `libpthread` and `libdl`, and load X11, PulseAudio, ALSA, udev and the Vulkan driver at run time.
+Targets: x86_64 Linux with a glibc 2.31 baseline (Ubuntu 20.04, Debian 11, Fedora 32 and newer), and x86_64 Windows 10 or newer with the mingw-w64 GNU ABI and the Universal CRT. Windows players import only Windows system DLLs (Universal CRT, kernel/user/GDI, Winsock, D3D12, DXGI, D3DCompiler_47). No libc++ or mingw runtime DLL is shipped or needed. Linux players link `libc`, `libm`, `libpthread` and `libdl`, and load Wayland, X11, xkbcommon, PulseAudio, ALSA, udev and the Vulkan driver at run time.
 
 ## Runtime dependencies built with the same compiler
 
@@ -22,13 +22,15 @@ Targets: x86_64 Linux with a glibc 2.31 baseline (Ubuntu 20.04, Debian 11, Fedor
 
 | Library | Version | Licence | Notes |
 | --- | --- | --- | --- |
-| SDL2 | 2.32.10 | Zlib | Linux: X11 (XInput2, XRandR), PulseAudio, ALSA, udev, loaded at run time. Native Wayland is not built; Wayland desktops use XWayland. |
+| SDL2 | 2.32.10 | Zlib | Linux: native Wayland and X11 (XInput2, XRandR), PulseAudio, ALSA and udev, loaded at run time. |
 | Vulkan-Headers, SPIRV-Headers, SPIRV-Tools, glslang | vulkan-sdk-1.4.363.0 | Apache-2.0, MIT, BSD-3 | glslang with HLSL legalization through SPIRV-Tools-opt. SPIRV-Tools' shared library is removed after install. |
 | OpenSSL | 3.6.5 | Apache-2.0 | Linux trust store at `/etc/ssl` |
 | curl | 8.23.0 | curl (MIT-style) | OpenSSL backend; TLS sockets only |
 | GNU libiconv | 1.18 | LGPL-2.1-or-later | Windows only |
 
-Building the dependencies needs Perl and make on the Linux CI machine for OpenSSL and libiconv, and the X11, PulseAudio, ALSA and udev development headers for SDL2. These are build-machine requirements only; nothing from them ships.
+Building the dependencies needs Perl and make on the Linux CI machine for OpenSSL and libiconv. SDL2 needs pkg-config, wayland-scanner, and the Wayland, EGL, xkbcommon, X11, PulseAudio, ALSA and udev development headers. These are build-machine requirements only; nothing from them ships.
+
+The Linux launcher and game prefer native Wayland when `WAYLAND_DISPLAY` is set and fall back to X11 when Wayland is unavailable. Set `SDL_VIDEODRIVER=wayland` or `SDL_VIDEODRIVER=x11` to select either backend explicitly. Both windows request high-DPI support.
 
 ## Redistribution obligations
 
@@ -154,7 +156,7 @@ Both payload formats normalize resource timestamps to 2000-01-01. Otherwise a pa
 `.github/workflows/standalone-builders.yml` (manual dispatch or any tag) builds both builders from one revision and caches downloads by the hashes of the toolchain and Windows GTK4 manifests.
 
 1. **build** (Ubuntu) stages the Linux- and Windows-host toolchains and builds the dependencies and both runtimes with Zig. It runs the Linux runtime's tests, links relocated synthetic consumers with only the staged tools, and runs the game-free contract suites. It then packages `Builder.AppImage` and `Builder.exe` and audits both complete payloads with `scripts/audit_builder.py`. Finally it writes `SHA256SUMS`, `provenance.json` (source, toolchain manifest digest, toolchain identity, runtime build and ABI per artifact) and the notices.
-2. **linux-consumer** and **windows-consumer** start from a clean runner that downloads only the artifact. Windows checks the same `Builder.exe` on Server 2022 and Server 2025; these are validation jobs, not additional release binaries. Each checks the checksum and relocates the builder into a path with spaces and a non-ASCII character. Linux strips the runner's compilers and tools; on Windows they are not on `PATH`. With the network blocked (a network namespace on Linux, firewall rules for every builder executable on Windows), each opens the builder window and runs `scripts/verify_builder.py` from inside the download. That script first configures, links and runs C and C++ probes using a fresh compiler cache, with a four-minute deadline and retained compiler log. It then translates, compiles and assembles a synthetic player with the packaged engine, and starts it through the launcher. Both jobs also confirm that a modified or damaged download is refused.
+2. **linux-consumer** and **windows-consumer** start from a clean runner that downloads only the artifact. Windows checks the same `Builder.exe` on Server 2022 and Server 2025; these are validation jobs, not additional release binaries. Each checks the checksum and relocates the builder into a path with spaces and a non-ASCII character. Linux strips the runner's compilers and tools; on Windows they are not on `PATH`. With the network blocked (a network namespace on Linux, firewall rules for every builder executable on Windows), each opens the builder window and runs `scripts/verify_builder.py` from inside the download. Linux checks both the builder and the generated launcher through X11 and native Wayland. That script first configures, links and runs C and C++ probes using a fresh compiler cache, with a four-minute deadline and retained compiler log. It then translates, compiles and assembles a synthetic player with the packaged engine, and starts it through the launcher. Both jobs also confirm that a modified or damaged download is refused.
 3. **stage-release** combines the checked artifacts after both consumers pass. A tag push publishes a GitHub release named after the tag, with both builders, checksums, provenance and notices. Its notes list each commit's subject, linked short hash and author since the previous stable tag. The first release includes all commits through its tagged revision. Manual builds provide the combined Actions artifact.
 
 `scripts/audit_builder.py` inspects every file of an extracted builder or of `Builder.exe`'s payload, not only those `package.json` lists. It refuses:

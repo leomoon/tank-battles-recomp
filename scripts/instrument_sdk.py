@@ -126,6 +126,10 @@ EDITS={
  ('                u32 m = (type == 0) ? method + i * 4 : method;\n                /* GCM_SET_USER_COMMAND',
   '                u32 m = (type == 0) ? method + i * 4 : method;\n                if (subch == 1 && s1_2d) { gcm_2d_method(subch, m, vm_read32(dea)); continue; }\n                /* GCM_SET_USER_COMMAND')],
  'libs/video/rsx_vulkan_backend.c':[
+ ('    if (!vk_env_on("PS3RECOMP_VK_WINDOW")) return;\n    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {',
+  '    if (!vk_env_on("PS3RECOMP_VK_WINDOW")) return;\n#ifdef __linux__\n    if (getenv("WAYLAND_DISPLAY")) SDL_SetHint(SDL_HINT_VIDEODRIVER, "wayland,x11");\n#endif\n    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {'),
+ ('    Uint32 flags = SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;',
+  '    Uint32 flags = SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;'),
  ('static void vk_present_window(void)',
   '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_fxaa.inc')+'"\nstatic void vk_present_window(void)'),
  ('    pvkCmdBlitImage(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,',
