@@ -21,6 +21,8 @@ jobs:
           python3 -m unittest discover -s scripts -p test_toolchain.py
           python3 -m unittest discover -s scripts -p test_package_builder.py
           python3 -m unittest discover -s scripts -p test_audit_builder.py
+      - name: Friends overlay layout and notifications
+        run: python3 scripts/test_fps_overlay.py
 
   build:
     name: Build ${{ matrix.target }} builder
@@ -121,6 +123,17 @@ jobs:
           python3 scripts/package_builder.py provenance --source '${{ github.sha }}' --output "$OUT/release" \
             --artifact "$ARTIFACT" --resources "$OUT/$TARGET"
           cp "$ARTIFACT" "$OUT/audit-$TARGET.json" "$OUT/release/"
+          if [ "$TARGET" = windows ]; then
+            # These checks travel with the Actions artifact for native execution.
+            # The downloadable builder and the staged release contain only the audited payload.
+            CHECKS="$OUT/release/checks"
+            mkdir "$CHECKS"
+            cp build-zig/windows/runtime_overlay_check.exe "$CHECKS/"
+            for fixture in basic_adapter basic_wire friends_controller friends_session matching_rooms relationships room_browser; do
+              cp "build-zig/windows/tests/rpcn/$fixture.exe" "$CHECKS/"
+            done
+            cp scripts/test_rpcn_client.py scripts/test_rpcn_friends.py "$CHECKS/"
+          fi
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: standalone-builder-${{ matrix.target }}-${{ github.sha }}
@@ -228,6 +241,33 @@ jobs:
           Copy-Item download/Builder.exe $dir
           $p = Start-Process "$dir\Builder.exe" -ArgumentList '--extract', "`"$env:RUNNER_TEMP\builder files`"" -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Test-Path "$env:RUNNER_TEMP\builder files\package.json")) { throw "extraction failed" }
+      - name: Run native Friends, lobby, and TLS checks
+        shell: pwsh
+        run: |
+          $checks = (Resolve-Path download/checks).Path
+          $b = "$env:RUNNER_TEMP\builder files"
+          $python = "$b\toolchain\python\python.exe"
+          $openssl = Get-Command openssl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+          $opensslPath = if ($openssl) { $openssl.Source } else { "$env:ProgramFiles\Git\usr\bin\openssl.exe" }
+          if (!(Test-Path $opensslPath -PathType Leaf)) { throw "OpenSSL is required for loopback TLS test certificates" }
+          $screens = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\friends-screens"
+          Push-Location $screens.FullName
+          try {
+            $env:TB_FPS_OVERLAY = '1'
+            & "$checks\runtime_overlay_check.exe"
+            if ($LASTEXITCODE -ne 0) { throw "Friends overlay fixture failed" }
+            Get-ChildItem friends-*.ppm | Get-FileHash -Algorithm SHA256
+          } finally { Pop-Location }
+          foreach ($case in @('basic_adapter', 'basic_wire', 'friends_controller', 'room_browser')) {
+            & "$checks\$case.exe"
+            if ($LASTEXITCODE -ne 0) { throw "$case failed" }
+          }
+          & "$checks\matching_rooms.exe" --wire
+          if ($LASTEXITCODE -ne 0) { throw "Matching2 wire fixture failed" }
+          & $python -B "$checks\test_rpcn_client.py" --openssl $opensslPath --runner "$b\runtime\bin\runtime_cpu_smoke.exe" --matching-runner "$checks\matching_rooms.exe" --relationships-runner "$checks\relationships.exe"
+          if ($LASTEXITCODE -ne 0) { throw "RPCN account and relationship TLS fixtures failed" }
+          & $python -B "$checks\test_rpcn_friends.py" --openssl $opensslPath --runner "$checks\friends_session.exe"
+          if ($LASTEXITCODE -ne 0) { throw "RPCN friendship TLS fixtures failed" }
       - name: Block the builder's network access
         shell: pwsh
         run: |

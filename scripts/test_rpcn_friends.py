@@ -20,7 +20,7 @@ class FriendTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="tb-friends-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "1",
+        subprocess.run([self.openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "1",
                         "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1",
                         "-keyout", str(self.root / "key.pem"), "-out", str(self.root / "cert.pem")],
                        capture_output=True, check=True, timeout=20)
@@ -241,6 +241,8 @@ class FriendTests(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runner", required=True, type=Path)
+    parser.add_argument("--openssl", default="openssl")
     args = parser.parse_args()
     FriendTests.runner = args.runner.resolve()
+    FriendTests.openssl = args.openssl
     unittest.main(argv=[__file__], verbosity=2)

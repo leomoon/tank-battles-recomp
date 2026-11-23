@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -108,6 +109,26 @@ def launch(launcher: Path) -> None:
     print(f"[verify] launcher started the player, which ran translated code ({time.monotonic() - started:.1f}s)")
 
 
+def audit_player(launcher: Path, source: str) -> None:
+    folder = launcher.parent
+    manifest = player_folder.read_manifest(folder)
+    expected = {
+        launcher.name,
+        "player/" + player_folder.executable_name("TankBattlesRecomp"),
+        player_folder.TITLE + "/PARAM.SFO",
+        player_folder.TITLE + "/USRDIR/EBOOT.elf",
+    }
+    actual = {path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()}
+    if not manifest or manifest.get("source_commit") != source:
+        raise SystemExit("Installed player provenance does not match the builder")
+    if set(manifest["files"]) != expected or actual != expected | {player_folder.MANIFEST}:
+        raise SystemExit(f"Unexpected synthetic player contents: {sorted(actual)}")
+    for name, digest in manifest["files"].items():
+        if player_folder.sha256(folder / name) != digest:
+            raise SystemExit(f"Installed player checksum mismatch: {name}")
+    print(f"[verify] player source {source}, checked {len(expected)} installed files")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--work", required=True, help="Writable directory for the workspace and player folder")
@@ -120,7 +141,9 @@ def main() -> int:
     print(f"[verify] builder files verified ({len(port.LAYOUT.package['files'])}); source {port.LAYOUT.source_commit()}")
     verify_toolchain(Toolchain(port.LAYOUT.toolchain()), work)
     elf = synthetic_title(work)
-    launcher = build(work, elf, work / "Tank Battles test folder")
+    run = Path(tempfile.mkdtemp(prefix="player-check-", dir=work))
+    launcher = build(work, elf, run / "Tank Battles test folder")
+    audit_player(launcher, port.LAYOUT.source_commit())
     launch(launcher)
     print("PASS: the downloaded builder built and started a synthetic player with only its own tools")
     return 0

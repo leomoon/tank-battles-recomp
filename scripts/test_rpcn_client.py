@@ -171,7 +171,8 @@ class RpcnClientTests(unittest.TestCase):
             [(6, b"\1SentUser\0"), (6, b"\1ReceivedUser\0")],
             [(8, presence(200, False))],
             [(8, presence(100, True)), (8, presence(200, True)), (6, b"\1SentUser\0")],
-            [(0, b"room data"), (9, b"room message"), (10, b"invitation data")],
+            [(0, b"room data"), (5, b"Interleaved\0"), (9, b"room message"),
+             (10, b"invitation data"), (5, b"Interleaved\0")],
             [(7, b"SentUser\0"), (7, b"NewUser\0")],
             [(7, b"SentUser\0"), (7, b"NewUser\0")],
         ])
@@ -183,8 +184,10 @@ class RpcnClientTests(unittest.TestCase):
         self.assertEqual(snapshots[4]["revision"], snapshots[3]["revision"])
         self.assertEqual(snapshots[5]["room_notices"], 2)
         self.assertEqual(snapshots[5]["invite_notices"], 1)
+        self.assertEqual(snapshots[5]["incoming"], ["NewUser", "Interleaved"])
+        self.assertGreater(snapshots[5]["revision"], snapshots[4]["revision"])
         self.assertEqual(snapshots[6]["friends"], [["ReceivedUser", True, 0]])
-        self.assertEqual(snapshots[6]["incoming"], [])
+        self.assertEqual(snapshots[6]["incoming"], ["Interleaved"])
         self.assertEqual(snapshots[7]["revision"], snapshots[6]["revision"])
 
     def test_malformed_relationship_login_is_rejected_without_partial_state(self):

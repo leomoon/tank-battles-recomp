@@ -23,6 +23,17 @@ static bool callback_queue_busy=false;
 
 extern "C" {
 uint32_t ppu_vm_size=memory.size();
+#ifdef TB_TEST_RUNTIME_ARCHIVE
+// The bundled adapter can use the lifter's inline VM ABI. Keep its reads and
+// writes on the fixture's checked helpers, without loading the guest runtime.
+uint8_t* vm_base=memory.data();
+int vm_inline_ok=0;
+int vm_inline_st_ok=0;
+uint32_t ppu_hle_inject_base=0;
+uint32_t g_barrier_sync_watch=0;
+uint32_t g_null_sweep_hi=0;
+const unsigned char* g_spu_coh_bits=nullptr;
+#endif
 int np_is_initialized() { return 1; }
 int32_t cellSysutilQueueGuestCallbackArgs(uint32_t, const uint64_t* args) {
     if (callback_queue_busy) return -1;

@@ -23,6 +23,21 @@ target_include_directories(runtime_shader_check PRIVATE "${PS3RECOMP_DIR}/includ
 target_link_libraries(runtime_shader_check PRIVATE ps3recomp_runtime)
 set_target_properties(runtime_shader_check PROPERTIES LINKER_LANGUAGE CXX)
 add_test(NAME runtime_shader_translation COMMAND runtime_shader_check)
+find_package(Threads REQUIRED)
+add_executable(runtime_overlay_check "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/overlay.cpp")
+target_include_directories(runtime_overlay_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(runtime_overlay_check PRIVATE tank_battles_host_archive Threads::Threads)
+if(MSVC)
+    target_compile_options(runtime_overlay_check PRIVATE /UNDEBUG)
+else()
+    target_compile_options(runtime_overlay_check PRIVATE -UNDEBUG)
+endif()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/overlay-screens")
+add_test(NAME runtime_friends_overlay COMMAND runtime_overlay_check)
+set_tests_properties(runtime_friends_overlay PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/overlay-screens"
+    ENVIRONMENT "TB_FPS_OVERLAY=1;TB_SETTINGS_FILE="
+    TIMEOUT 30)
 add_test(NAME runtime_cpu_smoke COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_runtime_smoke.py"
     --runner "$<TARGET_FILE:runtime_cpu_smoke>" --data "${TB_SYNTHETIC_DIR}")
 add_test(NAME runtime_offline_network COMMAND "${CMAKE_COMMAND}" -E env

@@ -75,8 +75,14 @@ else()
 endif()
 add_test(NAME basic_invitation_wire COMMAND basic_wire)
 
-add_executable(basic_adapter basic_adapter.cpp "${PORT_ROOT}/rpcn/basic.cpp"
-    "${PORT_ROOT}/rpcn/basic_wire.cpp" "${PORT_ROOT}/rpcn/friends.cpp")
+add_executable(basic_adapter basic_adapter.cpp)
+if(TARGET tank_battles_host_archive)
+    target_link_libraries(basic_adapter PRIVATE tank_battles_host_archive)
+    target_compile_definitions(basic_adapter PRIVATE TB_TEST_RUNTIME_ARCHIVE)
+else()
+    target_sources(basic_adapter PRIVATE "${PORT_ROOT}/rpcn/basic.cpp"
+        "${PORT_ROOT}/rpcn/basic_wire.cpp" "${PORT_ROOT}/rpcn/friends.cpp")
+endif()
 target_include_directories(basic_adapter PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/abi" "${PORT_ROOT}" "${SDK}/include")
 target_compile_definitions(basic_adapter PRIVATE PPU_NO_INLINE_LOADS NOMINMAX)
 if(MSVC)
@@ -95,6 +101,16 @@ else()
     target_compile_options(room_browser PRIVATE -UNDEBUG)
 endif()
 add_test(NAME public_room_browser COMMAND room_browser)
+
+add_test(NAME rpcn_friends_tls COMMAND "${Python3_EXECUTABLE}" -B
+    "${PORT_ROOT}/scripts/test_rpcn_friends.py" --runner "$<TARGET_FILE:friends_session>")
+set_tests_properties(rpcn_friends_tls PROPERTIES TIMEOUT 50)
+if(TARGET runtime_cpu_smoke)
+    add_test(NAME rpcn_account_and_relationships_tls COMMAND "${Python3_EXECUTABLE}" -B
+        "${PORT_ROOT}/scripts/test_rpcn_client.py" --runner "$<TARGET_FILE:runtime_cpu_smoke>"
+        --matching-runner "$<TARGET_FILE:matching_rooms>" --relationships-runner "$<TARGET_FILE:relationships>")
+    set_tests_properties(rpcn_account_and_relationships_tls PROPERTIES TIMEOUT 100)
+endif()
 
 foreach(score_target score_adapter score_live)
     add_executable(${score_target} score_adapter.cpp "${PORT_ROOT}/rpcn/score.cpp" "${PORT_ROOT}/rpcn/score_wire.cpp")
