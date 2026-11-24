@@ -440,6 +440,9 @@ void tb_show_network_toast(const char* heading,const char* detail) {
     std::snprintf(value.detail.data(),value.detail.size(),"%s",detail);
     queue_toast(value);
 }
+extern "C" void tb_render_scale_fallback() {
+    tb_show_network_toast("RENDER SCALE UNAVAILABLE", "USING NATIVE RESOLUTION");
+}
 void tb_show_friend_request_toast(const char* sender) {
     std::lock_guard guard(overlay_mutex);
     Toast value;value.invitation=false;value.friend_request=true;

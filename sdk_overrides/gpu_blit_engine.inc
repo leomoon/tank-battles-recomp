@@ -40,6 +40,7 @@ int rsx_draw_engine_gpu_blit(u32 sloc, u32 soff, u32 spitch, u32 sx, u32 sy, u32
     if (ss == ENG_INVALID || ds == ENG_INVALID || ss == ds || !g.surfaces[ss].color_serial) return 0;
     if (!tb_vk_surface_blit(g.surfaces[ss].handle, ssx, ssy, kx, ky, g.surfaces[ds].handle, dsx, dsy, dw, dh))
         return 0;
+    tb_scale_note_resolve(ss, ds, ssx, ssy, dsx, dsy, kx, ky, dw, dh);
     eng_surface* d = &g.surfaces[ds];
     d->color_serial = ++g.write_serial;
     d->guest_dirty = 1;

@@ -388,6 +388,58 @@ def main():
    if text.count(anchor)!=1:raise SystemExit('FIFO wait anchor mismatch')
    text=text.replace(anchor,'if(rsx_draw_engine_enabled())switch(m){'+cases+'default:break;}')
    text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/gcm_label_publication.inc')+'"\n'+text
+  if relative=='libs/video/rsx_vulkan_backend.c':
+   scale_header = Path(__file__).resolve().parent.parent/'sdk_overrides/render_scale.h'
+   install_scale = [
+    ('X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties)',
+     'X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties) X(vkGetPhysicalDeviceImageFormatProperties)'),
+    ('typedef struct vk_eng_obj {', '#include "'+str(scale_header)+'"\ntypedef struct vk_eng_obj {\n    tb_scale_size guest_size;\n    u32 scale_percent; /* zero for native images */'),
+    ('    o->surface = surface; o->remap = remap; o->rsx_fmt = rsx_format;',
+     '    o->surface = surface; o->remap = remap; o->rsx_fmt = rsx_format;\n    o->guest_size = t->guest_size; o->scale_percent = t->scale_percent;'),
+    ('    o->kind = VK_ENG_COLOR; o->snapshot = 1;\n    o->fmt = t->fmt;',
+     '    o->kind = VK_ENG_COLOR; o->snapshot = 1;\n    o->guest_size = t->guest_size; o->scale_percent = t->scale_percent;\n    o->fmt = t->fmt;'),
+    ('static int vk_eng_init(void* user, u32 width, u32 height)', 'static void tb_vk_scale_reset(void);\nstatic int vk_eng_init(void* user, u32 width, u32 height)'),
+    ('    memset(s_eobj, 0, sizeof s_eobj);', '    tb_vk_scale_reset();\n    memset(s_eobj, 0, sizeof s_eobj);'),
+    ('    vk_eng2_shutdown(user);', '    tb_vk_scale_reset();\n    vk_eng2_shutdown(user);'),
+    ('static VkImageView vk_eng_scratch_depth(u32 w, u32 h)',
+     '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_render_scale.inc')+'"\nstatic VkImageView vk_eng_scratch_depth(u32 w, u32 h)'),
+    ('u32 key[RSX_BE_MAX_COLOR_TARGETS + 1]; VkFramebuffer fb;',
+     'u32 key[RSX_BE_MAX_COLOR_TARGETS + 1], width, height; VkRenderPass pass; VkImageView depth; VkFramebuffer fb;'),
+    ('    u32 key[RSX_BE_MAX_COLOR_TARGETS + 1] = { 0 };', '''    const vk_eng_obj* depth = vk_eng_get(dkey, VK_ENG_DEPTH);
+    const unsigned scale = depth ? depth->scale_percent : 0;
+    if (scale && (depth->w != w || depth->h != h || depth->im.view != dview)) return VK_NULL_HANDLE;
+    for (u32 i = 0; i < n; ++i) {
+        const vk_eng_obj* color = vk_eng_get(rt[i], VK_ENG_COLOR);
+        if (!color || color->scale_percent != scale) return VK_NULL_HANDLE;
+        if (scale && (color->w != w || color->h != h ||
+            color->guest_size.width != depth->guest_size.width ||
+            color->guest_size.height != depth->guest_size.height)) return VK_NULL_HANDLE;
+    }
+    u32 key[RSX_BE_MAX_COLOR_TARGETS + 1] = { 0 };'''),
+    ('        if (!memcmp(s_e2.fb[i].key, key, sizeof key)) return s_e2.fb[i].fb;',
+     '        if (s_e2.fb[i].width == w && s_e2.fb[i].height == h && s_e2.fb[i].pass == rp &&\n            s_e2.fb[i].depth == dview && !memcmp(s_e2.fb[i].key, key, sizeof key)) return s_e2.fb[i].fb;'),
+    ('    s_e2.fb[s_e2.fb_count++].fb = fb;',
+     '    s_e2.fb[s_e2.fb_count].width = w;\n    s_e2.fb[s_e2.fb_count].height = h;\n    s_e2.fb[s_e2.fb_count].pass = rp;\n    s_e2.fb[s_e2.fb_count].depth = dview;\n    s_e2.fb[s_e2.fb_count++].fb = fb;'),
+   ]
+   for before,after in install_scale:
+    if text.count(before)!=1:raise SystemExit('Vulkan render-scale anchor mismatch: '+before)
+    text=text.replace(before,after,1)
+  if relative=='libs/video/rsx_draw_engine.c':
+   scale_path = Path(__file__).resolve().parent.parent/'sdk_overrides/rsx_render_scale.inc'
+   install_scale = [
+    ('} eng_surface;', '    u32 scale_generation;\n} eng_surface;'),
+    ('} eng_zdepth;', '    u32 scale_generation;\n} eng_zdepth;'),
+    ('static u32 eng_surface_get(u32 location', '#include "'+str(scale_path)+'"\nstatic u32 eng_surface_get(u32 location'),
+    ('    s->handle = handle;\n    s->color_serial', '    s->handle = handle;\n    s->scale_generation = ++tb_scale_scene.generation;\n    s->color_serial'),
+    ('    z->handle = handle;', '    z->handle = handle;\n    z->scale_generation = ++tb_scale_scene.generation;'),
+    ('    const u32 uploaded = indexed', '    tb_scale_note_draw(&sf, target, zslot);\n    const u32 uploaded = indexed'),
+    ('    tb_scanout_sample(buffer_id,target,g.surfaces[target].offset);', '    tb_scale_present(buffer_id,target);\n    tb_scanout_sample(buffer_id,target,g.surfaces[target].offset);'),
+    ('    g.ready = 1;', '    memset(&tb_scale_scene, 0, sizeof tb_scale_scene);\n    tb_scale_scene.percent = tb_vk_scale_requested();\n    g.ready = 1;'),
+    ('    if (!g.be->color_target_write) return;', '    tb_scale_guest_write(location, offset, pitch, w, h);\n    if (!g.be->color_target_write) return;'),
+   ]
+   for before,after in install_scale:
+    if text.count(before)!=1:raise SystemExit('RSX render-scale anchor mismatch: '+before)
+    text=text.replace(before,after,1)
   if relative=='libs/video/rsx_draw_engine.c':
    text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h')+'"\n'+text
    for function,label in [('eng_vertex_layout','vertex-layout'),('dc_fetch','vertex-fetch'),('eng_pipeline_get','engine-pipeline'),('sink_bind_textures','texture-binding')]:
@@ -413,7 +465,7 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_depth_bias.inc','vulkan_fxaa.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['render_scale.h','vulkan_render_scale.inc','fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_depth_bias.inc','vulkan_fxaa.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['render_scale.h','rsx_render_scale.inc','rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}

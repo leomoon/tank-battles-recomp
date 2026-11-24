@@ -16,6 +16,7 @@ s=s.replace('    test_queued_flip_buffer();','    test_queued_flip_buffer();\n  
 s=s.replace('    test_surface_set();','    test_guest_flip_trace_scope();\n    test_surface_set();')
 s+='\nvoid tb_frame_order(uint32_t b,uint32_t o,uint64_t s,uint32_t p){(void)b;(void)o;(void)s;(void)p;}\nvoid tb_scanout_sample(uint32_t b,uint32_t s,uint32_t o){(void)b;(void)s;(void)o;}\nvoid tb_rsx_texture_capture(uint32_t a,uint32_t b,uint32_t c,uint32_t d,uint32_t e,uint32_t f,const void* g,uint32_t h,const void* i,uint32_t j,uint32_t k){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;}\n'
 s+='\nvoid tb_fps_guest_flip(void){}\n'
+s+='\nvoid tb_frame_budget_count(uint32_t id,uint32_t amount){(void)id;(void)amount;}\n'
 (out/'fixture.c').write_text(s)
 sources=[out/'fixture.c',out/'overlay/libs/video/rsx_draw_engine.c',*[sdk/'libs/video'/name for name in ['rsx_dispatch.c','rsx_vertex_compact.c','rsx_texture_layout.c','rsx_vp_decompiler.c','rsx_fp_decompiler.c']]]
 subprocess.run(['cc','-std=gnu17','-I'+str(ROOT),'-I'+str(sdk/'include'),'-I'+str(sdk/'libs/video'),*[str(p) for p in sources],'-lm','-o',str(out/'fixture')],check=True)
