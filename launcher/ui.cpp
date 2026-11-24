@@ -502,8 +502,8 @@ std::optional<Choice> run_ui(Accounts& accounts) {
         std::fprintf(stderr, "[launcher] SDL window creation failed: %s\n", SDL_GetError());
         SDL_Quit(); return std::nullopt;
     }
+    // Leave the maximum unconstrained so Wayland compositors can tile the window.
     SDL_SetWindowMinimumSize(window, logical_width, logical_height);
-    SDL_SetWindowMaximumSize(window, logical_width * scale, logical_height * scale);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC |
                                                             SDL_RENDERER_TARGETTEXTURE);
     if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE | SDL_RENDERER_TARGETTEXTURE);
@@ -550,6 +550,8 @@ std::optional<Choice> run_ui(Accounts& accounts) {
         };
         // Smoke mode for tests: draw each screen once and leave.
         const auto smoke = smoke_output_directory();
+        constexpr SDL_Point smoke_sizes[] = {{640, 360}, {1440, 900}, {800, 900}, {1440, 540}, {640, 360}};
+        if (smoke) SDL_SetWindowSize(window, smoke_sizes[0].x, smoke_sizes[0].y);
         int smoke_frames = 0;
 
         while (!choice) {
@@ -857,6 +859,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
             SDL_RenderPresent(renderer);
             if (smoke) {
                 static const Screen order[] = {Screen::home, Screen::sign_in, Screen::create, Screen::request_reset, Screen::reset_password};
+                static_assert(std::size(order) == std::size(smoke_sizes));
                 if (++smoke_frames >= static_cast<int>(std::size(order))) {
                     SDL_SetRenderTarget(renderer, canvas);
                     const bool keyboard_ok = !SDL_GetHintBoolean(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, SDL_TRUE) &&
@@ -865,7 +868,10 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                     if (keyboard_ok) save_smoke_frame(renderer, *smoke, smoke_frames);
                     else std::fprintf(stderr, "The launcher keyboard smoke check failed\n");
                     choice = Choice{};
-                } else state.screen = order[smoke_frames];
+                } else {
+                    state.screen = order[smoke_frames];
+                    SDL_SetWindowSize(window, smoke_sizes[smoke_frames].x, smoke_sizes[smoke_frames].y);
+                }
             }
         }
     }

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -349,6 +350,21 @@ class LauncherTests(unittest.TestCase):
                                 env={"PATH": "/nonexistent", "SDL_VIDEODRIVER": "dummy", "TB_LAUNCHER_UI_SMOKE": str(shots)})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(list(shots.glob("screen-*.bmp"))), 6)
+        expected_sizes = [(640, 360), (1440, 900), (800, 900), (1440, 540), (640, 360), (640, 360)]
+        for index, size in enumerate(expected_sizes):
+            bitmap = (shots / f"screen-{index}.bmp").read_bytes()
+            width, height = struct.unpack_from("<ii", bitmap, 18)
+            self.assertEqual((width, abs(height)), size, f"screen {index} did not resize")
+            # Resizing the outer window preserves the panel's readable display scale.
+            offset = struct.unpack_from("<I", bitmap, 10)[0]
+            bits = struct.unpack_from("<H", bitmap, 28)[0]
+            self.assertEqual(bits, 32)
+            card_width, card_height = 640, 360
+            x, y = (width - card_width) // 2, (abs(height) - card_height) // 2
+            row = abs(height) - 1 - y if height > 0 else y
+            pixel = offset + (row * width + x) * 4
+            b, g, r = bitmap[pixel:pixel + 3]
+            self.assertEqual((r, g, b), (255, 199, 102), f"screen {index} lost its centered panel")
 
     def test_a_missing_player_is_explained(self):
         root = self.folder("broken")

@@ -89,23 +89,23 @@ int main(){
  const std::array<std::string,1> invites{"PlayerB"};
  tb_panel_show(InvitePicker::invitations,invites,0);
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.width==448 && region.height==156 && region.x==416 && region.y==282);
- assert(pixels[57*region.width+20]==0xff66c7ffu); // Invite is still selectable.
+ assert(region.width==640 && region.height==360 && region.x==320 && region.y==180);
+ save_overlay("invitations.ppm",region,pixels);
+ assert(pixels[89*region.width+20]==0xff66c7ffu); // Invite is still selectable.
  assert(tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
  assert(toast_region.x==20 && toast_region.y==20); // Inbox and toast keep independent positions.
  tb_panel_show(InvitePicker::invitations,friends,0);
  assert(tb_draw_overlay(pixels.data(),3840,2160,0,&region));
- assert(region.width==1344 && region.height==804);
+ assert(region.width==1920 && region.height==1080);
  assert(pixels.back()==0xa5a5a5a5);
  assert(tb_draw_notification_toast(toast.data(),3840,2160,0,&toast_region));
  assert(toast_region.x==60 && toast_region.y==60 && toast_region.width==1104 && toast_region.height==258);
  assert(toast.back()==0xa5a5a5a5);
- assert(tb_draw_overlay(pixels.data(),320,134,1,&region));
- assert(region.width==224 && region.height==134); // Keep the picker usable in a short window.
+ assert(!tb_draw_overlay(pixels.data(),320,134,1,&region)); // Same minimum height as Friends.
  std::this_thread::sleep_for(std::chrono::seconds(4));
  assert(!tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.width==448 && region.height==268 && region.x==416 && region.y==226);
+ assert(region.width==640 && region.height==360 && region.x==320 && region.y==180);
  tb_panel_close();
  assert(!tb_draw_overlay(pixels.data(),1280,720,0,&region));
  tb_show_network_toast("ACCOUNT ALREADY SIGNED IN","CLOSE OTHER SESSION AND RETRY");
@@ -136,7 +136,8 @@ int main(){
  assert(!tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
  tb_panel_show(InvitePicker::rooms,friends,0);
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.width==448 && region.height==290 && region.x==416 && region.y==215);
+ assert(region.width==640 && region.height==360 && region.x==320 && region.y==180);
+ save_overlay("public-rooms.ppm",region,pixels);
  assert(tb_panel_input(0)==PanelPadInput::captured);
  assert(tb_panel_input(0x8000)==PanelPadInput::captured);
  assert(tb_panel_take_input()==0x8000);
@@ -146,7 +147,7 @@ int main(){
  assert(tb_panel_input(0x2000)==PanelPadInput::captured);
  tb_panel_show(InvitePicker::searching_rooms,{},0);
  assert(tb_draw_overlay(pixels.data(),1280,720,0,&region));
- assert(region.height==178);
+ assert(region.width==640 && region.height==360 && region.x==320 && region.y==180);
  tb_panel_close();
  FriendsPanelView manager;
  manager.account="Captain_01234567";manager.endpoint="play.lmx.to:31313";manager.connected=true;
@@ -224,4 +225,23 @@ int main(){
  assert(region.width==1920 && region.height==1080 && pixels.back()==0xa5a5a5a5);
  assert(pixels[871*region.width+60]==0xffffc766u); // Eighth row on the last page.
  tb_friends_panel_close();
+
+ // All room and invitation states use the Friends panel's dimensions.
+ for (const auto size:std::array<std::array<unsigned,2>,4>{{{320,180},{450,300},{1280,720},{3840,2160}}}) {
+  assert(tb_friends_panel_show(manager));
+  tb_overlay_region expected{};
+  assert(tb_draw_overlay(pixels.data(),size[0],size[1],0,&expected));
+  tb_friends_panel_close();
+  for (auto kind:{InvitePicker::rooms,InvitePicker::searching_rooms,InvitePicker::invitations}) {
+   for (auto count:{0u,1u,5u}) {
+    tb_panel_show(kind,std::span<const std::string>(friends).first(count),0);
+    std::fill(pixels.begin(),pixels.end(),0xa5a5a5a5);
+    assert(tb_draw_overlay(pixels.data(),size[0],size[1],0,&region));
+    assert(region.x==expected.x && region.y==expected.y &&
+           region.width==expected.width && region.height==expected.height);
+    assert(pixels[region.width*region.height]==0xa5a5a5a5);
+    tb_panel_close();
+   }
+  }
+ }
 }

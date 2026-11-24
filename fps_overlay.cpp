@@ -176,34 +176,38 @@ void draw_picker(const Canvas& canvas,unsigned height,unsigned scale,const Picke
     canvas.fill(0,0,canvas.width,2*scale,accent);
     const auto* heading=rooms?"PUBLIC ROOMS":"ACCEPT INVITATION";
     canvas.text(inset,9*scale,heading,heading_scale,white);
-    canvas.fill(inset,23*scale,canvas.width-2*inset,scale,border);
+    canvas.fill(inset,26*scale,canvas.width-2*inset,scale,border);
+
+    const unsigned footer=height/scale-(rooms?40u:29u);
+    constexpr unsigned list_top=44;
+    const unsigned row_height=(footer-8-list_top)/visible_choices;
+    if (view.multiple)
+        canvas.text(inset,33*scale,"D-PAD / ARROWS TO CHOOSE",scale,muted);
 
     const unsigned rows=std::max(1u,view.count);
     for (unsigned row=0;row<rows;++row) {
-        const unsigned y=(28+row*14)*scale;
+        const unsigned y=(list_top+row*row_height)*scale;
         const bool highlighted=view.count && row==view.selected;
         if (highlighted) {
-            canvas.fill(inset,y,canvas.width-2*inset,13*scale,selected_row);
-            canvas.fill(inset,y,2*scale,13*scale,accent);
+            canvas.fill(inset,y,canvas.width-2*inset,(row_height-1)*scale,selected_row);
+            canvas.fill(inset,y,2*scale,(row_height-1)*scale,accent);
         }
         const auto* label="NO INVITATIONS";
         if (rooms) label=view.kind==InvitePicker::searching_rooms?"SEARCHING...":"NO PUBLIC ROOMS";
         if (view.count) label=view.choices[row].data();
-        canvas.text(17*scale,y+3*scale,label,scale,highlighted?white:muted);
+        canvas.text(15*scale,y+(row_height-8)/2*scale,label,scale,highlighted?white:muted);
     }
 
-    const unsigned footer=(30+rows*14)*scale;
-    if (view.multiple)
-        canvas.text(inset,footer,"D-PAD OR ARROWS TO CHOOSE",scale,muted);
     const auto* pad_help=view.count?"PLAYSTATION  X ACCEPT  O BACK":"PLAYSTATION  O BACK";
     const auto* keyboard_help=view.count?"KEYBOARD     Z ACCEPT  X BACK":"KEYBOARD     X BACK";
     if (rooms && view.count) {
         pad_help="PLAYSTATION  X JOIN  O BACK";
         keyboard_help="KEYBOARD     Z JOIN  X BACK";
     }
-    canvas.text(inset,footer+11*scale,pad_help,scale,white);
-    canvas.text(inset,footer+22*scale,keyboard_help,scale,muted);
-    if (rooms) canvas.text(inset,footer+33*scale,"SQUARE / KEYBOARD A REFRESH",scale,muted);
+    canvas.fill(inset,(footer-5)*scale,canvas.width-2*inset,scale,border);
+    canvas.text(inset,footer*scale,pad_help,scale,white);
+    canvas.text(inset,(footer+11)*scale,keyboard_help,scale,muted);
+    if (rooms) canvas.text(inset,(footer+22)*scale,"SQUARE / KEYBOARD A REFRESH",scale,muted);
 }
 
 void draw_friends(const Canvas& canvas,unsigned height,unsigned scale,const FriendsPanelView& view) {
@@ -496,7 +500,7 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
     }
 
     const bool sending_invite=mode==Mode::picker && picker_view.kind==InvitePicker::friends;
-    const bool large_panel=mode==Mode::friends || sending_invite;
+    const bool large_panel=mode==Mode::friends || mode==Mode::picker;
     const bool editing=mode==Mode::friends && friends_panel->editing;
     unsigned card_width, card_height, margin;
     switch (mode) {
@@ -506,10 +510,8 @@ static int draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_
         margin=0;
         break;
     case Mode::picker:
-        card_width=sending_invite?friends_min_width:224;
-        card_height=sending_invite?friends_min_height:
-            (picker_view.kind==InvitePicker::rooms || picker_view.kind==InvitePicker::searching_rooms?75:64)
-                +std::max(1u,picker_view.count)*14;
+        card_width=friends_min_width;
+        card_height=friends_min_height;
         margin=0;
         break;
     case Mode::invitation:
