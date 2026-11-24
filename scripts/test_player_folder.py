@@ -421,6 +421,23 @@ class LauncherTests(unittest.TestCase):
             "overlay": 1, "window_width": 1100, "window_height": 700,
         })
 
+    def test_all_six_render_scales_save_and_relaunch_from_keyboard_and_controller(self):
+        root = self.folder("six resolution choices")
+        for prefix in ("scale-", "pad-scale-"):
+            for percent in (50, 75, 100, 150, 200, 300):
+                with self.subTest(method=prefix, percent=percent):
+                    # Use the packaged cross-platform smoke events, including
+                    # a virtual SDL controller, without LD_PRELOAD input hooks.
+                    env = os.environ.copy()
+                    env.update(SDL_VIDEODRIVER="dummy", TB_LAUNCHER_DISPLAY_SMOKE=prefix + str(percent),
+                               SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT="0x0000/0x0000")
+                    result = subprocess.run([str(root / "Play Tank Battles")], capture_output=True, text=True,
+                                            env=env, timeout=25, check=True)
+                    settings = json.loads(result.stdout)["settings"]
+                    self.assertEqual(settings["render_scale"], percent)
+                    self.assertEqual(settings["window_preset"], 0)
+                    self.assertEqual(json.loads(self.run_launcher(root, "--offline").stdout)["settings"], settings)
+
     def test_a_missing_player_is_explained(self):
         root = self.folder("broken")
         (root / "player/TankBattlesRecomp").unlink()

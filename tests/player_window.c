@@ -54,6 +54,8 @@ int main(void) {
     SDL_GetWindowSize(window,&width,&height);assert(width>=320 && height>=180);
     tb_settings_note_window(width,height);
     const int scale=tb_settings_render_scale();
+    const char* expected_scale=getenv("TB_RENDER_SCALE");
+    assert(!expected_scale || scale==atoi(expected_scale));
     for(int iteration=0;iteration<2;++iteration) {
         tb_window_toggle_fullscreen(window);pump(window,700);
         assert(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN_DESKTOP);

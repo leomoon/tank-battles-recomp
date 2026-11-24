@@ -41,6 +41,11 @@ The local evidence is under `analysis/rendering/display-step3-x-zone/`. The save
 
 ## Expected host extents
 
+Settings and measurement tools accept 50% and 75%, with intended resolved
+images of 640x360 and 960x540. Their reduced-resolution geometry and rendering
+path are still pending; current requests use Native rendering. Saving or
+logging a lower preset is not evidence of a smaller GPU scene image.
+
 Percentages scale both axes. The host allocations preserve the observed guest sample grid. The guest continues to register a 1280×720 display at every setting.
 
 | Preset | Resolved scene output | Main color and zeta backing | Shadow |

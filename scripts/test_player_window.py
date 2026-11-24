@@ -94,9 +94,10 @@ text=settings.read_text();assert 'fullscreen = 0' in text and 'window_width = 90
 print('PASS: generated backend restores size, saves resize/fullscreen toggles and preserves guest render size (SDL dummy window).')
 
 for preset in (720,1080,1440):
-    settings.write_text(f'window_preset = {preset}\nwindow_width = 900\nwindow_height = 600\nrender_scale = 150\nfullscreen = 1\n')
-    subprocess.run([str(out/'build/window_settings')],env=dict(env,TEST_EXPECT_FULLSCREEN='1'),check=True,timeout=15)
-    assert 'render_scale = 150' in settings.read_text()
+    for scale in (50,75,100,150,200,300):
+        settings.write_text(f'window_preset = {preset}\nwindow_width = 900\nwindow_height = 600\nrender_scale = {scale}\nfullscreen = 1\n')
+        subprocess.run([str(out/'build/window_settings')],env=dict(env,TEST_EXPECT_FULLSCREEN='1'),check=True,timeout=15)
+        assert f'render_scale = {scale}' in settings.read_text()
 settings.write_text('window_width = 16000\nwindow_height = 9000\nfullscreen = 1\n')
 subprocess.run([str(out/'build/window_settings')],env=dict(env,PS3RECOMP_FULLSCREEN='0',PS3RECOMP_VK_FULLSCREEN='1'),check=True,timeout=15)
 # Relaunch uses the stabilized saved windowed dimensions after the override is removed.
@@ -106,7 +107,8 @@ print('PASS: preset priority, monitor bounds, borderless startup, explicit windo
 if '--desktop-driver' in sys.argv:
     driver = sys.argv[sys.argv.index('--desktop-driver') + 1]
     for full in (0,1):
-        settings.write_text(f'window_preset = 720\nfullscreen = {full}\nrender_scale = 200\n')
-        desktop = dict(env, SDL_VIDEODRIVER=driver)
-        subprocess.run([str(out/'build/display_window')],env=desktop,check=True,timeout=30)
-        subprocess.run([str(out/'build/display_window')],env=desktop,check=True,timeout=30)
+        for scale in (50,75,100,150,200,300):
+            settings.write_text(f'window_preset = 720\nfullscreen = {full}\nrender_scale = {scale}\n')
+            desktop = dict(env, SDL_VIDEODRIVER=driver)
+            subprocess.run([str(out/'build/display_window')],env=desktop,check=True,timeout=30)
+            subprocess.run([str(out/'build/display_window')],env=desktop,check=True,timeout=30)

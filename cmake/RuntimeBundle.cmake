@@ -82,6 +82,12 @@ add_test(NAME runtime_display_window COMMAND runtime_display_window_check)
 set_tests_properties(runtime_display_window PROPERTIES
     ENVIRONMENT "SDL_VIDEODRIVER=dummy;TB_SETTINGS_FILE=${CMAKE_CURRENT_BINARY_DIR}/display-window.ini;PS3RECOMP_FULLSCREEN=0;TB_RENDER_SCALE=200"
     TIMEOUT 30)
+foreach(scale IN ITEMS 50 75)
+    add_test(NAME runtime_display_window_${scale} COMMAND runtime_display_window_check)
+    set_tests_properties(runtime_display_window_${scale} PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;TB_SETTINGS_FILE=${CMAKE_CURRENT_BINARY_DIR}/display-window-${scale}.ini;PS3RECOMP_FULLSCREEN=0;TB_RENDER_SCALE=${scale}"
+        TIMEOUT 30)
+endforeach()
 find_package(glslang CONFIG REQUIRED)
 foreach(fixture IN ITEMS draw_groups depth16 nv3089 render_scale)
     add_executable(vulkan_${fixture} "${CMAKE_CURRENT_BINARY_DIR}/gpu-fixtures/${fixture}.c")

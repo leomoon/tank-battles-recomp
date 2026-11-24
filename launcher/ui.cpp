@@ -396,7 +396,7 @@ bool draw_display_settings(Painter& painter, Form& form, const Input& input, Sta
     }();
     static const auto scales = [] {
         std::array<std::string, display::render_presets.size()> names;
-        constexpr std::array resolutions{"720p", "1080p", "1440p", "4K"};
+        constexpr std::array resolutions{"360p", "540p", "720p", "1080p", "1440p", "4K"};
         static_assert(names.size() == resolutions.size());
         for (size_t i = 0; i < names.size(); ++i) {
             const int percent = display::render_presets[i];
@@ -436,7 +436,7 @@ bool draw_display_settings(Painter& painter, Form& form, const Input& input, Sta
         state.message.clear();
     }
     if (state.message.empty()) {
-        painter.text(margin, 111, "Higher resolutions are sharper and use more GPU.", muted);
+        painter.text(margin, 111, "Lower resolution can be faster, less sharp.", muted);
         painter.text(margin, 122, "Applies when the game starts.", muted);
     } else {
         painter.paragraph(margin, 111, content_width, state.message, bad, 2);
@@ -997,6 +997,8 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                     choice = Choice{};
                 } else {
                     go(order[smoke_frames]);
+                    if (state.screen == Screen::display_settings)
+                        display::load(settings_path, state.display_draft, state.message);
                     SDL_SetWindowSize(window, smoke_sizes[smoke_frames].x, smoke_sizes[smoke_frames].y);
                 }
             }

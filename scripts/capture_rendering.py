@@ -84,7 +84,7 @@ def main():
     parser.add_argument('--textures', action='store_true', help='Capture bounded pre-GPU decoded textures and transfer metadata')
     parser.add_argument('--passes', action='store_true', help='Save up to 16 diagnostic render passes; substantial overhead')
     parser.add_argument('--rsx-trace', action='store_true', help='Record three complete GPU command/state frames when rsx/request receives a unique scene label')
-    parser.add_argument('--render-scale', type=int, choices=[100, 150, 200, 300], default=100,
+    parser.add_argument('--render-scale', type=int, choices=[50, 75, 100, 150, 200, 300], default=100,
                         help='Scene raster scale. Use with --rsx-trace to capture scaled attachments before presentation')
     parser.add_argument('--window-mode', choices=['windowed', 'borderless'], default='windowed')
     parser.add_argument('--fxaa', choices=['0', '1'], default='0')

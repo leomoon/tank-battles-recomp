@@ -10,6 +10,29 @@ from build_identity import measurement_build, read_command_log
 
 
 class BuildTests(unittest.TestCase):
+    def test_render_scale_is_forwarded_to_native_and_repeat_commands(self):
+        from script_gameplay import main
+        from port import ROOT
+        base=ROOT/'analysis/performance'
+        base.mkdir(parents=True,exist_ok=True)
+        class InterceptLaunch(Exception):pass
+        with tempfile.TemporaryDirectory(dir=base,prefix='scale-forwarding-') as tmp:
+            for percent in (50,75,100,150,200,300):
+                output=Path(tmp)/('native-'+str(percent))
+                arguments=['script_gameplay.py','--output',str(output),'--render-scale',str(percent)]
+                with patch('sys.argv',arguments),patch('subprocess.Popen',side_effect=InterceptLaunch) as launch:
+                    with self.assertRaises(InterceptLaunch):main()
+                    command=launch.call_args.args[0]
+                    self.assertEqual(command[command.index('--render-scale')+1],str(percent))
+                arguments[2]=str(Path(tmp)/('repeat-'+str(percent)))
+                arguments+=['--repeat','2']
+                with patch('sys.argv',arguments),patch('subprocess.run',return_value=Mock(returncode=0)) as launch:
+                    with self.assertRaises(SystemExit) as exit_status:main()
+                    self.assertEqual(exit_status.exception.code,0)
+                    self.assertEqual(launch.call_count,2)
+                    for call in launch.call_args_list:
+                        command=call.args[0]
+                        self.assertEqual(command[command.index('--render-scale')+1],str(percent))
     def test_end_capture_uses_measurement_clock_not_harness_wait_start(self):
         from script_gameplay import interval_end_ns
         manifest=dict(interval_seconds=[15.,75.])

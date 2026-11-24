@@ -48,7 +48,7 @@ void tb_vk_scale_measure_present(unsigned effective_percent, unsigned width, uns
     if (!tb_scale_initial_percent) tb_scale_initial_percent = (unsigned)tb_settings_render_scale();
     const int scaled = effective_percent != 100;
     tb_frame_budget_count(scaled ? TB_FC_SCALE_PRESENT_SCALED : TB_FC_SCALE_PRESENT_NATIVE, 1);
-    if (tb_scale_initial_percent > 100 && !scaled)
+    if (tb_scale_initial_percent != 100 && !scaled)
         tb_frame_budget_count(TB_FC_SCALE_FALLBACK_PRESENT, 1);
     tb_frame_budget_mark(TB_FT_SCALE_STATE, tb_scale_initial_percent, effective_percent);
     if (scaled)

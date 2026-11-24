@@ -70,7 +70,7 @@ def main():
  parser.add_argument('--mailbox-profile',action='store_true',help='Record Linux raw SPU mailbox status counters by scene')
  parser.add_argument('--linux-symbols',action='store_true',help='Diagnostic user-space CPU samples across the Linux resource route')
  parser.add_argument('--vertex-profile',action='store_true',help='Diagnostic vertex preparation costs across the native Linux resource route')
- parser.add_argument('--render-scale',type=int,choices=[100,150,200,300],default=100)
+ parser.add_argument('--render-scale',type=int,choices=[50,75,100,150,200,300],default=100)
  parser.add_argument('--expected-runtime-source',help='Require this runtime commit before a native measurement launches')
  parser.add_argument('--rsx-trace',action='store_true',help='Heavy diagnostic: three gameplay RSX state frames; never clean baseline evidence')
  a=parser.parse_args()

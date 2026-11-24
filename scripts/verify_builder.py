@@ -100,7 +100,8 @@ def display_preferences(launcher: Path, environment: dict, window_driver: str) -
     def scenario(name):
         result = subprocess.run([str(launcher)], capture_output=True, encoding="utf-8", errors="replace",
                                 env=dict(environment, SDL_VIDEODRIVER=window_driver,
-                                         TB_LAUNCHER_DISPLAY_SMOKE=name), timeout=120)
+                                         TB_LAUNCHER_DISPLAY_SMOKE=name,
+                                         SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT="0x0000/0x0000"), timeout=120)
         if "Display smoke did not complete" in result.stderr:
             raise SystemExit(f"Launcher display navigation failed ({name}): {result.stderr}")
         return result
@@ -126,8 +127,19 @@ def display_preferences(launcher: Path, environment: dict, window_driver: str) -
     result = scenario("preset")
     check({"fullscreen": 0, "render_scale": 200, "window_preset": 720})
     verify_played(folder, result, "[display preferences] mode=windowed render_scale=200% window_preset=1280x720")
+    for percent, method in ((50, "scale-"), (75, "pad-scale-")):
+        result = scenario(method + str(percent))
+        check({"fullscreen": 0, "render_scale": percent, "window_preset": 0})
+        verify_played(folder, result, f"[display preferences] mode=windowed render_scale={percent}% window_preset=0x0")
+        saved = settings.read_bytes()
+        # Relaunch the same assembled player without rebuilding translation.
+        replay = subprocess.run([str(launcher), "--offline"], capture_output=True, encoding="utf-8", errors="replace",
+                                env=environment, timeout=120)
+        verify_played(folder, replay, f"[display preferences] mode=windowed render_scale={percent}% window_preset=0x0")
+        if settings.read_bytes() != saved:
+            raise SystemExit(f"Player launch changed saved {percent}% settings")
     print(f"[verify] launcher saved, cancelled and restored display settings and started players with "
-          f"borderless/150% and windowed/200% preferences ({time.monotonic() - started:.1f}s)")
+          f"borderless/150%, windowed/200%, saved 50% and controller-selected 75% preferences ({time.monotonic() - started:.1f}s)")
 
 
 def launch(launcher: Path, window_driver: str = "dummy") -> None:
