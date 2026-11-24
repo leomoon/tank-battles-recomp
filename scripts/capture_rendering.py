@@ -84,6 +84,8 @@ def main():
     parser.add_argument('--textures', action='store_true', help='Capture bounded pre-GPU decoded textures and transfer metadata')
     parser.add_argument('--passes', action='store_true', help='Save up to 16 diagnostic render passes; substantial overhead')
     parser.add_argument('--rsx-trace', action='store_true', help='Record three complete GPU command/state frames when rsx/request receives a unique scene label')
+    parser.add_argument('--render-scale', type=int, choices=[100, 150, 200, 300], default=100,
+                        help='Scene raster scale. Use with --rsx-trace to capture scaled attachments before presentation')
     parser.add_argument('--audio', choices=['dummy','host'], default='dummy', help='Dummy for isolated diagnostics; host enables audible playback')
     parser.add_argument('--frame-order', action='store_true', help='Write bounded scalar scanout-generation records without saving framebuffer images')
     parser.add_argument('--fps', action='store_true', help='Show the window FPS overlay; hidden by default in reference comparisons')
@@ -147,6 +149,7 @@ def main():
     if args.audio=='dummy':env['SDL_AUDIODRIVER']='dummy'
     elif env.get('SDL_AUDIODRIVER')=='dummy':env.pop('SDL_AUDIODRIVER')
     env['TB_FPS_OVERLAY']='1' if args.fps else '0'
+    env['TB_RENDER_SCALE'] = str(args.render_scale)
     if args.offline_trace:
         env['TB_OFFLINE_TRACE']='1'
     command = [str(resolve(args.build_dir) / 'TankBattlesRecomp'), str(content / 'USRDIR/EBOOT.elf')]

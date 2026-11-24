@@ -1,12 +1,23 @@
 /* Observe title-specific draw and complete GPU resolve routes before asking
  * Vulkan to reserve any scaled resources. No guest address is hardcoded. */
 #include "render_scale.h"
+#include "render_scale_shader.h"
 
 __attribute__((weak)) int tb_vk_scale_requested(void) { return 100; }
 __attribute__((weak)) void tb_vk_scale_discard(void) {}
 __attribute__((weak)) void tb_vk_scale_prepare(const tb_scale_layout* layout, unsigned percent)
 { (void)layout; (void)percent; }
 __attribute__((weak)) void tb_vk_scale_unavailable(void) {}
+
+__attribute__((weak)) void tb_vk_scale_clear(tb_scale_surface color, tb_scale_surface depth,
+        tb_scale_rect rect, unsigned mask, const float rgba[4], float z, unsigned stencil)
+{ (void)color; (void)depth; (void)rect; (void)mask; (void)rgba; (void)z; (void)stencil; }
+__attribute__((weak)) int tb_vk_scale_bindings(tb_scale_surface color, tb_scale_surface depth,
+        int stencil, tb_scale_binding* binding)
+{ (void)color; (void)depth; (void)stencil; (void)binding; return 0; }
+__attribute__((weak)) void tb_vk_scale_skip_frame(void) {}
+__attribute__((weak)) void tb_vk_scale_capture(tb_scale_surface color, const char* path)
+{ (void)color; (void)path; }
 
 typedef struct {
     tb_scale_surface color, depth;
@@ -82,20 +93,24 @@ static void tb_scale_guest_write(u32 location, u32 offset, u32 pitch, u32 w, u32
     }
 }
 
+static int tb_scale_scene_pair(const rsx_dsp_surface* sf, tb_scale_surface color, tb_scale_surface depth)
+{
+    // A matching NV3089 resolve to a registered buffer is still required.
+    return sf->color_target == CELL_GCM_SURFACE_TARGET_1 &&
+        sf->aa_sx == 2 && sf->aa_sy == 2 && sf->depth_format == 2 &&
+        color.format == RSX_BE_FMT_R8G8B8A8 && color.location == depth.location &&
+        color.size.width == 2560 && color.size.height == 1440 &&
+        depth.size.width == color.size.width && depth.size.height == color.size.height &&
+        color.pitch == 4 * color.size.width && depth.pitch == color.pitch;
+}
+
 static void tb_scale_note_draw(const rsx_dsp_surface* sf, u32 slot, u32 zslot)
 {
     if (tb_scale_scene.percent <= 100) return;
     const tb_scale_surface color = tb_scale_color_id(&g.surfaces[slot]);
     const tb_scale_surface depth = zslot == ENG_INVALID
         ? (tb_scale_surface){0} : tb_scale_depth_id(&g.zdepths[zslot]);
-    // Match the observed color/depth layout and sample grid. A matching NV3089
-    // resolve to a registered buffer is still required before allocation.
-    const int scene = sf->color_target == CELL_GCM_SURFACE_TARGET_1 &&
-        sf->aa_sx == 2 && sf->aa_sy == 2 && sf->depth_format == 2 &&
-        color.format == RSX_BE_FMT_R8G8B8A8 && color.location == depth.location &&
-        color.size.width == 2560 && color.size.height == 1440 &&
-        depth.size.width == color.size.width && depth.size.height == color.size.height &&
-        color.pitch == 4 * color.size.width && depth.pitch == color.pitch;
+    const int scene = tb_scale_scene_pair(sf, color, depth);
     tb_scale_scene.draws[slot] = scene ? (tb_scale_draw){color, depth} : (tb_scale_draw){0};
     for (u32 i = 0; i < TB_SCALE_MAX_ROUTES; ++i) {
         const tb_scale_resolve* r = &tb_scale_scene.proven[i];
@@ -154,15 +169,17 @@ static int tb_scale_live_depth(tb_scale_surface surface)
     return 0;
 }
 
-static void tb_scale_present(u32 buffer, u32 target)
+static int tb_scale_present(u32 buffer, u32 target)
 {
-    if (tb_scale_scene.percent <= 100 || buffer >= TB_SCALE_MAX_ROUTES) return;
+    if (tb_scale_scene.percent <= 100 || buffer >= TB_SCALE_MAX_ROUTES) return 0;
+    int resolved = 0;
     tb_scale_resolve* pending = &tb_scale_scene.pending[buffer];
     if (pending->tiles) {
         if (pending->tiles == 0x3f &&
             tb_scale_same_surface(pending->route.display, tb_scale_color_id(&g.surfaces[target]))) {
             tb_scale_scene.proven[buffer] = *pending;
             *pending = (tb_scale_resolve){0};
+            resolved = 1;
         } else tb_scale_forget_route(buffer);
     }
     tb_scale_layout layout = {0};
@@ -192,4 +209,5 @@ static void tb_scale_present(u32 buffer, u32 target)
             tb_scale_scene.percent = 100;
         }
     }
+    return resolved && tb_scale_scene.proven[buffer].tiles;
 }

@@ -62,3 +62,21 @@ int tb_vk_scale_requested(void);
 void tb_vk_scale_discard(void);
 void tb_vk_scale_prepare(const tb_scale_layout* layout, unsigned percent);
 void tb_vk_scale_unavailable(void);
+
+/* Read/mirror bindings use the guest identity, never an engine slot or a
+ * Vulkan handle that might have been recycled for a different allocation. */
+typedef struct {
+    uint32_t color, depth, percent;
+} tb_scale_binding;
+enum {
+    TB_SCALE_CLEAR_COLOR = 1,
+    TB_SCALE_CLEAR_DEPTH = 2,
+    TB_SCALE_CLEAR_STENCIL = 4
+};
+
+void tb_vk_scale_clear(tb_scale_surface color, tb_scale_surface depth, tb_scale_rect rect,
+                       unsigned mask, const float rgba[4], float z, unsigned stencil);
+int tb_vk_scale_bindings(tb_scale_surface color, tb_scale_surface depth, int stencil,
+                        tb_scale_binding* binding);
+void tb_vk_scale_skip_frame(void);
+void tb_vk_scale_capture(tb_scale_surface color, const char* path);

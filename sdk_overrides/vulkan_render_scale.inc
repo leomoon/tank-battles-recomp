@@ -1,6 +1,5 @@
-/* Reserved Vulkan resources for an observed scene layout. The live renderer
- * keeps its native handles until draw and resolve both support scaled images.
- * Reservations never enter the draw engine's guest address or alias tables. */
+/* Scaled Vulkan resources for an observed scene layout. The scaled raster
+ * attachments stay outside the engine's guest address and alias tables. */
 #include "render_scale.h"
 
 typedef struct {
@@ -11,6 +10,10 @@ typedef struct {
 typedef struct {
     tb_scale_layout layout;
     unsigned percent;
+    u32 active_color;
+    unsigned clear_mask;
+    int stencil_known;
+    int rasterized;
     tb_vk_scale_image depth;
     tb_vk_scale_image color[TB_SCALE_MAX_ROUTES];
     tb_vk_scale_image display[TB_SCALE_MAX_ROUTES];
@@ -77,6 +80,8 @@ static tb_scale_size tb_vk_scale_limit(void)
         limits->maxFramebufferWidth < dimension ? limits->maxFramebufferWidth : dimension,
         limits->maxFramebufferHeight < dimension ? limits->maxFramebufferHeight : dimension
     };
+    if (limits->maxViewportDimensions[0] < limit.width) limit.width = limits->maxViewportDimensions[0];
+    if (limits->maxViewportDimensions[1] < limit.height) limit.height = limits->maxViewportDimensions[1];
     const VkFormat formats[] = {VK_FORMAT_R8G8B8A8_UNORM, s_vk.depth_format};
     const VkImageUsageFlags usages[] = {
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -188,4 +193,139 @@ void tb_vk_scale_prepare(const tb_scale_layout* layout, unsigned percent)
     VK_LOG("render scale %u%% resources staged: %ux%u scene, %ux%u resolve, %u routes\n",
            percent, candidate.depth.extent.host.width, candidate.depth.extent.host.height,
            candidate.display[0].extent.host.width, candidate.display[0].extent.host.height, layout->count);
+}
+
+static tb_scale_extent tb_vk_scale_extent(const vk_eng_obj* image)
+{
+    return (tb_scale_extent){image->guest_size, {image->w, image->h}};
+}
+
+static VkRect2D tb_vk_scale_scissor(const vk_eng_obj* image, const u32 scissor[4])
+{
+    const tb_scale_size guest = image->guest_size;
+    const u32 x = scissor[0], y = scissor[1];
+    if (x >= guest.width || y >= guest.height) return (VkRect2D){0};
+    const u32 room_w = guest.width - x, room_h = guest.height - y;
+    const tb_scale_rect clip = {x, y,
+        scissor[2] < room_w ? scissor[2] : room_w, scissor[3] < room_h ? scissor[3] : room_h};
+    tb_scale_rect host;
+    if (!tb_scale_rect_map(tb_vk_scale_extent(image), clip, &host)) return (VkRect2D){0};
+    return (VkRect2D){{(int32_t)host.x, (int32_t)host.y}, {host.width, host.height}};
+}
+
+static u32 tb_vk_scale_find_color(tb_scale_surface id)
+{
+    for (u32 i = 0; i < tb_scaled.layout.count; ++i)
+        if (!memcmp(&id, &tb_scaled.layout.routes[i].color, sizeof id))
+            return tb_scaled.color[i].handle;
+    return 0;
+}
+
+void tb_vk_scale_skip_frame(void)
+{
+    tb_scaled.active_color = 0;
+    tb_scaled.clear_mask = 0;
+    tb_scaled.stencil_known = 0;
+    tb_scaled.rasterized = 0;
+}
+
+int tb_vk_scale_bindings(tb_scale_surface color, tb_scale_surface depth, int stencil,
+                        tb_scale_binding* binding)
+{
+    if (!tb_scaled.active_color || memcmp(&depth, &tb_scaled.layout.depth, sizeof depth) ||
+        tb_vk_scale_find_color(color) != tb_scaled.active_color ||
+        (tb_scaled.clear_mask & (TB_SCALE_CLEAR_COLOR | TB_SCALE_CLEAR_DEPTH)) !=
+            (TB_SCALE_CLEAR_COLOR | TB_SCALE_CLEAR_DEPTH)) return 0;
+    if (stencil && !tb_scaled.stencil_known) {
+        tb_vk_scale_skip_frame();
+        return 0;
+    }
+    *binding = (tb_scale_binding){tb_scaled.active_color, tb_scaled.depth.handle, tb_scaled.percent};
+    return 1;
+}
+
+void tb_vk_scale_clear(tb_scale_surface color, tb_scale_surface depth, tb_scale_rect rect,
+                       unsigned mask, const float rgba[4], float z, unsigned stencil)
+{
+    if (!tb_scaled.percent || memcmp(&depth, &tb_scaled.layout.depth, sizeof depth)) return;
+    const u32 color_handle = tb_vk_scale_find_color(color);
+    if (!color_handle) return;
+    const vk_eng_obj* image = vk_eng_get(color_handle, VK_ENG_COLOR);
+    const vk_eng_obj* depth_image = vk_eng_get(tb_scaled.depth.handle, VK_ENG_DEPTH);
+    if (!image || !depth_image) return;
+    const tb_scale_extent extent = tb_vk_scale_extent(image);
+    tb_scale_rect host;
+    if (!tb_scale_rect_map(extent, rect, &host)) return;
+
+    if (color_handle != tb_scaled.active_color) {
+        tb_scaled.active_color = color_handle;
+        tb_scaled.clear_mask = 0;
+        tb_scaled.rasterized = 0;
+    }
+    VkClearAttachment attachments[2] = {0};
+    unsigned count = 0;
+    if (mask & TB_SCALE_CLEAR_COLOR) {
+        attachments[count].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        memcpy(attachments[count++].clearValue.color.float32, rgba, sizeof(float) * 4);
+    }
+    VkImageAspectFlags aspects = 0;
+    if (mask & TB_SCALE_CLEAR_DEPTH) aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (mask & TB_SCALE_CLEAR_STENCIL) aspects |= s_vk.depth_aspect & VK_IMAGE_ASPECT_STENCIL_BIT;
+    if (aspects) {
+        attachments[count].aspectMask = aspects;
+        attachments[count++].clearValue.depthStencil = (VkClearDepthStencilValue){z, stencil};
+    }
+    if (!count) return;
+    VkRenderPass pass = vk_eng_render_pass(image->fmt, 1);
+    VkFramebuffer fb = pass ? vk_eng_framebuffer(pass, &color_handle, 1, depth_image->im.view,
+                                                  tb_scaled.depth.handle, image->w, image->h) : VK_NULL_HANDLE;
+    if (!fb || vk_begin()) {
+        tb_vk_scale_skip_frame();
+        return;
+    }
+    vk_barrier_image(image->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    vk_barrier_image(depth_image->im.img, s_vk.depth_aspect, VK_IMAGE_LAYOUT_GENERAL);
+    const VkRenderPassBeginInfo begin = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = pass, .framebuffer = fb,
+        .renderArea = {{0, 0}, {image->w, image->h}}
+    };
+    const VkClearRect clear = {
+        .rect = {{(int32_t)host.x, (int32_t)host.y}, {host.width, host.height}}, .layerCount = 1
+    };
+    pvkCmdBeginRenderPass(s_vk.cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    pvkCmdClearAttachments(s_vk.cmd, count, attachments, 1, &clear);
+    pvkCmdEndRenderPass(s_vk.cmd);
+    if (vk_submit_and_wait()) {
+        tb_vk_scale_skip_frame();
+        return;
+    }
+    if (!host.x && !host.y && host.width == image->w && host.height == image->h) {
+        tb_scaled.clear_mask |= mask;
+        if (mask & TB_SCALE_CLEAR_STENCIL) tb_scaled.stencil_known = 1;
+        if (mask & TB_SCALE_CLEAR_COLOR) tb_scaled.rasterized = 0;
+    }
+}
+
+void tb_vk_scale_capture(tb_scale_surface color, const char* path)
+{
+    if (!tb_scaled.rasterized || tb_vk_scale_find_color(color) != tb_scaled.active_color ||
+        (tb_scaled.clear_mask & (TB_SCALE_CLEAR_COLOR | TB_SCALE_CLEAR_DEPTH)) !=
+            (TB_SCALE_CLEAR_COLOR | TB_SCALE_CLEAR_DEPTH)) return;
+    FILE* existing = fopen(path, "rb");
+    if (existing) { fclose(existing); return; }
+    const vk_eng_obj* image = vk_eng_get(tb_scaled.active_color, VK_ENG_COLOR);
+    if (!image || image->bpp != 4) return;
+    const size_t pitch = (size_t)image->w * 4;
+    u8* pixels = calloc(image->h, pitch);
+    if (!pixels) return;
+    vk_eng_readback(NULL, tb_scaled.active_color, 0, 0, image->w, image->h, pixels, (u32)pitch);
+    FILE* file = fopen(path, "wb");
+    if (file) {
+        const size_t count = (size_t)image->w * image->h;
+        for (size_t i = 0; i < count; ++i) memmove(pixels + 3*i, pixels + 4*i, 3);
+        fprintf(file, "P6\n%u %u\n255\n", image->w, image->h);
+        const int written = fwrite(pixels, 3, count, file) == count;
+        if (fclose(file) || !written) remove(path);
+    }
+    free(pixels);
 }
