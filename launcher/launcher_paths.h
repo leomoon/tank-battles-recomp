@@ -55,6 +55,7 @@ struct Folder {
     fs::path executable() const { return title() / "USRDIR" / "EBOOT.elf"; }
     fs::path online() const { return root / "online"; }
     fs::path logs() const { return root / "logs"; }
+    fs::path settings() const { return game() / "settings.ini"; }
     fs::path player() const {
 #ifdef _WIN32
         return root / "player" / "TankBattlesRecomp.exe";

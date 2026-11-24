@@ -5,7 +5,8 @@
 set(TB_LAUNCHER_DIR "${CMAKE_CURRENT_LIST_DIR}/../launcher")
 add_executable(PlayTankBattles WIN32
     "${TB_LAUNCHER_DIR}/play_tank_battles.cpp" "${TB_LAUNCHER_DIR}/accounts.cpp"
-    "${TB_LAUNCHER_DIR}/platform.cpp" "${TB_LAUNCHER_DIR}/ui.cpp")
+    "${TB_LAUNCHER_DIR}/platform.cpp" "${TB_LAUNCHER_DIR}/ui.cpp"
+    "${TB_LAUNCHER_DIR}/../player_settings.cpp")
 target_compile_features(PlayTankBattles PRIVATE cxx_std_20)
 target_include_directories(PlayTankBattles PRIVATE "${TB_LAUNCHER_DIR}")
 

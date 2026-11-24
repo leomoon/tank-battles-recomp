@@ -24,6 +24,13 @@ target_link_libraries(runtime_shader_check PRIVATE ps3recomp_runtime)
 set_target_properties(runtime_shader_check PROPERTIES LINKER_LANGUAGE CXX)
 add_test(NAME runtime_shader_translation COMMAND runtime_shader_check)
 find_package(Threads REQUIRED)
+add_executable(runtime_display_settings_check
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/display_settings.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/player_settings.cpp")
+target_include_directories(runtime_display_settings_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(runtime_display_settings_check PRIVATE Threads::Threads)
+add_test(NAME runtime_display_settings COMMAND runtime_display_settings_check
+    "${CMAKE_CURRENT_BINARY_DIR}/display-settings-test")
 add_executable(runtime_overlay_check "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/overlay.cpp")
 target_include_directories(runtime_overlay_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(runtime_overlay_check PRIVATE tank_battles_host_archive Threads::Threads)
