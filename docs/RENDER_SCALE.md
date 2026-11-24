@@ -43,8 +43,8 @@ The local evidence is under `analysis/rendering/display-step3-x-zone/`. The save
 
 Settings, measurement tools and renderer geometry accept all six presets.
 The 50% and 75% paths can now allocate and map reduced scene attachments.
-Single-pass scene ownership and downscale resolve validation remain pending;
-no gameplay performance improvement is established by these geometry changes.
+Single-pass scene ownership is implemented. Downscale resolve validation and
+gameplay performance acceptance remain pending.
 Saving or logging a lower preset is not evidence of a smaller GPU scene image.
 
 Percentages scale both axes. The host allocations preserve the observed guest sample grid. The guest continues to register a 1280×720 display at every setting.
@@ -62,13 +62,13 @@ A 300% backing image at four bytes per sample takes about 127 MiB per attachment
 
 The allocation step reserves a complete Vulkan set once the render thread observes a full point resolve for every registered display buffer. `rsx_render_scale.inc` ties the proof to the current guest surface generations and `vulkan_render_scale.inc` stages compatible color, depth, resolve, and framebuffer resources. The group is discarded after a conflicting write or layout change. A failed reservation releases its temporary images and reports Native fallback.
 
-A full color and depth clear arms the scaled scene attachments for a frame. The renderer reuses the guest geometry, textures, and pipeline state for eligible scene and HUD draws, then maps the viewport, scissor, and clear rectangles to the bound Vulkan attachment. Scissors use shared half-open edges, with clipping applied before conversion. Native shadow and utility surfaces retain their own dimensions. A frame that needs scene texture feedback or an unsupported depth or stencil pass uses the Native path.
+A proven group supplies the scaled scene attachments for a frame. The renderer reuses the guest geometry, textures, and pipeline state for eligible scene and HUD draws, then maps the viewport, scissor, and clear rectangles to the bound Vulkan attachment. Scissors use shared half-open edges, with clipping applied before conversion. Native shadow and utility surfaces retain their own dimensions. Color feedback snapshots the authoritative image; unsupported depth/vertex aliases and geometry establish Native continuation.
 
 The fragment shader maps WPOS back to the guest sample grid before applying the guest origin and pixel-center rules. Ordinary texture operations retain their normalized UVs and implicit LOD, and unnormalized samplers retain the dimensions from their guest texture descriptors. The generated shadow taps use the dimensions of the Native shadow image. The sampled depth-bounds fallback reads framebuffer pixel coordinates directly, so a frame that uses it cannot use the scaled draw. Dynamic depth bounds, stencil, and the depth range use the original state. Polygon offset retains its constant depth term. For equal X/Y host-to-guest ratios, its slope factor is multiplied by that actual ratio; a nonzero slope with unequal rounded ratios rejects the scaled frame.
 
-The renderer draws eligible geometry twice to keep exact Native color and depth available to guest reads and texture aliases. The Native NV3089 gather still selects the title's exact point samples. The scaled resolve uses linear filtering over each tile's matching 2×2 sample footprints. Source and destination edges map independently to their image extents, so adjacent tiles share a boundary. Aligned guest uploads and copies into a tracked image replay the affected rectangle from the Native backing with nearest filtering. Overlapping scaled copies snapshot the source region first. Transfers with an unrecognized layout retire the affected route.
+The renderer emits each eligible draw and clear once into the selected-resolution attachments. Native color/depth handles retain guest identity but their contents can be stale. A complete proven resource group is required before routing begins; its initial contents are imported once from Native. Color aliases use the current authoritative view, and feedback takes an ordered immutable snapshot. Native NV3089 still selects exact point samples at 100%. A recognized non-Native resolve writes the selected-size display backing directly; filtering and tile-phase acceptance at 50%/75% remain Step 5 work. Guest uploads patch only their mapped rectangle after the staged upload completes. Other point transfers reconstruct the source and establish Native continuation before mutating an authoritative destination.
 
-Mirrored draws retain the batch's immutable vertex, index, constant and descriptor slices. The Native pass records its draws first, and the batch replays its scaled draws together in a separate pass before any texture mutation, clear, readback, attachment consumer or ring reuse. Each packet retains its pipeline, viewport, scissor, depth bias, depth bounds and stencil reference. A shader sampling a queued scaled attachment forces completion before that draw. The existing 64-draw batch bound and slot fences still govern resource reuse. This avoids a render-pass switch and GPU submission for every Native/scaled pair.
+Draw groups retain immutable vertex, index, constant and descriptor slices until their slot's fence completes. The mirror queue and replay pass have been removed. Attachment changes end the current render pass within the batch, and a texture consumer of the preceding attachment completes its producer before drawing. The existing 64-draw bound, four submission slots and retirement fences still govern reuse.
 
 The registered display route publishes scaled scanout after all six tiles complete. While the route is unavailable, the presenter uses its Native scanout. The scaled presentation image has its own lifetime and effective dimensions, and capture reports those dimensions before optional FXAA. Ordinary presentation reads only one diagnostic pixel back to the CPU. Friends, invitations, and FPS are composed in swapchain coordinates after the window blit.
 
@@ -105,8 +105,8 @@ Normalized UVs, explicit texture offsets and gradient expressions remain in
 the texture's coordinates. Implicit derivatives/LOD follow the selected host
 raster density; they are not multiplied by a second nominal scale. Unnormalized
 sampling still divides by guest texture dimensions. Shadow images and their
-texel offsets stay Native. Scene feedback and sampled depth-bounds aliases
-continue to reject the scaled frame; ownership/materialization is later work.
+texel offsets stay Native. Color feedback uses an authoritative snapshot.
+Sampled depth-bounds and vertex aliases require Native continuation.
 Dynamic depth bounds, stencil references/operations and constant depth bias do
 not depend on image extent. Vulkan has one slope factor, so unequal rounded
 axis ratios cannot preserve every primitive's maximum depth derivative with a
@@ -124,3 +124,74 @@ omits the analytic edge column in the Native control. The full fixture still
 fails its previously recorded depth/stencil pixel check at `(6,3)`, and
 `vulkan_draw_groups` still fails its presented-center check. These remain open
 acceptance gates. Linux execution and gameplay validation are pending.
+
+## Authoritative ownership (lower-resolution Step 4)
+
+Each image in a proven generation has a stable Native handle, a selected-size
+host handle, a content serial and a completed Native serial. The owner is Native
+before activation and at 100%; after activation the selected-size image owns
+the contents. A zero Native handle means no current Native association, including
+a generation that has been retired.
+Scaled serials can name ordered batch work; a Native serial becomes valid only
+after reconstruction completes. Initialization and read/write barriers use the
+existing slot fences. No second scene draw or retained mirror packet is needed.
+
+| Operation | Ownership behavior |
+| --- | --- |
+| Eligible scene/HUD draw or clear | Select color/depth once; update the authoritative content serial. Shadow and utility targets retain their independent Native path. |
+| Color alias / feedback | View the authoritative image; snapshot feedback before later writes. Views/snapshots retain actual extent metadata and retire with their source generation. |
+| Guest-sized color/depth observer | Reconstruct a full valid Native region once per content serial. Color readback bytes also cache by engine write serial for tracked images (an explicit `TB_COLOR_READBACK_CACHE=0` disables the byte cache). |
+| Partial color upload | Upload the changed Native rectangle, finish its staging operation, then patch only the mapped authoritative rectangle. Untouched Native pixels remain stale; the changed rectangle does not validate the whole Native image. |
+| Byte-column NV0039 transfer | Resolve the surface pitch separately from the transfer's byte stride. Preserve partial destination pixels before writing and notify the exact aligned pixel range afterward. |
+| Guest Z24S8 write | Reconstruct the current frame, retain Native for subsequent frames, then upload the changed depth and stencil region. Preserve untouched color/depth/stencil and advance the engine write serial. |
+| Unsupported attachment, alias, viewport, slope or route change | Reconstruct current attachments before Native continuation; invalidate scaled publication and retain Native until relaunch. Recovery failures stop rendering rather than expose stale contents. |
+| Generation retirement | Finish queued consumers, preserve the other current attachments, then release the old images/views. A new handle cannot inherit old generation ownership. |
+
+Reconstruction has an explicit sampling phase: destination pixel `(x,y)` selects
+`floor((x+0.5)*source_width/destination_width)` and the corresponding Y value.
+RGBA8 bytes, D32 values and stencil bytes use this same center-point nearest
+rule. The waited staging implementation avoids driver-dependent nearest-blit
+ties and devices without depth/stencil blits. It runs for initialization,
+observers and recovery, rather than routine scene rendering. Guest color rows
+retain the SDK endian/tiling conversion; guest depth export retains its Z16 or
+Z24 quantization and zero stencil-byte ABI. Stencil is preserved independently
+in GPU continuation and explicit guest Z24S8 writes. Non-Native reconstruction
+does not promise the raster values an original-resolution draw would have made.
+
+Recognized resolves update selected-size display backing without a routine
+Native gather. Unhandled transfers and presentation fallback reconstruct a
+current Native image when needed. The presenter still copies completed output
+into its own storage before reuse. Downscale filtering, full tile publication,
+FXAA and presentation acceptance remain Step 5 work.
+
+`scale_materialize` counts completed Native reconstructions; `scale_recovery`
+counts transitions to Native continuation and logs their reason. Existing
+logical and physical draw counters remain distinct. The production FIFO-engine
+fixture checks 145 eligible draws per preset, one clear per operation, unknown
+routes, utility draws, repeated byte reads, byte writes and depth writes. The
+GPU `vulkan_render_scale --ownership-only` fixture checks physical emissions,
+stale Native poison, exact reconstruction phase, cached Native copies, partial
+writes, feedback sampling, depth/stencil recovery and generation retirement.
+
+A newly linked Windows player (`a4e7a4fea3fd07e23519d9cea8f6b7d70fc8768b62ad2c5bc85d3f5fbf8ffa7c`)
+was checked in short Battle diagnostics on the NUC using the current runtime.
+Scene emissions match logical scene candidates within trace-window boundaries;
+Native emissions match the independent depth-only work.
+
+| Requested/effective scale | Actual present source | Logical scene draws/frame | Scaled engine draws/frame |
+| --- | --- | --- | --- |
+| 50% / 50% | 640x360 | 314.25 | 314.25 |
+| 75% / 75% | 960x540 | 312.24 | 312.24 |
+| 150% / 150% | 1920x1080 | 305.47 | 305.48 |
+
+All three captured intervals recorded zero scale recoveries, Native fallback
+presents and routine materializations, and their player processes exited with
+code 0. Boundary captures were visually inspected. These are 15-second
+instrumented, pending-review diagnostics, with different scene workloads;
+they are not timing comparisons or 60 FPS acceptance. The 150% run also failed
+the overlay-consistency gate, so its timing report was rejected. The first 50%
+attempt timed out at map OCR and hit a shutdown access violation; it was rejected
+before live gameplay. Map recognition was corrected and its rerun completed.
+The full fixture's existing depth/stencil pixel and presented-center failures
+remain open. Local source/artifact hashes, original logs and captures are under
+`analysis/performance/resolution-step4/`.

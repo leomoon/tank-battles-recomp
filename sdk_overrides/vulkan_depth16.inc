@@ -47,6 +47,7 @@ static vk_buffer* tb_depth16_buffer(vk_buffer* b,VkDeviceSize bytes,VkBufferUsag
  return b;
 }
 static u32 tb_vk_depth16(void* user,u32 depth,u32 w,u32 h,u32 format) {
+ if(!tb_vk_scale_native(depth))return 0;
  /* Default on for every OS: Iris Pro 580 (Windows) and the Linux hosts pass
   * the exact vulkan_depth16 fixture; Vulkan's correctly rounded float
   * multiply/add keep the quantization portable. TB_DEPTH_GPU=0 selects the

@@ -8,6 +8,16 @@ __attribute__((weak)) void tb_vk_scale_discard(void) {}
 __attribute__((weak)) void tb_vk_scale_prepare(const tb_scale_layout* layout, unsigned percent)
 { (void)layout; (void)percent; }
 __attribute__((weak)) void tb_vk_scale_unavailable(void) {}
+__attribute__((weak)) void tb_vk_scale_attach(tb_scale_surface surface, u32 native, int depth)
+{ (void)surface; (void)native; (void)depth; }
+__attribute__((weak)) int tb_vk_scale_use(tb_scale_surface color, tb_scale_surface depth, tb_scale_binding* binding)
+{ (void)color; (void)depth; (void)binding; return 0; }
+__attribute__((weak)) int tb_vk_scale_draw_ready(u32 color) { (void)color; return 0; }
+__attribute__((weak)) u32 tb_vk_scale_sample(u32 native) { return native; }
+__attribute__((weak)) int tb_vk_scale_tracked(u32 native) { (void)native; return 0; }
+__attribute__((weak)) int tb_vk_scale_depth_upload(u32 native, tb_scale_rect rect, const u8* rows, u32 pitch)
+{ (void)native;(void)rect;(void)rows;(void)pitch;return 0; }
+__attribute__((weak)) void tb_vk_scale_fallback(const char* reason) { (void)reason; }
 
 __attribute__((weak)) void tb_vk_scale_clear(tb_scale_surface color, tb_scale_surface depth,
         tb_scale_rect rect, unsigned mask, const float rgba[4], float z, unsigned stencil)
@@ -88,7 +98,10 @@ static int tb_scale_overlaps(tb_scale_surface surface, u32 location, u32 offset,
 
 static void tb_scale_forget_route(u32 buffer)
 {
-    if (tb_scale_scene.proven[buffer].tiles) tb_vk_scale_discard();
+    if (tb_scale_scene.proven[buffer].tiles) {
+        tb_vk_scale_fallback("resolve route changed");
+        tb_vk_scale_discard();
+    }
     tb_scale_scene.pending[buffer] = (tb_scale_resolve){0};
     tb_scale_scene.proven[buffer] = (tb_scale_resolve){0};
 }
@@ -195,8 +208,9 @@ static int tb_scale_note_resolve(u32 ss, u32 ds, u32 sx, u32 sy, u32 dx, u32 dy,
          * the entire matching footprint at the scaled display grid. */
         const tb_scale_rect source = {sx - 1, sy - 1, width * 2, height * 2};
         const tb_scale_rect dest = {dx, dy, width, height};
-        if (tb_vk_scale_resolve(draw.color, display, source, dest)) p->scaled_tiles |= tile;
-        return 1;
+        const int scaled=tb_vk_scale_resolve(draw.color, display, source, dest);
+        if (scaled) p->scaled_tiles |= tile;
+        return scaled;
     }
     return 0;
 }
@@ -247,6 +261,10 @@ static int tb_scale_present(u32 buffer, u32 target)
     }
     if (layout.count && layout.count == registered) {
         tb_vk_scale_prepare(&layout, tb_scale_scene.percent);
+        for (u32 i=0;i<g.n_surfaces;++i)
+            if (g.surfaces[i].handle) tb_vk_scale_attach(tb_scale_color_id(&g.surfaces[i]),g.surfaces[i].handle,0);
+        for (u32 i=0;i<g.n_zdepths;++i)
+            if (g.zdepths[i].handle) tb_vk_scale_attach(tb_scale_depth_id(&g.zdepths[i]),g.zdepths[i].handle,1);
         tb_scale_scene.percent = tb_vk_scale_requested();
         tb_scale_scene.waiting = 0;
     } else {

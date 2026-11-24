@@ -41,10 +41,10 @@ int rsx_draw_engine_gpu_blit(u32 sloc, u32 soff, u32 spitch, u32 sx, u32 sy, u32
     const u32 ds = tb_blit_surface(dloc, doff, dpitch, dx, dy, dw, dh, &dsx, &dsy);
     /* A source never rendered on the GPU holds its truth in guest memory. */
     if (ss == ENG_INVALID || ds == ENG_INVALID || ss == ds || !g.surfaces[ss].color_serial) return 0;
-    if (!tb_vk_surface_blit(g.surfaces[ss].handle, ssx, ssy, kx, ky, g.surfaces[ds].handle, dsx, dsy, dw, dh))
-        return 0;
-    if (tb_scale_non_native(tb_scale_scene.percent) &&
-        !tb_scale_note_resolve(ss, ds, ssx, ssy, dsx, dsy, kx, ky, dw, dh)) {
+    const int scaled_resolve=tb_scale_non_native(tb_scale_scene.percent) &&
+        tb_scale_note_resolve(ss, ds, ssx, ssy, dsx, dsy, kx, ky, dw, dh);
+    if (!scaled_resolve) {
+        if (!tb_vk_surface_blit(g.surfaces[ss].handle, ssx, ssy, kx, ky, g.surfaces[ds].handle, dsx, dsy, dw, dh)) return 0;
         const tb_scale_update update = {
             g.surfaces[ds].handle, tb_scale_color_id(&g.surfaces[ds]), {dsx, dsy, dw, dh}
         };

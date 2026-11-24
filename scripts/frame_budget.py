@@ -38,7 +38,8 @@ COUNTER_NAMES = ('queue_submit', 'alloc_memory', 'create_image', 'create_buffer'
                  'scale_skip_alias', 'scale_skip_stencil', 'scale_resource_reject',
                  'scale_present_native', 'scale_present_scaled', 'scale_fallback_present',
                  'depth_materialize', 'depth_materialize_bytes', 'gpu_depth_convert', 'gpu_depth_convert_bytes',
-                 'color_materialize', 'color_materialize_bytes', 'scale_skip_geometry', 'scale_empty_draw')
+                 'color_materialize', 'color_materialize_bytes', 'scale_skip_geometry', 'scale_empty_draw',
+                 'scale_materialize', 'scale_recovery')
 
 
 def materializations(spans):

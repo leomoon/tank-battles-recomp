@@ -204,7 +204,9 @@ int main(void)
     assert(!tb_group_open && !s_eb_pending && !s_eb.sets);
     pixel(a,2,8,255,0,0);pixel(a,10,8,0,255,0);
     draw_color(0,0,1,0);vk_eng_bind_targets(NULL,&b,1,0);draw_color(1,1,0,8);
-    assert(s_eb_pending==1);pixel(a,2,8,0,0,255);pixel(b,10,8,255,255,0);
+    /* Attachment switches end the pass, retaining both immutable draws in
+     * the same bounded submission instead of forcing a fence boundary. */
+    assert(s_eb_pending==2);pixel(a,2,8,0,0,255);pixel(b,10,8,255,255,0);
     if (tb_async_active()) {
         /* An idle walker hands the open batch to the GPU without waiting. */
         vk_eng_bind_targets(NULL,&a,1,0);draw_color(0,1,0,0);assert(s_eb_pending==1);
@@ -225,9 +227,10 @@ int main(void)
     const u8 red[4]={255,0,0,255},green[4]={0,255,0,255};
     vk_eng_texture_upload(NULL,redtex,0,0,1,1,red,4,1);vk_eng_texture_upload(NULL,greentex,0,0,1,1,green,4,1);
     u32 textures[RSX_MAX_TEXTURES]={redtex};rsx_be_sampler_desc samplers[RSX_MAX_TEXTURES]={0};
+    const u32 texture_setup=s_eb_pending;
     vk_eng_bind_pipeline(NULL,texpipe);vk_eng_bind_textures(NULL,textures,samplers,1);draw_color(0,0,0,0);
     textures[0]=greentex;vk_eng_bind_textures(NULL,textures,samplers,1);draw_color(0,0,0,8);
-    assert(s_eb_pending==2);pixel(a,2,8,255,0,0);pixel(a,10,8,0,255,0);
+    assert(s_eb_pending==texture_setup+2);pixel(a,2,8,255,0,0);pixel(a,10,8,0,255,0);
     /* Uploading over a sampled texture completes the earlier draw first. */
     draw_color(0,0,0,0);vk_eng_texture_upload(NULL,greentex,0,0,1,1,red,4,1);draw_color(0,0,0,8);
     pixel(a,2,8,0,255,0);pixel(a,10,8,255,0,0);

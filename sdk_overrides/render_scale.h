@@ -125,6 +125,17 @@ void tb_vk_scale_measure_present(unsigned effective_percent, unsigned width, uns
 void tb_vk_scale_discard(void);
 void tb_vk_scale_prepare(const tb_scale_layout* layout, unsigned percent);
 void tb_vk_scale_unavailable(void);
+void tb_vk_scale_attach(tb_scale_surface surface, uint32_t native, int depth);
+int tb_vk_scale_native(uint32_t native);
+uint32_t tb_vk_scale_sample(uint32_t native);
+void tb_vk_scale_fallback(const char* reason);
+void tb_vk_scale_releasing(uint32_t native);
+int tb_vk_scale_draw_ready(uint32_t color);
+void tb_vk_scale_wrote(uint32_t scaled);
+void tb_vk_scale_native_mutation(uint32_t native, const char* reason);
+int tb_vk_scale_uploaded(uint32_t native, tb_scale_rect rect);
+int tb_vk_scale_tracked(uint32_t native);
+int tb_vk_scale_depth_upload(uint32_t native, tb_scale_rect rect, const uint8_t* packed, uint32_t pitch);
 
 /* Read/mirror bindings use the guest identity, never an engine slot or a
  * Vulkan handle that might have been recycled for a different allocation. */
@@ -142,6 +153,7 @@ void tb_vk_scale_clear(tb_scale_surface color, tb_scale_surface depth, tb_scale_
                        unsigned mask, const float rgba[4], float z, unsigned stencil);
 int tb_vk_scale_bindings(tb_scale_surface color, tb_scale_surface depth, int stencil,
                         tb_scale_binding* binding);
+int tb_vk_scale_use(tb_scale_surface color, tb_scale_surface depth, tb_scale_binding* binding);
 void tb_vk_scale_skip_frame(void);
 void tb_vk_scale_capture(tb_scale_surface color, const char* path);
 int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,

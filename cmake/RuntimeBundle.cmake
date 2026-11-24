@@ -68,6 +68,23 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/generate_gpu.py"
     "${CMAKE_CURRENT_BINARY_DIR}/gpu-fixtures" "${EXECUTION_SDK}" COMMAND_ERROR_IS_FATAL ANY)
 find_package(SDL2 CONFIG REQUIRED)
+add_executable(runtime_render_scale_submission_check
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_scale_submission.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/texture_decode.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/texture_decode_fast.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/gpu-fixtures/hooks.c")
+target_include_directories(runtime_render_scale_submission_check PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${PS3RECOMP_DIR}/include"
+    "${PS3RECOMP_DIR}/libs/video" "${PS3RECOMP_DIR}/libs/video/tests")
+target_link_libraries(runtime_render_scale_submission_check PRIVATE ps3recomp_runtime)
+set_target_properties(runtime_render_scale_submission_check PROPERTIES LINKER_LANGUAGE CXX)
+if(MSVC)
+    target_compile_options(runtime_render_scale_submission_check PRIVATE /UNDEBUG /Gy /Gw)
+    target_link_options(runtime_render_scale_submission_check PRIVATE /OPT:REF)
+else()
+    target_compile_options(runtime_render_scale_submission_check PRIVATE -UNDEBUG)
+endif()
+add_test(NAME runtime_render_scale_submission COMMAND runtime_render_scale_submission_check)
 add_executable(runtime_display_window_check
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/player_window.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/player_settings.cpp")
@@ -174,6 +191,7 @@ add_custom_target(runtime_bundle
       --tool "$<TARGET_FILE:vulkan_depth16>" --tool "$<TARGET_FILE:vulkan_nv3089>" --tool "$<TARGET_FILE:vulkan_render_scale>"
       --tool "$<TARGET_FILE:runtime_display_settings_check>" --tool "$<TARGET_FILE:runtime_display_window_check>"
       --tool "$<TARGET_FILE:runtime_render_scale_check>"
+      --tool "$<TARGET_FILE:runtime_render_scale_submission_check>"
       --tool "$<TARGET_FILE:hle_fixture>" --tool "$<TARGET_FILE:positions_fixture>" --tool "$<TARGET_FILE:hotplug_fixture>"
       --tool "$<TARGET_FILE:keyboard_fixture>" --tool "$<TARGET_FILE:audio_fixture>" --tool "$<TARGET_FILE:cache_fixture>"
       --tool "$<TARGET_FILE:timeline_fixture>" --tool "$<TARGET_FILE:entitlement_fixture>"
@@ -183,6 +201,7 @@ add_custom_target(runtime_bundle
     DEPENDS tank_battles_host_archive tank_battles_boot_archive tank_battles_cpu_boot ps3recomp_runtime
       runtime_cpu_smoke vulkan_draw_groups vulkan_depth16 vulkan_nv3089 vulkan_render_scale
       runtime_display_settings_check runtime_display_window_check runtime_render_scale_check
+      runtime_render_scale_submission_check
       runtime_shader_check
       ${tb_audio_burst_dependency}
       hle_fixture positions_fixture hotplug_fixture keyboard_fixture audio_fixture cache_fixture timeline_fixture entitlement_fixture

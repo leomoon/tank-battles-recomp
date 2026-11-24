@@ -8,6 +8,9 @@ static int tb_vk_color_blit(u32 source, tb_scale_rect source_rect, u32 dest,
 typedef struct {
     u32 handle;
     tb_scale_extent extent;
+    u32 native;
+    u64 serial, native_serial;
+    int authoritative;
 } tb_vk_scale_image;
 
 typedef struct {
@@ -28,6 +31,9 @@ typedef struct {
 static tb_vk_scale_bank tb_scaled;
 static int tb_scale_rejected;
 static unsigned tb_scale_initial_percent;
+static int tb_scale_internal;
+static int tb_vk_scale_materialize(tb_vk_scale_image* image);
+static int tb_vk_scale_restore(void);
 
 __attribute__((weak)) int tb_settings_render_scale(void) { return 100; }
 __attribute__((weak)) void tb_render_scale_fallback(void) {}
@@ -45,7 +51,7 @@ void tb_vk_scale_measure_present(unsigned effective_percent, unsigned width, uns
      * unused scaled/depth path is distinguishable from an older trace schema.
      * Recording is armed later than startup; do not cache a one-time flag. */
     if (tb_frame_budget_on())
-        for (unsigned id=TB_FC_LOGICAL_DRAW; id<=TB_FC_SCALE_EMPTY_DRAW; ++id)
+        for (unsigned id=TB_FC_LOGICAL_DRAW; id<=TB_FC_SCALE_RECOVERY; ++id)
             tb_frame_budget_count(id, 0);
     if (!tb_scale_initial_percent) tb_scale_initial_percent = (unsigned)tb_settings_render_scale();
     const int scaled = effective_percent != 100;
@@ -70,7 +76,13 @@ static void tb_vk_scale_release(tb_vk_scale_bank* bank)
 
 void tb_vk_scale_discard(void)
 {
-    if (tb_scaled.percent) tb_vk_scale_release(&tb_scaled);
+    if (tb_scaled.percent) {
+        if (!tb_vk_scale_restore()) {
+            VK_LOG("cannot reconstruct authoritative render-scale contents during retirement\n");
+            abort();
+        }
+        tb_vk_scale_release(&tb_scaled);
+    }
 }
 
 static void tb_vk_scale_reset(void)
@@ -262,6 +274,8 @@ static u32 tb_vk_scale_display_index(tb_scale_surface id)
     return TB_SCALE_MAX_ROUTES;
 }
 
+#include "vulkan_scale_owner.inc"
+
 int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,
                         tb_scale_rect source, tb_scale_rect dest)
 {
@@ -269,9 +283,20 @@ int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,
     if (route == TB_SCALE_MAX_ROUTES) return 0;
     tb_scaled.display_ready[route] = 0;
     const u32 handle = tb_vk_scale_find_color(color);
-    if (!tb_scaled.rasterized || !handle || handle != tb_scaled.active_color ||
+    if (tb_scale_rejected || !tb_scaled.rasterized || !handle || handle != tb_scaled.active_color ||
         handle != tb_scaled.color[route].handle) return 0;
-    return tb_vk_color_blit(handle, source, tb_scaled.display[route].handle, dest, VK_FILTER_LINEAR);
+    tb_vk_scale_image* output=&tb_scaled.display[route];
+    if (output->native && !output->authoritative) {
+        if (!tb_scale_copy(output->native,output->handle)) {
+            tb_vk_scale_fallback("display initialization");
+            return 0;
+        }
+        output->authoritative=1;
+    }
+    const int ok = tb_vk_color_blit(handle, source, tb_scaled.display[route].handle, dest, VK_FILTER_LINEAR);
+    if (ok) tb_vk_scale_wrote(tb_scaled.display[route].handle);
+    else tb_vk_scale_fallback("scaled resolve rejected");
+    return ok;
 }
 
 void tb_vk_scale_publish(tb_scale_surface display, int complete)
@@ -288,6 +313,9 @@ u32 tb_vk_scale_scanout(tb_scale_surface display)
 
 int tb_vk_scale_patch(tb_scale_surface surface, u32 native, tb_scale_rect rect, int pending)
 {
+    tb_vk_scale_image* owned=tb_scale_native_image(native);
+    if (owned && owned->authoritative) return 1; /* upload callback applied the changed region */
+    if (tb_scale_rejected) return 0;
     const u32 route = tb_vk_scale_display_index(surface);
     if (route != TB_SCALE_MAX_ROUTES) {
         if (!pending && !tb_scaled.display_ready[route]) return 1;
@@ -379,11 +407,14 @@ void tb_vk_scale_clear(tb_scale_surface color, tb_scale_surface depth, tb_scale_
         tb_vk_scale_skip_frame();
         return;
     }
+    if (mask & TB_SCALE_CLEAR_COLOR) tb_vk_scale_wrote(color_handle);
+    if (mask & (TB_SCALE_CLEAR_DEPTH|TB_SCALE_CLEAR_STENCIL)) tb_vk_scale_wrote(tb_scaled.depth.handle);
     if (!host.x && !host.y && host.width == image->w && host.height == image->h) {
         tb_scaled.clear_mask |= mask;
         if (mask & TB_SCALE_CLEAR_STENCIL) tb_scaled.stencil_known = 1;
         if (mask & TB_SCALE_CLEAR_COLOR) tb_scaled.rasterized = 0;
     }
+    if (tb_scale_host_image(color_handle)->authoritative) tb_scaled.rasterized=1;
 }
 
 void tb_vk_scale_capture(tb_scale_surface color, const char* path)

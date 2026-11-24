@@ -26,6 +26,8 @@ static unsigned reads, writes;
 static int rsx_draw_engine_enabled(void) { return 1; }
 static void rsx_draw_engine_guest_read(u32 l,u32 o,u32 p,u32 w,u32 h) { reads++; }
 static void rsx_draw_engine_guest_wrote(u32 l,u32 o,u32 p,u32 w,u32 h) { writes++; }
+void tb_rsx_guest_read_bytes(u32 l,u32 o,u32 bytes) { rsx_draw_engine_guest_read(l,o,bytes,(bytes+3u)/4u,1); }
+void tb_rsx_guest_wrote_bytes(u32 l,u32 o,u32 bytes) { rsx_draw_engine_guest_wrote(l,o,bytes,(bytes+3u)/4u,1); }
 static int rsx_tiled_read(const void* m,u32 l,u32 o,void* d,u32 n) {
     if (l>1 || (uint64_t)o+n>8192) return 0;
     memcpy(d,memory[l]+o,n);return 1;
@@ -63,7 +65,13 @@ int main(int argc,char** argv) {
     if(reads || writes)return 10;
     tb_m2mf_method(0x328,0);
     if(memcmp(expected,memory,sizeof(memory)))return 11;
-    if(test<5 && (reads!=rows || writes!=rows))return 12;
+    unsigned expected_reads=rows;
+    for(u32 y=0;y<rows;y++) {
+        u32 off=dst+(int64_t)y*dp;
+        u32 width=(n-1u)*di+1u;
+        expected_reads+=di!=1 || (off&3u) || (width&3u);
+    }
+    if(test<5 && (reads!=expected_reads || writes!=rows))return 12;
     if(test>=5 && writes)return 13;
     return 0;
 }

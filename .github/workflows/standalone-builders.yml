@@ -310,6 +310,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Display settings fixture failed" }
           & "$b\runtime\bin\runtime_render_scale_check.exe"
           if ($LASTEXITCODE -ne 0) { throw "Render scale geometry fixture failed" }
+          & "$b\runtime\bin\runtime_render_scale_submission_check.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Render scale submission fixture failed" }
           $env:SDL_VIDEODRIVER = 'dummy'
           $env:TB_SETTINGS_FILE = "$($settingsChecks.FullName)\window.ini"
           $env:PS3RECOMP_FULLSCREEN = '0'

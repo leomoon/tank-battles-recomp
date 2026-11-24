@@ -31,7 +31,8 @@ static const u8* tb_color_readback_rows(const eng_surface* s,u32 x,u32 y,u32 w,u
 {
  const char* enabled=getenv("TB_COLOR_READBACK_CACHE");
  const u64 bytes=(u64)s->w*s->h*bpp;
- if(!enabled || strcmp(enabled,"1") || !s->color_serial || !bytes || bytes>(32u<<20) ||
+ const int cache_owned=!enabled && tb_vk_scale_tracked(s->handle);
+ if((!cache_owned && (!enabled || strcmp(enabled,"1"))) || !s->color_serial || !bytes || bytes>(32u<<20) ||
     x>s->w || w>s->w-x || y>s->h || h>s->h-y)return 0;
  const int hit=tb_color_readback.serial==s->color_serial && tb_color_readback.handle==s->handle &&
   tb_color_readback.location==s->location && tb_color_readback.offset==s->offset &&

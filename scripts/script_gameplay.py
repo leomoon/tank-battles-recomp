@@ -42,7 +42,8 @@ def default_battle_map(text):
  # heading's animated letters. This does not establish live gameplay.
  normalized=' '.join(text.upper().split())
  return bool(re.search(r'FIELD [O0]F WAR [I1]',normalized) and
-             ('CONFIRM' in normalized or 'ELECT MAP' in normalized) and 'BACK' in normalized)
+             (('CONFIRM' in normalized or 'ELECT MAP' in normalized) and 'BACK' in normalized or
+              'PACK 1' in normalized and 'PACK 2' in normalized))
 
 
 def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=False):

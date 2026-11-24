@@ -198,10 +198,10 @@ static void check_raster_geometry(const tb_scale_layout* group)
         vk_eng_clear_color(NULL,color,red);
         vk_eng_set_scissor(NULL,0,0,1,1);
         tb_vk_set_depth_bias(NULL,1,0,24); // An empty draw needs no depth-bias fallback.
-        const u32 pending=s_eb_pending, sets=s_eb.sets, mirrors=tb_group_mirror_count;
+        const u32 pending=s_eb_pending, sets=s_eb.sets;
         const VkDeviceSize vertex_head=s_eb.vb_head;
         vk_eng_draw(NULL,RSX_TOPOLOGY_TRIANGLES,scale_triangle,3,16,NULL,0);
-        assert(s_eb_pending==pending && s_eb.sets==sets && tb_group_mirror_count==mirrors && s_eb.vb_head==vertex_head);
+        assert(s_eb_pending==pending && s_eb.sets==sets && s_eb.vb_head==vertex_head);
         assert(tb_scaled.active_color==color && tb_scaled.rasterized);
         scale_pixel(color,0,0,255,0,0);
     }
@@ -248,7 +248,6 @@ static void check_scaled_batch_switches(u32 native, u32 native_z, u32 scaled, u3
         vk_eng_bind_targets(NULL, &scaled, 1, scaled_z);
         scale_draw(scale_triangle, 3, right, !right, right, .5f);
         assert(s_eb_pending == (2 * (i + 1)) % 64);
-        assert(tb_group_mirror_count == (i + 1) % 32);
     }
     scale_pixel(native, 2, 2, 255, 0, 0);
     scale_pixel(native, 8, 2, 0, 0, 255);
@@ -278,22 +277,22 @@ static void check_scaled_batch_switches(u32 native, u32 native_z, u32 scaled, u3
         scale_pixel(targets[1-i], i ? 2 : 4, i ? 2 : 4, 0, i ? 0 : 255, 255);
     }
     vk_eng_bind_textures(NULL, textures, samplers, 0);
-    // A Native draw may sample a queued mirror without changing its target.
+    // A Native draw may sample a preceding scaled attachment.
     vk_eng_bind_pipeline(NULL, pipe);
     vk_eng_bind_targets(NULL, &native, 1, native_z);
     scale_draw(scale_triangle, 3, 1, 0, 0, 0);
     vk_eng_bind_targets(NULL, &scaled, 1, scaled_z);
     scale_draw(scale_triangle, 3, 0, 1, 1, .5f);
-    assert(tb_group_mirror_count == 1);
+    assert(tb_group_open && s_eb_pending);
     textures[0] = views[1];
     vk_eng_bind_textures(NULL, textures, samplers, 1);
     vk_eng_bind_pipeline(NULL, sampled_pipe);
     vk_eng_bind_targets(NULL, &native, 1, native_z);
     scale_draw(scale_triangle, 3, 0, 0, 0, 0);
-    assert(!tb_group_mirror_count && s_eb_pending == 1);
+    assert(s_eb_pending == 1);
     scale_pixel(native, 2, 2, 0, 255, 255);
 
-    // Mutating a shared asset must replay old mirrors before its upload.
+    // Mutating a shared asset must complete preceding draws before its upload.
     const u32 asset = vk_eng_texture_create(NULL, RSX_BE_FMT_R8G8B8A8, 1, 1, 1, 1, 0xaae4, 0x85);
     const u8 red[] = {255, 0, 0, 255}, green[] = {0, 255, 0, 255};
     assert(asset);
@@ -309,10 +308,10 @@ static void check_scaled_batch_switches(u32 native, u32 native_z, u32 scaled, u3
         vk_eng_bind_pipeline(NULL, sampled_pipe);
         vk_eng_bind_targets(NULL, &scaled, 1, scaled_z);
         scale_draw(scale_triangle, 3, 0, 0, 0, .5f);
-        assert(tb_group_mirror_count == 1);
+        assert(tb_group_open && s_eb_pending);
         if (!half) {
             vk_eng_texture_upload(NULL, asset, 0, 0, 1, 1, green, 4, 1);
-            assert(!tb_group_mirror_count);
+            assert(!tb_group_open);
         }
     }
     scale_pixel(scaled, 4, 4, 255, 0, 0);
@@ -508,10 +507,13 @@ static void check_scaled_raster(const tb_scale_layout* group)
     vk_eng_color_target_release(NULL, native);
 }
 
+#include "vulkan_scale_ownership.inc"
+
 int main(int argc, char** argv)
 {
     const int geometry_only = argc==2 && !strcmp(argv[1],"--geometry-only");
-    assert(argc==1 || geometry_only);
+    const int ownership_only = argc==2 && !strcmp(argv[1],"--ownership-only");
+    assert(argc==1 || geometry_only || ownership_only);
     check_scale_geometry();
     const unsigned presets[] = {50, 75, 100, 150, 200, 300};
     setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 1);
@@ -538,6 +540,13 @@ int main(int argc, char** argv)
     for (u32 i = 0; i < group.count; ++i) {
         group.routes[i].color = (tb_scale_surface){0, 0x2000+i*0x1000, 44, RSX_BE_FMT_R8G8B8A8, 2+i, {11, 7}};
         group.routes[i].display = (tb_scale_surface){0, 0x5000+i*0x1000, 24, RSX_BE_FMT_R8G8B8A8, 5+i, {6, 4}};
+    }
+    if (ownership_only) {
+        for (unsigned i=0;i<6;++i) check_ownership(group,presets[i]);
+        vk_eng_shutdown(NULL);
+        assert(!live_objects());
+        puts("PASS: authoritative ownership, stale Native poison, cached materialization, partial writes, aliases and Native recovery at all six presets");
+        return 0;
     }
     tb_vk_scale_prepare(&group, 100);
     assert(!tb_scaled.percent && live_objects() == baseline);

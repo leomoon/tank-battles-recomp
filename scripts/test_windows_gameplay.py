@@ -10,6 +10,13 @@ from build_identity import measurement_build, read_command_log
 
 
 class BuildTests(unittest.TestCase):
+    def test_low_resolution_map_ocr_keeps_map_and_pack_evidence(self):
+        from script_gameplay import default_battle_map
+        self.assertTrue(default_battle_map('SEECT MAP PACK 1 COUNTRY MIPS FIELD OF WAR 1 COWR FIELDS CROSSOVER PACK 2 MILITARY X ZONE'))
+        self.assertTrue(default_battle_map('SELECT MAP FIELD OF WAR 1 CONFIRM BACK'))
+        self.assertFalse(default_battle_map('FIELD OF WAR 1'))
+        self.assertFalse(default_battle_map('PACK 1 PACK 2 X ZONE'))
+        self.assertFalse(default_battle_map('FIELD OF WAR 1 PACK 1'))
     def test_render_scale_is_forwarded_to_native_and_repeat_commands(self):
         from script_gameplay import main
         from port import ROOT

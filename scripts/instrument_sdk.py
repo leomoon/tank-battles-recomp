@@ -510,12 +510,19 @@ def main():
                             (o->w == extent.width && o->h == extent.height) ? VK_FILTER_NEAREST'''),
     ('/* Pixels a 2D transfer put into guest memory', '''static void vk_eng_present(void* user, u32 surface)
 {
+    if (!tb_vk_scale_native(surface)) return;
     vk_eng_present_source(user, surface, 0);
 }
 
 int tb_vk_scale_present(u32 native, u32 scaled)
 {
     if (!s_vk.device) return 0;
+    const vk_eng_obj* image=vk_eng_get(scaled,VK_ENG_COLOR);
+    if (!image) return 0;
+    pthread_mutex_lock(&s_vk.present_mu);
+    const int ready=tb_present_prepare_scaled(image->w,image->h);
+    pthread_mutex_unlock(&s_vk.present_mu);
+    if (!ready) return 0;
     vk_eng_present_source(NULL, native, scaled);
     return 1;
 }
@@ -534,6 +541,34 @@ int tb_vk_scale_present(u32 native, u32 scaled)
      '    o->kind = VK_ENG_COLOR; o->snapshot = 1;\n    o->guest_size = t->guest_size; o->scale_percent = t->scale_percent;\n    o->fmt = t->fmt;'),
     ('static int vk_eng_init(void* user, u32 width, u32 height)', 'static void tb_vk_scale_reset(void);\nstatic int vk_eng_init(void* user, u32 width, u32 height)'),
     ('    memset(s_eobj, 0, sizeof s_eobj);', '    tb_vk_scale_reset();\n    memset(s_eobj, 0, sizeof s_eobj);'),
+    ('    if (s_eobj[handle].kind == VK_ENG_COLOR)\n        for',
+     '    tb_vk_scale_releasing(handle);\n    if (s_eobj[handle].kind == VK_ENG_COLOR)\n        for'),
+    ('    vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);\n    if (!o || !out',
+     '    if (!tb_vk_scale_native(surface)) return;\n    vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);\n    if (!o || !out'),
+    ('    const vk_eng_obj* t = vk_eng_get(surface, VK_ENG_COLOR);',
+     '    surface = tb_vk_scale_sample(surface);\n    const vk_eng_obj* t = vk_eng_get(surface, VK_ENG_COLOR);'),
+    ('    vk_eng_obj* t = vk_eng_get(surface, VK_ENG_COLOR);',
+     '    surface = tb_vk_scale_sample(surface);\n    vk_eng_obj* t = vk_eng_get(surface, VK_ENG_COLOR);'),
+    ('static VkImageView vk_eng_sample_view(u32 handle, int want_cube)\n{',
+     '''static VkImageView vk_eng_sample_view(u32 handle, int want_cube)
+{
+    if (handle && handle<VK_ENG_MAX_OBJ && s_eobj[handle].kind==VK_ENG_VIEW) {
+        const vk_eng_obj* view=&s_eobj[handle];
+        if (tb_vk_scale_sample(view->surface)!=view->surface)
+            handle=vk_eng_surface_view(NULL,view->surface,view->remap,view->rsx_fmt);
+    } else handle=tb_vk_scale_sample(handle);'''),
+    ('    vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);\n    if (!z || !out',
+     '    if (!tb_vk_scale_native(depth)) return -1;\n    vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);\n    if (!z || !out'),
+    ('static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)\n{',
+     'static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)\n{\n    if (!tb_vk_scale_native(depth)) return 0;'),
+    ('    vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);\n    if (!o) return;\n    const int batched',
+     '    tb_vk_scale_native_mutation(surface,"Native color clear");\n    vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);\n    if (!o) return;\n    const int batched'),
+    ('    vk_eng_obj* o = vk_eng_get(depth, VK_ENG_DEPTH);\n    VkImageAspectFlags aspect',
+     '    tb_vk_scale_native_mutation(depth,"Native depth/stencil clear");\n    vk_eng_obj* o = vk_eng_get(depth, VK_ENG_DEPTH);\n    VkImageAspectFlags aspect'),
+    ('    vk_eng_upload_region(o->im.img, 0, 0, x, y, w, h, (size_t)w * o->bpp, h, rows, row_bytes);',
+     '''    vk_eng_upload_region(o->im.img, 0, 0, x, y, w, h, (size_t)w * o->bpp, h, rows, row_bytes);
+    if (!tb_vk_scale_uploaded(surface,(tb_scale_rect){x,y,w,h}))
+        vk_eng_upload_region(o->im.img, 0, 0, x, y, w, h, (size_t)w * o->bpp, h, rows, row_bytes);'''),
     ('    vk_eng2_shutdown(user);', '    tb_vk_scale_reset();\n    vk_eng2_shutdown(user);'),
     ('static VkImageView vk_eng_scratch_depth(u32 w, u32 h)',
      '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/vulkan_render_scale.inc')+'"\nstatic VkImageView vk_eng_scratch_depth(u32 w, u32 h)'),
@@ -580,6 +615,11 @@ int tb_vk_scale_present(u32 native, u32 scaled)
             return;
         }
     }'''),
+    ('    /* Targets: every member of a set is target A\'s size (engine contract). */',
+     '''    for (u32 i=0;i<s_eng_bound.nrt;++i)
+        tb_vk_scale_native_mutation(s_eng_bound.rt[i],"Native raster attachment");
+    tb_vk_scale_native_mutation(s_eng_bound.depth,"Native raster depth attachment");
+    /* Targets: every member of a set is target A's size (engine contract). */'''),
     ('''    VkRect2D sc = { { 0, 0 }, { w, h } };
     if (s_e2.have_sc) {                       /* clamped: Vulkan rejects negative or over-size */
         u32 x0 = s_e2.sc[0] < w ? s_e2.sc[0] : w, y0 = s_e2.sc[1] < h ? s_e2.sc[1] : h;
@@ -600,8 +640,12 @@ int tb_vk_scale_present(u32 native, u32 scaled)
      '''.depth_bias=s_e2.depth_bias,
         .depth_slope=rt0->scale_percent
             ? tb_scaled_slope : s_e2.depth_slope,'''),
-    ('    else tb_group_emit(&draw);', '    else tb_group_emit(&draw);\n'
-     '    if (rt0->scale_percent && s_eng_bound.rt[0] == tb_scaled.active_color) tb_scaled.rasterized = 1;'),
+    ('    tb_group_emit(&draw);', '    tb_group_emit(&draw);\n'
+     '    if (rt0->scale_percent && s_eng_bound.rt[0] == tb_scaled.active_color) {\n'
+     '        tb_scaled.rasterized = 1;\n'
+     '        if (P->rs.color_mask) tb_vk_scale_wrote(s_eng_bound.rt[0]);\n'
+     '        if ((P->rs.depth_test && P->rs.depth_write) || P->rs.stencil_enable) tb_vk_scale_wrote(s_eng_bound.depth);\n'
+     '    }'),
    ]
    for before,after in install_scale:
     if text.count(before)!=1:raise SystemExit('Vulkan render-scale anchor mismatch: '+before)
@@ -624,8 +668,28 @@ int tb_vk_scale_present(u32 native, u32 scaled)
      '''    const u32 tb_scale_slot = nslots + (s_dbz.unit ? 2u : 1u);
     const u32 fp_bytes = (tb_scale_slot + (tb_scale_non_native(tb_scale_scene.percent) ? 1u : 0u)) * 16u;'''),
     ('static void sink_end(void* user', '#include "'+str(scale_raster)+'"\n\nstatic void sink_end(void* user'),
-    ('    const u32 uploaded = indexed', '    tb_scale_note_draw(&sf, target, zslot);\n    const u32 uploaded = indexed'),
-    ('    /* Counted only when the draw ran', '''    if (tb_frame_budget_on()) {
+    ('void rsx_draw_engine_guest_wrote(u32 location',
+     '#include "'+str(scale_path.with_name('rsx_scale_guest_write.inc'))+'"\nvoid rsx_draw_engine_guest_wrote(u32 location'),
+    ('    if (!g.be->color_target_write) return;',
+     '    if (tb_scale_depth_guest_write(location,offset,pitch,w,h)) return;\n    if (!g.be->color_target_write) return;'),
+    ('    const u32 uploaded = indexed', '''    tb_scale_note_draw(&sf, target, zslot);
+    tb_scale_binding selected;
+    const int scaled_draw = tb_scale_draw_binding(target, zslot, n_targets, &rs, tex_mask, vtex_mask, &selected);
+    if (scaled_draw) {
+        float* scale = (float*)(g.fp_cb + tb_scale_slot * 16u);
+        scale[0] = selected.guest_per_host_x;
+        scale[1] = selected.guest_per_host_y;
+        g.be->bind_ps_constants(g.be->user, g.fp_cb, fp_bytes);
+        g.be->bind_targets(g.be->user, &selected.color, 1, selected.depth);
+    }
+    const u32 uploaded = indexed'''),
+    ('    /* Counted only when the draw ran', '''    if (scaled_draw) {
+        float* scale = (float*)(g.fp_cb + tb_scale_slot * 16u);
+        scale[0] = scale[1] = 0;
+        g.be->bind_ps_constants(g.be->user, g.fp_cb, fp_bytes);
+        g.be->bind_targets(g.be->user, handles, n_targets, depth_handle);
+    }
+    if (tb_frame_budget_on()) {
         tb_frame_budget_count(TB_FC_LOGICAL_DRAW, 1);
         if (sf.color_target == CELL_GCM_SURFACE_TARGET_NONE)
             tb_frame_budget_count(TB_FC_LOGICAL_DEPTH_ONLY, 1);
@@ -639,21 +703,9 @@ int tb_vk_scale_present(u32 native, u32 scaled)
             }
         }
     }
-    tb_scale_binding mirror;
-    if (tb_scale_mirror_binding(target, zslot, n_targets, &rs, tex_mask, vtex_mask, &mirror)) {
-        float* scale = (float*)(g.fp_cb + tb_scale_slot * 16u);
-        scale[0] = mirror.guest_per_host_x;
-        scale[1] = mirror.guest_per_host_y;
-        g.be->bind_targets(g.be->user, &mirror.color, 1, mirror.depth);
-        g.be->bind_ps_constants(g.be->user, g.fp_cb, fp_bytes);
-        g.be->draw(g.be->user, topology, dc.verts, uploaded, layout.stride,
-                   indexed ? g.indices : NULL, indexed ? n_draw : 0);
-        scale[0] = scale[1] = 0.0f;
-        g.be->bind_ps_constants(g.be->user, g.fp_cb, fp_bytes);
-        g.be->bind_targets(g.be->user, handles, n_targets, depth_handle);
-    }
     /* Counted only when the draw ran'''),
-    ('\n}\n\n/* Resolve a flip', '\n    tb_scale_mirror_clear(&sf, targets[0], n_targets, mask);\n}\n\n/* Resolve a flip'),
+    ('    rsx_dsp_get_surface(&g.rsx, &sf);\n    if (mask & (RSX_CLEAR_COLOR_R',
+     '    rsx_dsp_get_surface(&g.rsx, &sf);\n    if (tb_scale_clear_route(&sf, targets, n_targets, mask)) return;\n    if (mask & (RSX_CLEAR_COLOR_R'),
     ('''            } else
                 g.be->clear_color(g.be->user, s->handle, rgba);
             wrote = 1;''', '''            } else {
@@ -675,6 +727,22 @@ int tb_vk_scale_present(u32 native, u32 scaled)
     tb_scanout_sample(buffer_id,target,g.surfaces[target].offset);'''),
     ('    g.be->present(g.be->user, g.surfaces[target].handle);', '    tb_scanout_present(buffer_id, target);'),
     ('    g.ready = 1;', '    memset(&tb_scale_scene, 0, sizeof tb_scale_scene);\n    tb_scale_scene.percent = tb_vk_scale_requested();\n    g.ready = 1;'),
+    ('        /* A vertex unit has no crossbar, so its remap is the identity. */',
+     '''        if (tb_scale_non_native(tb_scale_scene.percent)) {
+            for (u32 i=0;i<g.n_surfaces;++i)
+                if (g.surfaces[i].handle && g.surfaces[i].location==vt.location && g.surfaces[i].offset==vt.offset) {
+                    if (tb_vk_scale_sample(g.surfaces[i].handle)!=g.surfaces[i].handle)
+                        tb_vk_scale_fallback("vertex color observer");
+                    eng_surface_to_guest(i);
+                }
+            for (u32 i=0;i<g.n_zdepths;++i)
+                if (g.zdepths[i].handle && g.zdepths[i].location==vt.location && g.zdepths[i].offset==vt.offset) {
+                    if (tb_vk_scale_sample(g.zdepths[i].handle)!=g.zdepths[i].handle)
+                        tb_vk_scale_fallback("vertex depth observer");
+                    eng_zdepth_to_guest(i);
+                }
+        }
+        /* A vertex unit has no crossbar, so its remap is the identity. */'''),
    ]
    for before,after in install_scale:
     if text.count(before)!=1:raise SystemExit('RSX render-scale anchor mismatch: '+before)
@@ -741,7 +809,7 @@ notify_scale:
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['render_scale.h','vulkan_render_scale.inc','vulkan_present_image.inc','fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_depth_bias.inc','vulkan_fxaa.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['render_scale.h','render_scale_shader.h','rsx_render_scale.inc','rsx_scale_raster.inc','rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['render_scale.h','vulkan_render_scale.inc','vulkan_scale_owner.inc','vulkan_present_image.inc','fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_depth_bias.inc','vulkan_fxaa.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['render_scale.h','render_scale_shader.h','rsx_render_scale.inc','rsx_scale_raster.inc','rsx_scale_guest_write.inc','rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}

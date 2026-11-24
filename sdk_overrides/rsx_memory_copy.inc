@@ -1,4 +1,6 @@
 #include "depth_cost_trace.h"
+void tb_rsx_guest_wrote_bytes(u32 location,u32 offset,u32 bytes);
+void tb_rsx_guest_read_bytes(u32 location,u32 offset,u32 bytes);
 /* Tank Battles uses NV0039 on subchannel 1 without SET_OBJECT commands.
  * These registers describe byte columns, not pixels or an endian conversion.
  * Keep this source in the port; instrument_sdk.py includes it in the pinned SDK. */
@@ -45,17 +47,21 @@ static void tb_m2mf_copy(void)
     for (u32 y = 0; y < rows; ++y) {
         const u32 off = (u32)((int64_t)tb_m2mf.src + (int64_t)y * sp);
         if (rsx_draw_engine_enabled())
-            rsx_draw_engine_guest_read(sl, off, (u32)sw, ((u32)sw + 3u) / 4u, 1);
+            tb_rsx_guest_read_bytes(sl,off,(u32)sw);
         if (!rsx_tiled_read(&s_gcm_mem, sl, off, row, (u32)sw)) goto done;
         for (u32 x = 0; x < n; ++x) snapshot[(size_t)y * n + x] = row[(size_t)x * si];
     }
     for (u32 y = 0; y < rows; ++y) {
         const u32 off = (u32)((int64_t)tb_m2mf.dst + (int64_t)y * dp);
+        if (rsx_draw_engine_enabled() && (di!=1 || (off&3u) || (dw&3u))) {
+            const u32 aligned=off&~3u, pixels=((u32)dw+(off&3u)+3u)/4u;
+            tb_rsx_guest_read_bytes(dl,aligned,pixels*4);
+        }
         if (di != 1 && !rsx_tiled_read(&s_gcm_mem, dl, off, row, (u32)dw)) goto done;
         for (u32 x = 0; x < n; ++x) row[(size_t)x * di] = snapshot[(size_t)y * n + x];
         if (!rsx_tiled_write(&s_gcm_mem, dl, off, row, (u32)dw)) goto done;
         if (rsx_draw_engine_enabled())
-            rsx_draw_engine_guest_wrote(dl, off, (u32)dw, ((u32)dw + 3u) / 4u, 1);
+            tb_rsx_guest_wrote_bytes(dl,off,(u32)dw);
     }
     { static const char* trace; static int initialized; static unsigned count;
       if (!initialized) { trace = getenv("TB_RSX_TEXTURE_CAPTURE"); initialized = 1; }

@@ -310,6 +310,8 @@ static int tb_vk_blit_exact(void)
 /* Engine entry (gpu_blit_engine.inc): 1 when the copy was recorded. */
 int tb_vk_surface_blit(u32 src, u32 sx, u32 sy, u32 kx, u32 ky, u32 dst, u32 dx, u32 dy, u32 dw, u32 dh)
 {
+    if (!tb_vk_scale_native(src)) return 0;
+    tb_vk_scale_native_mutation(dst,"point transfer into an authoritative attachment");
     if (!s_vk.device || !s_vk.eng_active || !tb_vk_blit_exact()) return 0;
     return tb_vk_gather_record(src, sx, sy, kx, ky, dst, dx, dy, dw, dh);
 }

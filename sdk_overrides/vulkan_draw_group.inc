@@ -6,7 +6,6 @@
 static VkFramebuffer tb_group_framebuffer;
 static VkRenderPass tb_group_renderpass;
 static int tb_group_open;
-static int tb_group_scaled;
 static u32 tb_group_color, tb_group_depth, tb_group_targets;
 typedef struct tb_group_draw {
     VkFramebuffer framebuffer;
@@ -22,12 +21,10 @@ typedef struct tb_group_draw {
     u32 vertex_count, index_count, stencil, color, depth, render_scale;
     float depth_bias, depth_slope, depth_min, depth_max;
 } tb_group_draw;
-static tb_group_draw tb_group_mirrors[64];
-static u32 tb_group_mirror_count;
 
 static void tb_group_emit(const tb_group_draw* draw)
 {
-    /* Count at emission, including deferred replay, rather than enqueue time.
+    /* Count at physical emission, rather than enqueue time.
      * Auxiliary backend draws remain in TB_FC_DRAW, outside these engine counts. */
     tb_frame_budget_count(draw->render_scale
         ? TB_FC_ENGINE_SCALED_DRAW : TB_FC_ENGINE_NATIVE_DRAW, 1);
@@ -46,12 +43,6 @@ static void tb_group_emit(const tb_group_draw* draw)
     } else pvkCmdDraw(s_vk.cmd,draw->vertex_count,1,0,0);
 }
 
-static int tb_group_mirror_reads(u32 handle)
-{
-    for(u32 i=0;i<tb_group_mirror_count;++i)
-        if(handle==tb_group_mirrors[i].color || handle==tb_group_mirrors[i].depth)return 1;
-    return 0;
-}
 /* Read once: this is asked several times per draw, and getenv was about 6% of
  * the walker's samples once the GPU waits were gone. */
 static int tb_group_on(void)
@@ -64,27 +55,5 @@ static void tb_group_end(void)
 {
     if(tb_group_open)pvkCmdEndRenderPass(s_vk.cmd);
     tb_group_open=0;tb_group_framebuffer=VK_NULL_HANDLE;tb_group_renderpass=VK_NULL_HANDLE;
-    tb_group_scaled=0;
     tb_group_color=tb_group_depth=tb_group_targets=0;
-    if(!tb_group_mirror_count)return;
-    /* All descriptors and ring slices live until the same batch fence. Replay
-     * mirrors before any upload, clear, consumer or slot reuse can mutate them.
-     * They share one scaled framebuffer, with no attachment texture feedback. */
-    const VkMemoryBarrier barrier={
-        .sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-        .srcAccessMask=VK_ACCESS_MEMORY_WRITE_BIT,
-        .dstAccessMask=VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT
-    };
-    pvkCmdPipelineBarrier(s_vk.cmd,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,1,&barrier,0,NULL,0,NULL);
-    const tb_group_draw* first=&tb_group_mirrors[0];
-    const VkRenderPassBeginInfo begin={
-        .sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-        .renderPass=first->renderpass,.framebuffer=first->framebuffer,
-        .renderArea={{0,0},first->extent}
-    };
-    pvkCmdBeginRenderPass(s_vk.cmd,&begin,VK_SUBPASS_CONTENTS_INLINE);
-    for(u32 i=0;i<tb_group_mirror_count;++i)tb_group_emit(&tb_group_mirrors[i]);
-    pvkCmdEndRenderPass(s_vk.cmd);
-    tb_group_mirror_count=0;
 }
