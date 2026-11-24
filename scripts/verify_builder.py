@@ -82,6 +82,54 @@ def build(work: Path, elf: Path, output: Path) -> Path:
     return output / player_folder.launcher_name()
 
 
+def verify_played(folder: Path, result: subprocess.CompletedProcess, expected_display: str) -> None:
+    logs = sorted((folder / "logs").glob("session-*.log"))
+    text = logs[-1].read_text(errors="replace") if logs else ""
+    if "[milestone] first guest dispatch" not in text or expected_display not in text:
+        raise SystemExit(f"The synthetic player did not apply the saved display settings "
+                         f"(exit {result.returncode}):\n"
+                         f"{text[-4000:] if logs else 'no session log'}\n{result.stdout}{result.stderr}")
+
+
+def display_preferences(launcher: Path, environment: dict, window_driver: str) -> None:
+    folder = launcher.parent
+    settings = folder / "game/settings.ini"
+    settings.write_text("antialiasing = 1\noverlay = 1\nwindow_width = 1100\nwindow_height = 700\n")
+    preserved = {"antialiasing": 1, "overlay": 1, "window_width": 1100, "window_height": 700}
+
+    def scenario(name):
+        result = subprocess.run([str(launcher)], capture_output=True, encoding="utf-8", errors="replace",
+                                env=dict(environment, SDL_VIDEODRIVER=window_driver,
+                                         TB_LAUNCHER_DISPLAY_SMOKE=name), timeout=120)
+        if "Display smoke did not complete" in result.stderr:
+            raise SystemExit(f"Launcher display navigation failed ({name}): {result.stderr}")
+        return result
+
+    def check(expected):
+        values = dict(line.split("=", 1) for line in settings.read_text().splitlines() if "=" in line)
+        values = {key.strip(): int(value) for key, value in values.items()}
+        if values != preserved | expected:
+            raise SystemExit(f"Unexpected saved display settings: {values}")
+
+    started = time.monotonic()
+    result = scenario("save")
+    check({"fullscreen": 1, "render_scale": 150, "window_preset": 0})
+    verify_played(folder, result, "[display preferences] mode=borderless render_scale=150% window_preset=0x0")
+    saved = settings.read_bytes()
+    cancelled = scenario("cancel")
+    if cancelled.returncode or settings.read_bytes() != saved:
+        raise SystemExit(f"Cancel changed the saved settings: {cancelled.stdout}{cancelled.stderr}")
+    defaults = scenario("defaults")
+    if defaults.returncode:
+        raise SystemExit(f"Restore defaults failed: {defaults.stdout}{defaults.stderr}")
+    check({"fullscreen": 0, "render_scale": 100, "window_preset": 0})
+    result = scenario("preset")
+    check({"fullscreen": 0, "render_scale": 200, "window_preset": 720})
+    verify_played(folder, result, "[display preferences] mode=windowed render_scale=200% window_preset=1280x720")
+    print(f"[verify] launcher saved, cancelled and restored display settings and started players with "
+          f"borderless/150% and windowed/200% preferences ({time.monotonic() - started:.1f}s)")
+
+
 def launch(launcher: Path, window_driver: str = "dummy") -> None:
     folder = launcher.parent
     environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE",
@@ -102,15 +150,7 @@ def launch(launcher: Path, window_driver: str = "dummy") -> None:
     if f"[launcher] SDL video driver: {window_driver}" not in window.stderr:
         raise SystemExit(f"Launcher did not use the requested {window_driver} backend: {window.stderr}")
     print(f"[verify] launcher rendered all seven screens using {window_driver}")
-    started = time.monotonic()
-    offline = subprocess.run([str(launcher), "--offline"], capture_output=True,
-                             encoding="utf-8", errors="replace", timeout=120, env=environment)
-    logs = sorted((folder / "logs").glob("session-*.log"))
-    text = logs[-1].read_text(errors="replace") if logs else ""
-    if "[milestone] first guest dispatch" not in text:
-        raise SystemExit(f"The synthetic player did not run its translated code (exit {offline.returncode}):\n"
-                         f"{text[-4000:] if logs else 'no session log'}\n{offline.stdout}{offline.stderr}")
-    print(f"[verify] launcher started the player, which ran translated code ({time.monotonic() - started:.1f}s)")
+    display_preferences(launcher, environment, window_driver)
 
 
 def audit_player(launcher: Path, source: str) -> None:

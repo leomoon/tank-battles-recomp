@@ -31,6 +31,14 @@ target_include_directories(runtime_display_settings_check PRIVATE "${CMAKE_CURRE
 target_link_libraries(runtime_display_settings_check PRIVATE Threads::Threads)
 add_test(NAME runtime_display_settings COMMAND runtime_display_settings_check
     "${CMAKE_CURRENT_BINARY_DIR}/display-settings-test")
+add_executable(runtime_render_scale_check "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_scale.c")
+target_include_directories(runtime_render_scale_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME runtime_render_scale_geometry COMMAND runtime_render_scale_check)
+if(MSVC)
+    target_compile_options(runtime_render_scale_check PRIVATE /UNDEBUG)
+else()
+    target_compile_options(runtime_render_scale_check PRIVATE -UNDEBUG)
+endif()
 add_executable(runtime_overlay_check "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/overlay.cpp")
 target_include_directories(runtime_overlay_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(runtime_overlay_check PRIVATE tank_battles_host_archive Threads::Threads)
@@ -157,7 +165,9 @@ add_custom_target(runtime_bundle
       --boot "$<TARGET_FILE:tank_battles_boot_archive>" --cpu-boot "$<TARGET_FILE:tank_battles_cpu_boot>"
       --tool "$<TARGET_FILE:runtime_cpu_smoke>" --tool "$<TARGET_FILE:vulkan_draw_groups>"
       --tool "$<TARGET_FILE:runtime_shader_check>"
-      --tool "$<TARGET_FILE:vulkan_depth16>" --tool "$<TARGET_FILE:vulkan_nv3089>"
+      --tool "$<TARGET_FILE:vulkan_depth16>" --tool "$<TARGET_FILE:vulkan_nv3089>" --tool "$<TARGET_FILE:vulkan_render_scale>"
+      --tool "$<TARGET_FILE:runtime_display_settings_check>" --tool "$<TARGET_FILE:runtime_display_window_check>"
+      --tool "$<TARGET_FILE:runtime_render_scale_check>"
       --tool "$<TARGET_FILE:hle_fixture>" --tool "$<TARGET_FILE:positions_fixture>" --tool "$<TARGET_FILE:hotplug_fixture>"
       --tool "$<TARGET_FILE:keyboard_fixture>" --tool "$<TARGET_FILE:audio_fixture>" --tool "$<TARGET_FILE:cache_fixture>"
       --tool "$<TARGET_FILE:timeline_fixture>" --tool "$<TARGET_FILE:entitlement_fixture>"
@@ -165,7 +175,8 @@ add_custom_target(runtime_bundle
       ${tb_audio_burst_tools}
       $<$<BOOL:${TB_BUNDLE_DEPENDENCIES}>:--dependencies> $<$<BOOL:${TB_BUNDLE_DEPENDENCIES}>:${TB_BUNDLE_DEPENDENCIES}>
     DEPENDS tank_battles_host_archive tank_battles_boot_archive tank_battles_cpu_boot ps3recomp_runtime
-      runtime_cpu_smoke vulkan_draw_groups vulkan_depth16 vulkan_nv3089
+      runtime_cpu_smoke vulkan_draw_groups vulkan_depth16 vulkan_nv3089 vulkan_render_scale
+      runtime_display_settings_check runtime_display_window_check runtime_render_scale_check
       runtime_shader_check
       ${tb_audio_burst_dependency}
       hle_fixture positions_fixture hotplug_fixture keyboard_fixture audio_fixture cache_fixture timeline_fixture entitlement_fixture

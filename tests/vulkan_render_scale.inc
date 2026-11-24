@@ -1,3 +1,4 @@
+#include "render_scale_geometry.h"
 /* Exercise the real Vulkan allocator, framebuffer cache, views and rollback. */
 #include <assert.h>
 
@@ -234,29 +235,8 @@ static void check_scaled_raster(const tb_scale_layout* group)
 
 int main(void)
 {
+    check_scale_geometry();
     const unsigned presets[] = {100, 150, 200, 300};
-    const u32 scene_w[] = {2560, 3840, 5120, 7680};
-    const u32 scene_h[] = {1440, 2160, 2880, 4320};
-    const tb_scale_size limit = {8192, 8192};
-    tb_scale_extent extent;
-    for (unsigned i = 0; i < 4; ++i) {
-        assert(tb_scale_extent_make((tb_scale_size){2560, 1440}, presets[i], limit, &extent));
-        assert(extent.host.width == scene_w[i] && extent.host.height == scene_h[i]);
-        assert(tb_scale_extent_make((tb_scale_size){1280, 720}, presets[i], limit, &extent));
-        assert(extent.host.width * 2 == scene_w[i] && extent.host.height * 2 == scene_h[i]);
-    }
-    assert(!tb_scale_extent_make((tb_scale_size){0, 1}, 150, limit, &extent));
-    assert(!tb_scale_extent_make((tb_scale_size){2560, 1440}, 300, (tb_scale_size){4096, 4096}, &extent));
-    assert(!tb_scale_extent_make((tb_scale_size){UINT32_MAX, 1}, 300, (tb_scale_size){UINT32_MAX, UINT32_MAX}, &extent));
-    assert(!tb_scale_extent_make((tb_scale_size){11, 7}, 175, limit, &extent));
-    assert(tb_scale_extent_make((tb_scale_size){11, 7}, 150, limit, &extent));
-    assert(extent.host.width == 17 && extent.host.height == 11);
-    tb_scale_rect left, right;
-    assert(tb_scale_rect_map(extent, (tb_scale_rect){0, 0, 7, 7}, &left));
-    assert(tb_scale_rect_map(extent, (tb_scale_rect){7, 0, 4, 7}, &right));
-    assert(left.width == right.x && right.x + right.width == 17 && right.height == 11);
-    assert(!tb_scale_rect_map(extent, (tb_scale_rect){UINT32_MAX, 1, 2, 1}, &right));
-
     setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 1);
     assert(!vk_init_all(16, 16, "render scale fixture"));
     assert(!vk_eng_init(NULL, 16, 16));

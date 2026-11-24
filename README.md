@@ -15,6 +15,8 @@ Download your platform's builder from [GitHub Releases](https://github.com/leomo
 
 To play again, open **Play Tank Battles** (`Play Tank Battles.exe` on Windows) in the folder you chose. Keep or move the whole folder together. It contains your game, saves, and settings, so keep it private. Rebuilding into the same folder preserves your saves and settings.
 
+Open **Display settings** in the launcher to choose Windowed or Borderless fullscreen, which fills your desktop. Window size controls the window on your desktop. Internal resolution controls detail, from Native (720p, the default) through 1080p, 1440p, and 4K. Higher resolutions use more GPU power. Save your changes before starting the game. If a higher setting is unavailable, the game uses Native and shows a notification. You can also select Native again in Display settings.
+
 ## Source build and credits
 
 Built with ps3recomp, SDL2, and Vulkan. The developer setup, full credits, and third-party licenses are in the [source-build guide](docs/BUILD_FROM_SOURCE.md).

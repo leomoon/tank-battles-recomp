@@ -763,6 +763,14 @@ int tb_player_main(int argc, char** argv)
     }
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
     tb_settings_init();
+    {
+        int width = 0, height = 0;
+        tb_settings_window_preset(&width, &height);
+        const char* full = getenv("PS3RECOMP_FULLSCREEN");
+        if (!full) full = getenv("PS3RECOMP_VK_FULLSCREEN");
+        printf("[display preferences] mode=%s render_scale=%d%% window_preset=%dx%d\n",
+               full && atoi(full) ? "borderless" : "windowed", tb_settings_render_scale(), width, height);
+    }
 
     // Registration-only and probe returns can occur while TLS is connecting.
     // Join the worker before entering the process's static teardown.

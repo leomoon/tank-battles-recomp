@@ -26,6 +26,8 @@ namespace tb::launcher {
 
 namespace {
 
+#include "display_smoke.h"
+
 // Match the standard Friends panel at the same integer display scale.
 constexpr int logical_width = 320, logical_height = 180, margin = 12;
 constexpr int content_width = logical_width - 2 * margin;
@@ -649,8 +651,10 @@ std::optional<Choice> run_ui(Accounts& accounts) {
         constexpr SDL_Point smoke_sizes[] = {{640, 360}, {1440, 900}, {800, 900}, {1440, 540}, {640, 360}, {1024, 768}};
         if (smoke) SDL_SetWindowSize(window, smoke_sizes[0].x, smoke_sizes[0].y);
         int smoke_frames = 0;
+        DisplaySmoke display_smoke;
 
         while (!choice) {
+            display_smoke.next();
             Input input;
             SDL_Event event;
             bool have = SDL_WaitEventTimeout(&event, 250);

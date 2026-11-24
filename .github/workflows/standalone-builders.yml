@@ -21,10 +21,17 @@ jobs:
           python3 -m unittest discover -s scripts -p test_toolchain.py
           python3 -m unittest discover -s scripts -p test_package_builder.py
           python3 -m unittest discover -s scripts -p test_audit_builder.py
-      - name: Friends overlay test dependencies
+      - name: Launcher and overlay test dependencies
         run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
       - name: Friends overlay layout and notifications
         run: python3 scripts/test_fps_overlay.py
+      - name: Display settings and launcher navigation
+        run: |
+          python3 scripts/test_display_settings.py
+          python3 scripts/test_player_folder.py
+          cc -std=c17 -I. tests/render_scale.c -o "$RUNNER_TEMP/render-scale-check"
+          "$RUNNER_TEMP/render-scale-check"
+          python3 scripts/test_render_scale_evidence.py
 
   build:
     name: Build ${{ matrix.target }} builder
@@ -258,6 +265,21 @@ jobs:
           $checks = (Resolve-Path download/checks).Path
           $b = "$env:RUNNER_TEMP\builder files"
           $python = "$b\toolchain\python\python.exe"
+          $settingsChecks = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\display checks ü"
+          & "$b\runtime\bin\runtime_display_settings_check.exe" $settingsChecks.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Display settings fixture failed" }
+          & "$b\runtime\bin\runtime_render_scale_check.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Render scale geometry fixture failed" }
+          $env:SDL_VIDEODRIVER = 'dummy'
+          $env:TB_SETTINGS_FILE = "$($settingsChecks.FullName)\window.ini"
+          $env:PS3RECOMP_FULLSCREEN = '0'
+          $env:TB_RENDER_SCALE = '200'
+          try {
+            & "$b\runtime\bin\runtime_display_window_check.exe"
+            if ($LASTEXITCODE -ne 0) { throw "Display window fixture failed" }
+          } finally {
+            Remove-Item Env:SDL_VIDEODRIVER,Env:TB_SETTINGS_FILE,Env:PS3RECOMP_FULLSCREEN,Env:TB_RENDER_SCALE
+          }
           $openssl = Get-Command openssl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
           $opensslPath = if ($openssl) { $openssl.Source } else { "$env:ProgramFiles\Git\usr\bin\openssl.exe" }
           if (!(Test-Path $opensslPath -PathType Leaf)) { throw "OpenSSL is required for loopback TLS test certificates" }

@@ -86,6 +86,7 @@ def pack(args):
     copy(args.boot,'lib/'+Path(args.boot).name)
     copy(args.cpu_boot,'lib/'+Path(args.cpu_boot).name)
     allowed_tools={'runtime_cpu_smoke','runtime_shader_check','vulkan_draw_groups','vulkan_depth16','vulkan_nv3089',
+                   'runtime_display_settings_check','runtime_display_window_check','runtime_render_scale_check','vulkan_render_scale',
                    'hle_fixture','positions_fixture','hotplug_fixture','keyboard_fixture','audio_fixture',
                    'cache_fixture','timeline_fixture','entitlement_fixture','audio_burst_fixture',
                    'matching_rooms','peer_udp_fixture','sysnet_fixture'}
@@ -112,6 +113,7 @@ def pack(args):
         copy(ROOT/'ci/windows-runtime/vcpkg.json','provenance/vcpkg.json')
     metadata['source_sha256']={str(Path(p).relative_to(ROOT)):sha(Path(p)) for p in metadata['archive_sources']}
     (out/'provenance').mkdir(exist_ok=True)
+    copy(build/'instrumented_sdk/manifest.json','provenance/sdk-overlay.json')
     (out/'provenance/build.json').write_text(json.dumps(metadata,indent=2)+'\n')
     # Only release static libraries, public headers, package metadata and notices.
     # No vcpkg download/build caches, executables, debug libraries or DLLs.

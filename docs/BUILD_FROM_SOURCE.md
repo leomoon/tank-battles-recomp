@@ -66,7 +66,17 @@ Use `setup --check` to report missing files before building. Setup resumes verif
 
 Controllers are supported. Keyboard: **Z = Cross, X = Circle, arrows = movement, Enter = Start**. **F3** toggles the FPS overlay, **F4** toggles optional FXAA antialiasing, and **F11 / Alt+Enter** toggles fullscreen. FXAA starts off and remembers your choice.
 
-The overlay starts hidden. Window/fullscreen and overlay preferences are saved in `game/settings.ini`. Session logs go to `~/.local/state/tank-battles-recomp/logs/` (or `$XDG_STATE_HOME`); `run --console` prints to the terminal. Developer profiles and diagnostic switches: [Runtime reference](RUNTIME.md).
+The overlay starts hidden. Display, overlay and FXAA preferences are saved in `game/settings.ini`. Session logs go to `~/.local/state/tank-battles-recomp/logs/` (or `$XDG_STATE_HOME`); `run --console` prints to the terminal. Developer profiles and diagnostic switches: [Runtime reference](RUNTIME.md).
+
+### Display settings
+
+The movable player's **Play Tank Battles** launcher includes Display settings both signed in and signed out. It shares `game/settings.ini` with the game. Windowed mode supports Remember last and 1280×720, 1920×1080, or 2560×1440 initial window sizes. A tiling compositor can choose the final window size. Borderless fullscreen uses the desktop dimensions and disables the window-size selector.
+
+Internal resolution is independent of the window size. Native (100%) resolves to 1280×720, 150% to 1920×1080, 200% to 2560×1440, and 300% to 3840×2160. Higher settings increase GPU memory and rendering work. Changes apply on the next game launch. Save applies the draft, Cancel discards it, and Restore defaults selects Windowed, Remember last, and Native until you save.
+
+For a direct source run, the same preferences use `fullscreen = 0` or `1`, `window_preset = 0`, `720`, `1080`, or `1440`, and `render_scale = 100`, `150`, `200`, or `300` in the settings file. `TB_RENDER_SCALE` and `PS3RECOMP_FULLSCREEN` override the file for a diagnostic launch. The game logs its loaded display preferences at startup. If resources or a render path cannot support a higher scale, it uses the Native path. Resource allocation failures also show a notification. To recover, choose Native in the launcher or set `render_scale = 100` in the settings file before relaunching.
+
+The runtime bundle includes CPU checks for preferences, window behavior, and render-scale geometry, plus the `vulkan_render_scale`, `vulkan_draw_groups`, `vulkan_depth16`, and `vulkan_nv3089` fixtures for GPU hosts. The tag/manual builder workflow runs the CPU checks and builds the Vulkan fixtures. Its clean-machine consumer checks compile a synthetic player using the packaged tools, navigate the launcher settings, and verify the saved settings reach that player. GPU fixtures need a Vulkan device and run separately.
 
 ### Keep a finished build
 

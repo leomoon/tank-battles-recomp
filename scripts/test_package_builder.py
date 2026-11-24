@@ -17,6 +17,14 @@ import zipfile
 
 import builder_session
 import package_builder
+import package_resources
+
+
+class LauncherSourceTests(unittest.TestCase):
+    def test_installed_launcher_has_shared_settings_and_smoke_sources(self):
+        resources = set(package_resources.resource_files())
+        self.assertTrue({"player_settings.cpp", "player_settings.h", "launcher/display_smoke.h",
+                         "launcher/ui.cpp", "cmake/PlayerLauncher.cmake", "scripts/verify_builder.py"} <= resources)
 
 
 class PayloadTimestampTests(unittest.TestCase):
