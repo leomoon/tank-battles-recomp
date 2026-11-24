@@ -30,6 +30,27 @@ def two_frames():
 
 
 class FrameBudgetTests(unittest.TestCase):
+    def test_scale_observations_do_not_infer_activation_from_requested_scale(self):
+        from frame_budget import render_scale_observations
+        trace = two_frames() + [(27,0,150,100,1.,1.),(27,0,150,150,31.,31.),
+                               (28,0,3840,2160,32.,32.),(29,0,1920,1080,32.,32.),
+                               (27,0,300,300,100.,100.)]
+        observed=render_scale_observations(trace)
+        self.assertEqual(observed['requested_effective_percent'],[(150,100),(150,150)])
+        self.assertEqual(observed['present_source_extents'],[(1920,1080)])
+        self.assertEqual(render_scale_observations(two_frames())['status'],'unavailable')
+        self.assertEqual(render_scale_observations([])['status'],'unavailable')
+
+    def test_render_counters_preserve_existing_trace_ids(self):
+        from frame_budget import COUNTER_NAMES
+        self.assertEqual(COUNTER_NAMES[14],'draw')
+        self.assertEqual(COUNTER_NAMES[24],'logical_draw')
+        trace=[(COUNT,0,25,10,1.,1.),(COUNT,0,25,30,31.,31.),
+               (COUNT,0,29,10,1.,1.),(COUNT,0,29,30,31.,31.)]
+        counts=counters_per_frame(trace,[(0.,30.),(30.,60.)])
+        self.assertEqual(counts['logical_draw'],10)
+        self.assertEqual(counts['engine_scaled_draw'],10)
+
     def test_walker_parts_add_up_to_each_frame(self):
         result = analyze(two_frames())
         self.assertEqual(result['frames'], 2)

@@ -7,7 +7,7 @@ from port import ROOT,resolve,launch_environment
 from user_profiles import open_profile
 from diagnostic_logs import open_log
 from gameplay_report import summarize,renderer_failures
-from build_identity import source_identity, measurement_build
+from build_identity import source_identity, measurement_build, require_runtime_source
 from host_inventory import inventory
 
 
@@ -16,6 +16,7 @@ def main():
  p.add_argument('--mailbox-profile',action='store_true',help='Linux raw SPU mailbox diagnostic')
  p.add_argument('--vertex-profile',action='store_true',help='Linux vertex preparation cost diagnostic')
  p.add_argument('--render-scale',type=int,choices=[100,150,200,300],default=100)
+ p.add_argument('--expected-runtime-source',help='Require and verify this runtime commit before launching the game')
  a=p.parse_args()
  if a.mailbox_profile and sys.platform!='linux':p.error('--mailbox-profile requires Linux')
  if a.vertex_profile and sys.platform!='linux':p.error('--vertex-profile requires Linux')
@@ -61,12 +62,14 @@ def main():
  if a.scripted_input:
   env.update(PAD_FILE=str(resolve(a.scripted_input)),PAD_NO_KEYBOARD='1',SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT='0x0000/0x0000')
  inspected=measurement_build(build)
+ if a.expected_runtime_source:require_runtime_source(inspected,a.expected_runtime_source)
  frozen=json.loads((build/'sources.json').read_text()) if (build/'sources.json').exists() else None
  flags=inspected['effective_flags']
  host=inventory();(out/'host.json').write_text(json.dumps(host,indent=2)+'\n')
  gpu=host.get('hardware',{}).get('gpu',host.get('graphics',{}))
  exe=inspected['executable'];manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver=('win32' if os.name=='nt' else 'x11')+'/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,submission_mode=a.submit_mode,texture_decode_mode=a.texture_decode_mode,fence_wait_mode="poll" if a.fence_poll else "blocking",label_publication="gpu-complete" if a.label_sync else "processed",batch_submission="serial" if a.vk_serial else "async",surface_blits="guest-memory" if a.cpu_resolve else "gpu",vblank_hz=a.vblank_hz,draw_remap_mode="cached" if a.draw_remap_cache else "reference",color_readback_mode="cached" if a.color_readback_cache else "reference",depth_conversion="reference" if a.cpu_depth else "gpu",build_directory=str(build),source_inputs_sha256=hashlib.sha256(json.dumps(frozen['files'],sort_keys=True).encode()).hexdigest() if frozen else source_identity(),build_type=inspected['build_type'],compiler=inspected['compiler'],effective_flags=flags,diagnostics=dict(video=a.correctness_video,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes,frame_budget=a.frame_budget,page_census=a.page_census,texture_decode_profile=a.decode_profile,draw_verify=a.draw_verify,lifecycle_stats=a.lifecycle_stats,cpu_samples=a.cpu_samples,vertex_profile=a.vertex_profile),overlay=a.overlay,quick_bench=a.quick,source_commit=frozen['commit'] if frozen else subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=inspected['sdk_manifest_sha256'],runtime_source_commit=inspected['runtime_source_commit'],runtime_build=inspected['runtime_build'],profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
  manifest.update(render_scale=a.render_scale,window_mode='windowed',fxaa=False)
+ if a.expected_runtime_source:manifest['expected_runtime_source']=a.expected_runtime_source
  if a.mailbox_profile:manifest['diagnostics']['mailbox_profile']=True
  manifest['launch_environment']={k:v for k,v in env.items() if k.startswith(('TB_','PAD_','PS3RECOMP_VK_','SDL_','VK_DRAW_'))}
  manifest['telemetry_unavailable']=['CPU stack/context-switch sampling on Windows'] if os.name=='nt' else []
@@ -173,6 +176,10 @@ def main():
  manifest['effective_runtime']=dict(device=re.findall(r'using device \d+: (.*)',log),present_mode=re.findall(r'window present mode (.*)',log),batch_submission=re.findall(r'draw batches: (.*)',log),depth_gpu_active='exact Z16 GPU conversion active' in log,nv3089_gpu_exact=True if 'NV3089 GPU point sampling matches' in log else False if 'NV3089 GPU point sampling differs' in log else None)
  actual=manifest['effective_runtime']['batch_submission']
  if actual:manifest['batch_submission']='async' if 'asynchronous' in actual[-1] else 'serial'
+ manifest['render_scale_observations']=dict(status='unavailable',reason='Clean run or runtime without scale telemetry')
+ if a.frame_budget and (out/'frame-budget.trace').is_file():
+  from frame_budget import load,render_scale_observations
+  manifest['render_scale_observations']=render_scale_observations(load(out/'frame-budget.trace')[2])
  if marker:
   begin,end=manifest['interval_seconds'];rows=[r for r in observations if begin<=r['seconds']<=end];manifest['visible_entire_interval']=bool(rows) and rows[-1]['seconds']>=end-1.5 and all(r['visible'] and r['window_size']==manifest['window_size'] for r in rows)
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')

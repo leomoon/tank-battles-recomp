@@ -59,6 +59,7 @@ static inline int tb_scale_rect_map(tb_scale_extent extent, tb_scale_rect guest,
 }
 
 int tb_vk_scale_requested(void);
+void tb_vk_scale_measure_present(unsigned effective_percent, unsigned width, unsigned height);
 void tb_vk_scale_discard(void);
 void tb_vk_scale_prepare(const tb_scale_layout* layout, unsigned percent);
 void tb_vk_scale_unavailable(void);

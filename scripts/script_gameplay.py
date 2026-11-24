@@ -16,6 +16,21 @@ def live_battle_timer(text):
  return any(0<=int(value)<=120 for value in re.findall(r'^\s*(\d{1,3})\s*$',text,re.M))
 
 
+def windows_hud_countdown(ocr, size):
+ """Use only one localized OCR word inside the live timer, never HUD scores."""
+ width,height=size
+ if width<=0 or height<=0:return None
+ values=[]
+ for line in ocr.get('lines',[]):
+  for word in line.get('words',[]):
+   text=word.get('text','').strip()
+   if not re.fullmatch(r'[0-9]{1,3}',text) or not 0<=int(text)<=120:continue
+   x,y=word['x']*1280/width,word['y']*720/height
+   right=x+word['width']*1280/width;bottom=y+word['height']*720/height
+   if 590<=x<right<=690 and 72<=y<bottom<=106:values.append(text)
+ return values[0] if len(values)==1 else None
+
+
 def default_battle_map(text):
  # Recognize the selected map as well as the heading; OCR often loses the
  # heading's animated letters. This does not establish live gameplay.
@@ -50,6 +65,7 @@ def main():
  parser.add_argument('--linux-symbols',action='store_true',help='Diagnostic user-space CPU samples across the Linux resource route')
  parser.add_argument('--vertex-profile',action='store_true',help='Diagnostic vertex preparation costs across the native Linux resource route')
  parser.add_argument('--render-scale',type=int,choices=[100,150,200,300],default=100)
+ parser.add_argument('--expected-runtime-source',help='Require this runtime commit before a native measurement launches')
  a=parser.parse_args()
  if (a.linux_symbols or a.mailbox_profile or a.vertex_profile) and (not a.host_resources or a.reference_template):
   parser.error('CPU attribution requires the native --host-resources route')
@@ -71,12 +87,14 @@ def main():
  if not 1<=a.repeat<=5:parser.error('--repeat must be 1..5')
  if a.reference_template and not a.appimage:parser.error('--reference-template requires --appimage')
  if a.reference_template and a.render_scale!=100:parser.error('--render-scale applies only to the native player')
+ if a.reference_template and a.expected_runtime_source:parser.error('--expected-runtime-source applies only to the native player')
  if a.repeat>1:
   out.mkdir(parents=True,exist_ok=False)
   outcomes=[]
   for index in range(a.repeat):
    command=[sys.executable,__file__,'--output',str(out/f'run-{index+1}'),'--scene',a.scene,'--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
    command+=['--render-scale',str(a.render_scale)]
+   if a.expected_runtime_source:command+=['--expected-runtime-source',a.expected_runtime_source]
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
    if a.manual_boundaries:command+=['--manual-boundaries']
    if a.pending_review:command+=['--pending-review']
@@ -113,6 +131,7 @@ def main():
   cmd=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--scene',a.scene,'--profile',str(ROOT/'analysis/performance/profiles'/out.relative_to(ROOT/'analysis/performance').as_posix().replace('/','-')),'--pin-window','--scripted-input',str(pad),'--timeout',str(int(260+210*a.host_resources+60*a.soak_minutes+(240 if a.manual_boundaries else 0)))]
   cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
   cmd+=['--render-scale',str(a.render_scale)]
+  if a.expected_runtime_source:cmd+=['--expected-runtime-source',a.expected_runtime_source]
   if a.cpu_depth:cmd+=['--cpu-depth']
   if a.soak_minutes:cmd+=['--lifecycle-stats']
   if a.color_readback_cache:cmd+=['--color-readback-cache']
@@ -181,6 +200,11 @@ def main():
    ocr=json.loads(result.stdout);(out/(label+'-ocr.json')).write_text(json.dumps(ocr,indent=2))
    timer_result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(ROOT/'scripts/windows_ocr.ps1'),'-ImagePath',str(out/(label+'-timer.png'))],capture_output=True,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW,check=True,timeout=25)
    timer=json.loads(timer_result.stdout)['text']
+   timer_source='masked crop OCR'
+   if not live_battle_timer(timer):
+    localized=windows_hud_countdown(ocr,captured['size'])
+    if localized is not None:timer=localized;timer_source='full-frame OCR localized to timer bounds'
+   (out/(label+'-timer-source.json')).write_text(json.dumps(dict(source=timer_source,text=timer)))
    if label.startswith('gameplay-'):timer=boundary_countdown(out,label,timer,a.manual_boundaries,process,a.overlay)
    (out/(label+'-timer.txt')).write_text(timer)
    return ocr['text'].upper()
@@ -308,6 +332,15 @@ def main():
    press(0x40,'Campaign');press(0x4000,'open Campaign');wait('players',['PLAYER']);press(0x4000,'Single Player');wait('chapter',['CHAPTER']);press(0x4000,'Mission 1');time.sleep(5);press(0x4000,'default camouflage');wait('briefing',['CONTROLS'],85)
   press(0x4000,'continue briefing');time.sleep(7)
   before=capture('gameplay-before')
+  # OCR can fail on one animated/stylized digit. Retry fresh owned-window
+  # captures before arming telemetry, retaining every rejected boundary.
+  if a.scene=='battle' and not a.pending_review and not a.manual_boundaries:
+   for retry in range(2):
+    if live_battle_timer((out/'gameplay-before-timer.txt').read_text()):break
+    for evidence in out.glob('gameplay-before*'):
+     if evidence.is_file():(out/('countdown-retry-'+str(retry+1)+'-'+evidence.name)).write_bytes(evidence.read_bytes())
+    time.sleep(1)
+    before=capture('gameplay-before')
   if any(w in before for w in ['BRIEFING','RRIEFING','CONTROLS:','RULES:','SELECT MAP','MISSION FAILED','VICTORY','DEFEAT','GAME OVER','WINS','DEBRIEF']):raise RuntimeError('Still not live gameplay')
   unread=a.scene=='battle' and not live_battle_timer((out/'gameplay-before-timer.txt').read_text())
   if unread and not a.pending_review:raise RuntimeError('No readable live Battle countdown at start')

@@ -485,8 +485,10 @@ def main():
      '''    if (cb) {
         const vk_eng_obj* hi = vk_eng_get(scaled, VK_ENG_COLOR);
         tb_present_scaled.active = hi && hi->scale_percent && tb_present_prepare_scaled(hi->w, hi->h);
+        const unsigned tb_effective_percent = tb_present_scaled.active ? hi->scale_percent : 100;
         if (tb_present_scaled.active) o = &s_eobj[scaled];
         if (o) {
+            tb_vk_scale_measure_present(tb_effective_percent, o->w, o->h);
             const VkExtent2D extent = tb_present_extent();
             const VkImage output = tb_present_image()->img;
             tb_vulkan_event(6,surface,o->w,o->h);
@@ -588,7 +590,21 @@ int tb_vk_scale_present(u32 native, u32 scaled)
         }'''),
     ('static void sink_end(void* user', '#include "'+str(scale_raster)+'"\n\nstatic void sink_end(void* user'),
     ('    const u32 uploaded = indexed', '    tb_scale_note_draw(&sf, target, zslot);\n    const u32 uploaded = indexed'),
-    ('    /* Counted only when the draw ran', '''    tb_scale_binding mirror;
+    ('    /* Counted only when the draw ran', '''    if (tb_frame_budget_on()) {
+        tb_frame_budget_count(TB_FC_LOGICAL_DRAW, 1);
+        if (sf.color_target == CELL_GCM_SURFACE_TARGET_NONE)
+            tb_frame_budget_count(TB_FC_LOGICAL_DEPTH_ONLY, 1);
+        if (zslot != ENG_INVALID && tb_scale_scene_pair(&sf,
+                tb_scale_color_id(&g.surfaces[target]), tb_scale_depth_id(&g.zdepths[zslot]))) {
+            tb_frame_budget_count(TB_FC_LOGICAL_SCENE_CANDIDATE, 1);
+            static u32 tb_extent_frame = ~0u;
+            if (tb_extent_frame != g.frames) {
+                tb_extent_frame = g.frames;
+                tb_frame_budget_mark(TB_FT_SCALE_SCENE, g.surfaces[target].w, g.surfaces[target].h);
+            }
+        }
+    }
+    tb_scale_binding mirror;
     if (tb_scale_mirror_binding(target, zslot, n_targets, &rs, tex_mask, vtex_mask, &mirror)) {
         float* alpha = (float*)(g.fp_cb + nslots * 16u);
         alpha[3] = 100.0f / (float)mirror.percent;
@@ -657,6 +673,13 @@ notify_scale:
    text=text.replace(anchor,'    TB_DEPTH_COST("surface-guest-read",(uint64_t)w*h*4,g.frames);\n'+anchor)
    # Frame-budget work counters at the texture and guest-readback entry points.
    text='#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n'+text
+   # Issued color materialization reads; not guest-read requests or successful-byte claims.
+   for readback,amount in [
+    ('    g.be->readback(g.be->user, s->handle, x, y, n, h, rows, n * bpp);', 'n*h*bpp'),
+    ('        g.be->readback(g.be->user, s->handle, 0, 0, s->w, s->h, raw, s->w * bpp);', 's->w*s->h*bpp'),
+   ]:
+    if text.count(readback)!=1:raise SystemExit('Materialization counter anchor mismatch')
+    text=text.replace(readback,readback+'\n    tb_frame_budget_count(TB_FC_COLOR_READBACK, 1);\n    tb_frame_budget_count(TB_FC_COLOR_READBACK_BYTES, '+amount+');')
    for signature,count in [
     (r'static u64 eng_texture_content_hash\(u32 location, u32 offset, u32 span,','TB_FC_TEXTURE_HASH_BYTES, span'),
     (r'static u64 eng_texture_sparse_hash\(u32 location, u32 offset, u32 span,','TB_FC_SPARSE_HASH_BYTES, span'),

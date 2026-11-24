@@ -10,6 +10,18 @@ from build_identity import measurement_build, read_command_log
 
 
 class BuildTests(unittest.TestCase):
+    def test_timer_ocr_requires_unique_word_inside_hud_timer(self):
+        from script_gameplay import windows_hud_countdown
+        def word(text,x=615,y=75):
+            return dict(text=text,x=x,y=y,width=42,height=24)
+        def ocr(*words):
+            return dict(lines=[dict(words=list(words))])
+        self.assertEqual(windows_hud_countdown(ocr(word('115'),word('100',1100)),[1280,720]),'115')
+        self.assertIsNone(windows_hud_countdown(ocr(word('115',1100)),[1280,720]))
+        self.assertIsNone(windows_hud_countdown(ocr(word('150')),[1280,720]))
+        self.assertIsNone(windows_hud_countdown(ocr(word('115'),word('114')),[1280,720]))
+        self.assertIsNone(windows_hud_countdown(ocr(word('115',615,50)),[1280,720]))
+
     def test_manual_boundary_rejects_stale_or_missing_scene_proof(self):
         from script_gameplay import boundary_countdown
         import hashlib

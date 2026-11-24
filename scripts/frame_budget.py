@@ -32,7 +32,25 @@ COUNTER_NAMES = ('queue_submit', 'alloc_memory', 'create_image', 'create_buffer'
                  'descriptor_set_alloc', 'descriptor_write', 'clear_image', 'copy_image_to_buffer',
                  'copy_buffer_to_image', 'copy_image', 'blit_image', 'create_pipeline', 'draw', 'dispatch',
                  'create_framebuffer', 'create_shader', 'sync_submit_wait', 'texture_hash_bytes',
-                 'texture_upload_texels', 'guest_color_read_bytes', 'guest_depth_read', 'sparse_hash_bytes')
+                 'texture_upload_texels', 'guest_color_read_bytes', 'guest_depth_read', 'sparse_hash_bytes',
+                 'logical_draw', 'logical_scene_candidate', 'logical_depth_only',
+                 'engine_native_draw', 'engine_scaled_draw', 'color_readback', 'color_readback_bytes',
+                 'scale_skip_alias', 'scale_skip_stencil', 'scale_resource_reject',
+                 'scale_present_native', 'scale_present_scaled', 'scale_fallback_present')
+
+
+def render_scale_observations(spans):
+    """Observed events, not settings or allocations inferred to be active frames."""
+    flips = [s[4] for s in spans if s[0] == FLIP_FIFO]
+    if len(flips) < 2:
+        return dict(status='unavailable', reason='No complete diagnostic frame interval')
+    first,last=min(flips),max(flips)
+    rows = [s for s in spans if first <= s[4] < last]
+    pairs = sorted({(s[2], s[3]) for s in rows if s[0] == 27})
+    return dict(status='observed' if pairs else 'unavailable',
+                requested_effective_percent=pairs,
+                scene_candidate_extents=sorted({(s[2], s[3]) for s in rows if s[0] == 28}),
+                present_source_extents=sorted({(s[2], s[3]) for s in rows if s[0] == 29}))
 BUDGET_MS = 1000.0 / 60.0
 # vulkan_frame_counters.inc TB_TS_TIMED kinds, timed outside render passes.
 GPU_COMMAND_NAMES = {1: 'clear-color', 2: 'clear-depth', 3: 'copy-image-to-buffer', 4: 'copy-buffer-to-image',
@@ -179,7 +197,7 @@ def analyze(spans, names=None, nids=None):
     fence_waits = sum(1 for s in spans if s[0] == FENCE_WAIT and first <= s[4] < last)
     finishing = Union((s[4], s[5]) for s in spans if s[0] == PRESENT_FINISH)
     present_thread = sum(finishing.within(a, b) for a, b in frames) / count
-    return dict(frames=count, fps=1000.0 / frame_mean, vblank_hz=vblanks * 1000.0 / (last - first) if vblanks else None, frame_ms=summary([r['frame_ms'] for r in rows]),
+    return dict(render_scale=render_scale_observations(spans), frames=count, fps=1000.0 / frame_mean, vblank_hz=vblanks * 1000.0 / (last - first) if vblanks else None, frame_ms=summary([r['frame_ms'] for r in rows]),
                 walker_ms_per_frame=walker_mean, present_thread_ms_per_frame=present_thread, walker_accounted_fraction=walker_sum / frame_mean,
                 guest_threads=guests, put_to_drain_ms=summary(latency), put_advances=len(latency),
                 async_submits_per_frame=len(submits) / count,

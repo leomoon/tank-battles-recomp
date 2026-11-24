@@ -8,6 +8,16 @@ from pathlib import Path
 from port import ROOT
 
 
+def require_runtime_source(inspected, expected):
+    """Fail before launch if a measurement selected the wrong runtime build."""
+    if inspected.get('runtime_source_commit') != expected:
+        raise ValueError('Measurement runtime source mismatch: expected ' + expected
+                         + ', found ' + str(inspected.get('runtime_source_commit'))
+                         + '. Rebuild the runtime and player before measuring.')
+    from runtime_bundle import verify
+    verify(Path(inspected['runtime_manifest']).parent, source=expected)
+
+
 def measurement_build(build, configuration='Release'):
     """Inspect Ninja or Visual Studio builds without assuming the active shell compiler."""
     from freeze_performance_baseline import cache_values, executable, sha

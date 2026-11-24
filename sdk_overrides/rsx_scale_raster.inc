@@ -40,6 +40,7 @@ static int tb_scale_mirror_binding(u32 target, u32 zslot, u32 n_targets, const r
     if (!tb_vk_scale_bindings(tb_scale_color_id(&g.surfaces[target]),
                                tb_scale_depth_id(&g.zdepths[zslot]), rs->stencil_enable, binding)) return 0;
     if (s_dbz.unit || !tb_scale_samples_native(tex_mask, vtex_mask)) {
+        tb_frame_budget_count(TB_FC_SCALE_SKIP_ALIAS, 1);
         tb_vk_scale_skip_frame();
         return 0;
     }

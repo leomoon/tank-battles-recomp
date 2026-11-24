@@ -20,6 +20,9 @@
 #define TB_FT_COUNT        24 /* instant: work counter, a = TB_FC_* id, b = amount           */
 #define TB_FT_GPU_CMD      25 /* instant: one command buffer's GPU execution, b = ns         */
 #define TB_FT_GPU_PASS     26 /* instant: one render pass's GPU time, a = w<<16|h, b = ns     */
+#define TB_FT_SCALE_STATE  27 /* instant: presented source; a=requested %, b=effective % */
+#define TB_FT_SCALE_SCENE  28 /* instant: scene candidate host extent; a=width, b=height */
+#define TB_FT_SCALE_OUTPUT 29 /* instant: actual present-source extent; a=width, b=height */
 
 /* Per-frame work counters (TB_FT_COUNT). Ids are part of the trace format:
  * append only, and keep scripts/frame_budget.py COUNTER_NAMES in step. */
@@ -31,6 +34,11 @@ enum {
     TB_FC_CREATE_FRAMEBUFFER, TB_FC_CREATE_SHADER, TB_FC_SYNC_SUBMIT_WAIT,
     TB_FC_TEXTURE_HASH_BYTES, TB_FC_TEXTURE_UPLOAD_TEXELS, TB_FC_GUEST_COLOR_READ_BYTES,
     TB_FC_GUEST_DEPTH_READ, TB_FC_SPARSE_HASH_BYTES,
+    TB_FC_LOGICAL_DRAW, TB_FC_LOGICAL_SCENE_CANDIDATE, TB_FC_LOGICAL_DEPTH_ONLY,
+    TB_FC_ENGINE_NATIVE_DRAW, TB_FC_ENGINE_SCALED_DRAW,
+    TB_FC_COLOR_READBACK, TB_FC_COLOR_READBACK_BYTES,
+    TB_FC_SCALE_SKIP_ALIAS, TB_FC_SCALE_SKIP_STENCIL, TB_FC_SCALE_RESOURCE_REJECT,
+    TB_FC_SCALE_PRESENT_NATIVE, TB_FC_SCALE_PRESENT_SCALED, TB_FC_SCALE_FALLBACK_PRESENT,
 };
 
 #ifdef __cplusplus

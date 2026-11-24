@@ -70,7 +70,7 @@ def instrument(text):
         .viewport=vp,.scissor=sc,.vertex_count=vertex_count,.index_count=ibytes?index_count:0,
         .stencil=s_e2.stencil_ref&0xffu,.color=s_eng_bound.rt[0],.depth=s_eng_bound.depth,
         .depth_bias=s_e2.depth_bias,.depth_slope=s_e2.depth_slope,
-        .depth_min=s_e2.depth_bounds[0],.depth_max=s_e2.depth_bounds[1]
+        .depth_min=s_e2.depth_bounds[0],.depth_max=s_e2.depth_bounds[1],.render_scale=rt0->scale_percent
     };
     if(defer_scaled)tb_group_mirrors[tb_group_mirror_count++]=draw;
     else tb_group_emit(&draw);

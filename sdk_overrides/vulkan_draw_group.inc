@@ -19,7 +19,7 @@ typedef struct tb_group_draw {
     VkDeviceSize vertex_offset, index_offset;
     VkViewport viewport;
     VkRect2D scissor;
-    u32 vertex_count, index_count, stencil, color, depth;
+    u32 vertex_count, index_count, stencil, color, depth, render_scale;
     float depth_bias, depth_slope, depth_min, depth_max;
 } tb_group_draw;
 static tb_group_draw tb_group_mirrors[64];
@@ -27,6 +27,10 @@ static u32 tb_group_mirror_count;
 
 static void tb_group_emit(const tb_group_draw* draw)
 {
+    /* Count at emission, including deferred replay, rather than enqueue time.
+     * Auxiliary backend draws remain in TB_FC_DRAW, outside these engine counts. */
+    tb_frame_budget_count(draw->render_scale
+        ? TB_FC_ENGINE_SCALED_DRAW : TB_FC_ENGINE_NATIVE_DRAW, 1);
     pvkCmdBindPipeline(s_vk.cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,draw->pipeline);
     pvkCmdSetViewport(s_vk.cmd,0,1,&draw->viewport);
     pvkCmdSetScissor(s_vk.cmd,0,1,&draw->scissor);

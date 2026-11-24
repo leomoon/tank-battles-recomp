@@ -5,6 +5,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+from datetime import datetime, timezone
 
 
 def command(args, timeout=40):
@@ -17,14 +18,16 @@ def command(args, timeout=40):
 
 
 def inventory():
-    result = dict(system=platform.system(), release=platform.release(), version=platform.version(),
+    result = dict(captured_utc=datetime.now(timezone.utc).isoformat(),
+                  system=platform.system(), release=platform.release(), version=platform.version(),
                   architecture=platform.machine(), logical_cpus=os.cpu_count())
     if os.name == 'nt':
         # Explicit fields omit serial numbers, accounts, network configuration and product keys.
         script = r'''
 $ErrorActionPreference='Stop'
 $queries=@{
- system=@('Win32_ComputerSystem',@('Manufacturer','Model','TotalPhysicalMemory'))
+ system=@('Win32_ComputerSystem',@('Manufacturer','Model','SystemSKUNumber','TotalPhysicalMemory'))
+ baseboard=@('Win32_BaseBoard',@('Manufacturer','Product','Version'))
  cpu=@('Win32_Processor',@('Name','NumberOfCores','NumberOfLogicalProcessors','MaxClockSpeed'))
  gpu=@('Win32_VideoController',@('Name','PNPDeviceID','DriverVersion','DriverDate','CurrentHorizontalResolution','CurrentVerticalResolution','CurrentRefreshRate'))
  os=@('Win32_OperatingSystem',@('Caption','Version','BuildNumber'))

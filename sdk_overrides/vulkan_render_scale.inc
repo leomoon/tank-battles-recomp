@@ -25,13 +25,29 @@ typedef struct {
 
 static tb_vk_scale_bank tb_scaled;
 static int tb_scale_rejected;
+static unsigned tb_scale_initial_percent;
 
 __attribute__((weak)) int tb_settings_render_scale(void) { return 100; }
 __attribute__((weak)) void tb_render_scale_fallback(void) {}
 
 int tb_vk_scale_requested(void)
 {
+    if (s_vk.device && !tb_scale_initial_percent)
+        tb_scale_initial_percent = (unsigned)tb_settings_render_scale();
     return !s_vk.device || tb_scale_rejected ? 100 : tb_settings_render_scale();
+}
+
+void tb_vk_scale_measure_present(unsigned effective_percent, unsigned width, unsigned height)
+{
+    if (!tb_scale_initial_percent) tb_scale_initial_percent = (unsigned)tb_settings_render_scale();
+    const int scaled = effective_percent != 100;
+    tb_frame_budget_count(scaled ? TB_FC_SCALE_PRESENT_SCALED : TB_FC_SCALE_PRESENT_NATIVE, 1);
+    if (tb_scale_initial_percent > 100 && !scaled)
+        tb_frame_budget_count(TB_FC_SCALE_FALLBACK_PRESENT, 1);
+    tb_frame_budget_mark(TB_FT_SCALE_STATE, tb_scale_initial_percent, effective_percent);
+    if (scaled)
+        tb_frame_budget_mark(TB_FT_SCALE_SCENE, tb_scaled.depth.extent.host.width, tb_scaled.depth.extent.host.height);
+    tb_frame_budget_mark(TB_FT_SCALE_OUTPUT, width, height);
 }
 
 static void tb_vk_scale_release(tb_vk_scale_bank* bank)
@@ -57,6 +73,7 @@ static void tb_vk_scale_reset(void)
 
 static void tb_vk_scale_fail(unsigned percent, const char* reason)
 {
+    tb_frame_budget_count(TB_FC_SCALE_RESOURCE_REJECT, 1);
     tb_vk_scale_discard();
     tb_scale_rejected = 1;
     VK_LOG("render scale %u%% unavailable (%s); using Native resolution\n", percent, reason);
@@ -289,6 +306,7 @@ int tb_vk_scale_bindings(tb_scale_surface color, tb_scale_surface depth, int ste
         (tb_scaled.clear_mask & (TB_SCALE_CLEAR_COLOR | TB_SCALE_CLEAR_DEPTH)) !=
             (TB_SCALE_CLEAR_COLOR | TB_SCALE_CLEAR_DEPTH)) return 0;
     if (stencil && !tb_scaled.stencil_known) {
+        tb_frame_budget_count(TB_FC_SCALE_SKIP_STENCIL, 1);
         tb_vk_scale_skip_frame();
         return 0;
     }
