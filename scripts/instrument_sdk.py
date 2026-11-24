@@ -674,6 +674,19 @@ notify_scale:
    # Frame-budget work counters at the texture and guest-readback entry points.
    text='#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n'+text
    # Issued color materialization reads; not guest-read requests or successful-byte claims.
+   depth_done='    z->guest_dirty = 0;\n    eng_textures_touch(z->location, z->offset, z->pitch * h);'
+   if text.count(depth_done)!=1:raise SystemExit('Depth materialization counter anchor mismatch')
+   text=text.replace(depth_done,depth_done+'\n    tb_frame_budget_count(TB_FC_DEPTH_MATERIALIZE, 1);\n    tb_frame_budget_count(TB_FC_DEPTH_MATERIALIZE_BYTES, w*h*bpp);')
+   text=text.replace(depth_done,depth_done+'\n    tb_frame_budget_mark(TB_FT_DEPTH_STORE, (z->location<<31)|z->offset, w*h*bpp);')
+   color_end='        else                     memcpy(dst, src + skip, bytes);\n    }\n}'
+   if text.count(color_end)!=1:raise SystemExit('Color guest-store counter anchor mismatch')
+   text=text.replace(color_end,color_end[:-1]+'''    tb_frame_budget_count(TB_FC_COLOR_MATERIALIZE, 1);
+    tb_frame_budget_count(TB_FC_COLOR_MATERIALIZE_BYTES, bytes*h);
+    tb_frame_budget_mark(TB_FT_COLOR_STORE, (s->location<<31)|s->offset, bytes*h);
+}''')
+   alias_done='        z->conv_serial = z->depth_serial;'
+   if text.count(alias_done)!=1:raise SystemExit('Depth alias counter anchor mismatch')
+   text=text.replace(alias_done,alias_done+'\n        tb_frame_budget_mark(TB_FT_DEPTH_ALIAS, (z->location<<31)|z->offset, t->width*t->height*(z16?2u:4u));')
    for readback,amount in [
     ('    g.be->readback(g.be->user, s->handle, x, y, n, h, rows, n * bpp);', 'n*h*bpp'),
     ('        g.be->readback(g.be->user, s->handle, 0, 0, s->w, s->h, raw, s->w * bpp);', 's->w*s->h*bpp'),

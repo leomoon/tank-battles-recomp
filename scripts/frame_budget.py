@@ -36,7 +36,30 @@ COUNTER_NAMES = ('queue_submit', 'alloc_memory', 'create_image', 'create_buffer'
                  'logical_draw', 'logical_scene_candidate', 'logical_depth_only',
                  'engine_native_draw', 'engine_scaled_draw', 'color_readback', 'color_readback_bytes',
                  'scale_skip_alias', 'scale_skip_stencil', 'scale_resource_reject',
-                 'scale_present_native', 'scale_present_scaled', 'scale_fallback_present')
+                 'scale_present_native', 'scale_present_scaled', 'scale_fallback_present',
+                 'depth_materialize', 'depth_materialize_bytes', 'gpu_depth_convert', 'gpu_depth_convert_bytes',
+                 'color_materialize', 'color_materialize_bytes')
+
+
+def materializations(spans):
+    """Identify actual stores/alias conversions by guest resource, never by size."""
+    flips=[s[4] for s in spans if s[0]==FLIP_FIFO]
+    if len(flips)<2:return dict(status='unavailable',reason='No complete diagnostic frames')
+    first,last=min(flips),max(flips)
+    kinds={30:'color_guest_store',31:'depth_guest_store',32:'depth_gpu_alias'}
+    if not any(s[0] in kinds or s[0]==COUNT and s[2]==43 for s in spans):
+        return dict(status='unavailable',reason='Runtime has no resource materialization schema')
+    totals={}
+    for kind,_,address,amount,t,_ in spans:
+        if kind not in kinds or not first<=t<last:continue
+        key=(kinds[kind],address>>31,address&0x7fffffff)
+        count,size=totals.get(key,(0,0));totals[key]=(count+1,size+amount)
+    return dict(status='observed',frames=len(flips)-1,resources=[
+        dict(operation=op,location=location,offset=hex(offset),calls=count,bytes=size,
+             calls_per_frame=count/(len(flips)-1),bytes_per_frame=size/(len(flips)-1))
+        for (op,location,offset),(count,size) in sorted(totals.items())],
+        limitations=['Completed full guest stores only; aborted partial writes are excluded.',
+                     'GPU aliases are conversions, not CPU guest writes. Roles require resolve/consumer evidence.'])
 
 
 def render_scale_observations(spans):
@@ -339,6 +362,7 @@ def report(trace, build_dir='build-vulkan', json_path=None):
         result['publications_per_gpu_submission'] = result['publications_per_frame'] / max(result['gpu_submissions_per_frame'], 1e-9)
     frames = [(a, b) for a, b in zip(flips, flips[1:]) if b > a]
     result['counters'] = counters_per_frame(spans, frames)
+    result['materializations'] = materializations(spans)
     result['gpu'] = gpu_per_frame(spans, frames)
     result['headroom'] = headroom(result)
     result['trace_header'] = header

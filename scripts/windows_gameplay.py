@@ -100,7 +100,7 @@ class WindowsDesktop:
         if not state['visible']:
             raise ValueError('Cannot capture hidden/unfocused measurement window')
         width,height=state['size']; x,y=state['position']
-        state['capture_monotonic_ns']=time.monotonic_ns()
+        state['capture_monotonic_ns']=time.perf_counter_ns()
         source=self.user.GetDC(None); target=self.gdi.CreateCompatibleDC(source)
         bitmap=self.gdi.CreateCompatibleBitmap(source,width,height); old=self.gdi.SelectObject(target,bitmap)
         try:

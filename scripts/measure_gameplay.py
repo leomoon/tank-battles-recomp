@@ -17,6 +17,7 @@ def main():
  p.add_argument('--vertex-profile',action='store_true',help='Linux vertex preparation cost diagnostic')
  p.add_argument('--render-scale',type=int,choices=[100,150,200,300],default=100)
  p.add_argument('--expected-runtime-source',help='Require and verify this runtime commit before launching the game')
+ p.add_argument('--rsx-trace',action='store_true',help='Heavy diagnostic: retain three command/state frames at gameplay entry')
  a=p.parse_args()
  if a.mailbox_profile and sys.platform!='linux':p.error('--mailbox-profile requires Linux')
  if a.vertex_profile and sys.platform!='linux':p.error('--vertex-profile requires Linux')
@@ -59,6 +60,9 @@ def main():
  if a.frame_budget:env.update(TB_FRAME_BUDGET_TRIGGER=str(out/'frame-budget.trigger'),TB_FRAME_BUDGET=str(out/'frame-budget.trace'),TB_FRAME_BUDGET_DELAY='5',TB_FRAME_BUDGET_SECONDS=str(a.profile_seconds))
  if a.scopes:env.update(TB_RENDER_PROFILE=str(out/'scopes.jsonl'),TB_RENDER_PROFILE_MAX_REPORTS='600')
  env['TB_DIAGNOSTIC_TRIGGER']=str(out/'diagnostic.trigger')
+ if a.rsx_trace:
+  (out/'rsx').mkdir()
+  env.update(TB_RSX_TRACE=str(out/'rsx'),TB_DEPTH_PATH_TRACE='1')
  if a.scripted_input:
   env.update(PAD_FILE=str(resolve(a.scripted_input)),PAD_NO_KEYBOARD='1',SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT='0x0000/0x0000')
  inspected=measurement_build(build)
@@ -69,17 +73,25 @@ def main():
  gpu=host.get('hardware',{}).get('gpu',host.get('graphics',{}))
  exe=inspected['executable'];manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver=('win32' if os.name=='nt' else 'x11')+'/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,submission_mode=a.submit_mode,texture_decode_mode=a.texture_decode_mode,fence_wait_mode="poll" if a.fence_poll else "blocking",label_publication="gpu-complete" if a.label_sync else "processed",batch_submission="serial" if a.vk_serial else "async",surface_blits="guest-memory" if a.cpu_resolve else "gpu",vblank_hz=a.vblank_hz,draw_remap_mode="cached" if a.draw_remap_cache else "reference",color_readback_mode="cached" if a.color_readback_cache else "reference",depth_conversion="reference" if a.cpu_depth else "gpu",build_directory=str(build),source_inputs_sha256=hashlib.sha256(json.dumps(frozen['files'],sort_keys=True).encode()).hexdigest() if frozen else source_identity(),build_type=inspected['build_type'],compiler=inspected['compiler'],effective_flags=flags,diagnostics=dict(video=a.correctness_video,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes,frame_budget=a.frame_budget,page_census=a.page_census,texture_decode_profile=a.decode_profile,draw_verify=a.draw_verify,lifecycle_stats=a.lifecycle_stats,cpu_samples=a.cpu_samples,vertex_profile=a.vertex_profile),overlay=a.overlay,quick_bench=a.quick,source_commit=frozen['commit'] if frozen else subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=inspected['sdk_manifest_sha256'],runtime_source_commit=inspected['runtime_source_commit'],runtime_build=inspected['runtime_build'],profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
  manifest.update(render_scale=a.render_scale,window_mode='windowed',fxaa=False)
+ manifest['host_clock']=dict(name='perf_counter',implementation=time.get_clock_info('perf_counter').implementation,
+  resolution_seconds=time.get_clock_info('perf_counter').resolution,
+  reason='QueryPerformanceCounter matches tb_host_now on Windows; CLOCK_MONOTONIC on Linux.')
+ if a.rsx_trace:manifest['diagnostics'].update(resources=True,rsx_trace=True)
  if a.expected_runtime_source:manifest['expected_runtime_source']=a.expected_runtime_source
  if a.mailbox_profile:manifest['diagnostics']['mailbox_profile']=True
  manifest['launch_environment']={k:v for k,v in env.items() if k.startswith(('TB_','PAD_','PS3RECOMP_VK_','SDL_','VK_DRAW_'))}
  manifest['telemetry_unavailable']=['CPU stack/context-switch sampling on Windows'] if os.name=='nt' else []
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
  import threading
- stop=threading.Event();observations=[];child=None;marker=None;sampler=None;sample_streams=[]
+ stop=threading.Event();observations=[];child=None;marker=None;sampler=None;sample_streams=[];resources=None
  if a.scopes and os.name!='nt':
   subprocess.run(['cc','-O2',str(ROOT/'scripts/sample_gameplay_cpu.c'),'-o',str(out/'cpu-sampler')],check=True)
  def on_start(process):
-  nonlocal child;child=process;(out/'pid').write_text(str(process.pid))
+  nonlocal child,resources;child=process;(out/'pid').write_text(str(process.pid))
+  if os.name=='nt' and (a.scopes or a.frame_budget):
+   from windows_resources import WindowsResources
+   try:resources=WindowsResources(process.pid)
+   except OSError as error:(out/'resources-unavailable.json').write_text(json.dumps(dict(error=str(error))))
  desktop=None
  if os.name=='nt':
   from windows_gameplay import WindowsDesktop
@@ -90,7 +102,7 @@ def main():
    t=None;path=out/'gameplay.jsonl'
    if path.exists():
     try:
-     last=json.loads(path.read_text().splitlines()[-1]);t=(time.monotonic_ns()-(last['monotonic_ns']-last['elapsed_ns']))/1e9
+     last=json.loads(path.read_text().splitlines()[-1]);t=(time.perf_counter_ns()-(last['monotonic_ns']-last['elapsed_ns']))/1e9
     except (IndexError,json.JSONDecodeError):continue
    if t is None:continue
    if os.name=='nt':
@@ -142,11 +154,19 @@ def main():
       rest=(task/'stat').read_text().rsplit(')',1)[1].split();threads.append(dict(tid=int(task.name),comm=(task/'comm').read_text().strip(),cpu_ticks=int(rest[11])+int(rest[12])))
      except FileNotFoundError:pass
    observations.append(dict(seconds=t,visible=bool(c.get('visible')) and not c.get('hidden',False),window_size=c.get('size'),pinned=c.get('pinned'),floating=c.get('floating'),hidden=c.get('hidden'),workspace=c.get('workspace'),monitor=c.get('monitor'),threads=threads))
+   try:
+    saved_overlay=re.search(r'(?m)^overlay\s*=\s*([01])\s*$',(out/'settings.ini').read_text())
+    observations[-1]['overlay_consistent']=bool(saved_overlay and int(saved_overlay[1])==int(a.overlay))
+   except OSError:observations[-1]['overlay_consistent']=False
+   if resources:
+    try:observations[-1]['resources']=resources.sample()
+    except OSError as error:observations[-1]['resources']=dict(status='unavailable',reason=str(error))
    with (out/'observations.jsonl').open('a') as f:f.write(json.dumps(observations[-1])+'\n')
    control=out/'start.json'
    if marker is None and control.exists():
     marker=json.loads(control.read_text())
     if a.frame_budget and child:(out/'frame-budget.trigger').write_text('arm')
+    if a.rsx_trace:(out/'rsx/request').write_text('gameplay')
     manifest.update(phase='gameplay',live_gameplay_verified=bool(marker.get('live_gameplay_verified')),interval_seconds=[t+5,t+5+a.profile_seconds],scene_evidence=marker,window_size=c.get('size'));(out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
     if a.cpu_samples and child and os.name=='nt':
      # Suspend-and-sample at ~1 kHz from 5 s after the marker for the interval.
@@ -166,6 +186,7 @@ def main():
  try:status,session=run_session([str(exe),str(content/'USRDIR/EBOOT.elf')],cwd=ROOT,env=env,timeout=a.timeout,log_path=out/'startup.log',request_snapshot=True,on_start=on_start)
  finally:
   stop.set();worker.join(timeout=5);lock.close()
+  if resources and not worker.is_alive():resources.close()
   if sampler is not None:
    if sampler.poll() is None:sampler.terminate()
    sampler.wait(timeout=5)
@@ -182,8 +203,15 @@ def main():
   manifest['render_scale_observations']=render_scale_observations(load(out/'frame-budget.trace')[2])
  if marker:
   begin,end=manifest['interval_seconds'];rows=[r for r in observations if begin<=r['seconds']<=end];manifest['visible_entire_interval']=bool(rows) and rows[-1]['seconds']>=end-1.5 and all(r['visible'] and r['window_size']==manifest['window_size'] for r in rows)
+  manifest['overlay_consistent']=bool(rows) and all(r.get('overlay_consistent') for r in rows)
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
- if marker and a.correctness_video:
+ if marker and a.rsx_trace:
+  completed=sorted(path.name for path in (out/'rsx').glob('*.done'))
+  accepted=manifest['strict_passed'] and manifest['live_gameplay_verified'] and manifest['visible_entire_interval'] and manifest['overlay_consistent'] and not manifest['renderer_failures'] and len(completed)==3
+  (out/'diagnostic-report.json').write_text(json.dumps(dict(kind='heavy RSX resource evidence',
+   baseline_eligible=False,complete=accepted,completed_scopes=completed),indent=2)+'\n')
+  if not accepted:raise SystemExit('Incomplete or invalid RSX resource diagnostic')
+ elif marker and a.correctness_video:
   if not manifest["strict_passed"]:raise SystemExit("Strict failure in correctness video")
  elif marker:
   report=summarize(out,minimum_seconds=a.profile_seconds);(out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(report['cadence'])

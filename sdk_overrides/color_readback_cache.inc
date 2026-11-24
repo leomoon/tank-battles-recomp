@@ -44,6 +44,8 @@ static const u8* tb_color_readback_rows(const eng_surface* s,u32 x,u32 y,u32 w,u
   }
   g.be->submit_and_wait(g.be->user,RSX_BE_FLUSH_GUEST_REFERENCE);
   g.be->readback(g.be->user,s->handle,0,0,s->w,s->h,tb_color_readback.bytes,s->w*bpp);
+  tb_frame_budget_count(TB_FC_COLOR_READBACK,1);
+  tb_frame_budget_count(TB_FC_COLOR_READBACK_BYTES,(u32)bytes);
   tb_color_readback.handle=s->handle;tb_color_readback.location=s->location;tb_color_readback.offset=s->offset;
   tb_color_readback.w=s->w;tb_color_readback.h=s->h;tb_color_readback.pitch=s->pitch;tb_color_readback.bpp=bpp;
   for(u32 r=0;r<s->h;r++) {

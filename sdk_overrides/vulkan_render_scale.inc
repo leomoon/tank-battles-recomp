@@ -39,6 +39,12 @@ int tb_vk_scale_requested(void)
 
 void tb_vk_scale_measure_present(unsigned effective_percent, unsigned width, unsigned height)
 {
+    /* Publish explicit zeroes as well as increments during diagnostics, so an
+     * unused scaled/depth path is distinguishable from an older trace schema.
+     * Recording is armed later than startup; do not cache a one-time flag. */
+    if (tb_frame_budget_on())
+        for (unsigned id=TB_FC_LOGICAL_DRAW; id<=TB_FC_COLOR_MATERIALIZE_BYTES; ++id)
+            tb_frame_budget_count(id, 0);
     if (!tb_scale_initial_percent) tb_scale_initial_percent = (unsigned)tb_settings_render_scale();
     const int scaled = effective_percent != 100;
     tb_frame_budget_count(scaled ? TB_FC_SCALE_PRESENT_SCALED : TB_FC_SCALE_PRESENT_NATIVE, 1);

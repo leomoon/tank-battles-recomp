@@ -16,6 +16,12 @@ def live_battle_timer(text):
  return any(0<=int(value)<=120 for value in re.findall(r'^\s*(\d{1,3})\s*$',text,re.M))
 
 
+def interval_end_ns(manifest, timing_row):
+ # perf_counter matches the producer's QPC clock on Windows (monotonic used
+ # GetTickCount64 on Python 3.11). Linux uses CLOCK_MONOTONIC on both sides.
+ return timing_row['monotonic_ns']-timing_row['elapsed_ns']+round(manifest['interval_seconds'][1]*1e9)
+
+
 def windows_hud_countdown(ocr, size):
  """Use only one localized OCR word inside the live timer, never HUD scores."""
  width,height=size
@@ -44,8 +50,8 @@ def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=Fals
  image=out/(label+'.png');digest=hashlib.sha256(image.read_bytes()).hexdigest()
  request=out/(label+'-review-request.json')
  request.write_text(json.dumps(dict(image=image.name,image_sha256=digest,required='Review live HUD and countdown, then write <label>-review.json with image_sha256, live_gameplay=true, countdown (0..120), reviewer and overlay_visible.')))
- review=out/(label+'-review.json');deadline=time.monotonic()+120
- while process.poll() is None and time.monotonic()<deadline:
+ review=out/(label+'-review.json');deadline=time.perf_counter()+120
+ while process.poll() is None and time.perf_counter()<deadline:
   if review.exists():
    try:answer=json.loads(review.read_text())
    except (PermissionError,json.JSONDecodeError):
@@ -66,6 +72,7 @@ def main():
  parser.add_argument('--vertex-profile',action='store_true',help='Diagnostic vertex preparation costs across the native Linux resource route')
  parser.add_argument('--render-scale',type=int,choices=[100,150,200,300],default=100)
  parser.add_argument('--expected-runtime-source',help='Require this runtime commit before a native measurement launches')
+ parser.add_argument('--rsx-trace',action='store_true',help='Heavy diagnostic: three gameplay RSX state frames; never clean baseline evidence')
  a=parser.parse_args()
  if (a.linux_symbols or a.mailbox_profile or a.vertex_profile) and (not a.host_resources or a.reference_template):
   parser.error('CPU attribution requires the native --host-resources route')
@@ -95,6 +102,7 @@ def main():
    command=[sys.executable,__file__,'--output',str(out/f'run-{index+1}'),'--scene',a.scene,'--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
    command+=['--render-scale',str(a.render_scale)]
    if a.expected_runtime_source:command+=['--expected-runtime-source',a.expected_runtime_source]
+   if a.rsx_trace:command+=['--rsx-trace']
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
    if a.manual_boundaries:command+=['--manual-boundaries']
    if a.pending_review:command+=['--pending-review']
@@ -132,6 +140,7 @@ def main():
   cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
   cmd+=['--render-scale',str(a.render_scale)]
   if a.expected_runtime_source:cmd+=['--expected-runtime-source',a.expected_runtime_source]
+  if a.rsx_trace:cmd+=['--rsx-trace']
   if a.cpu_depth:cmd+=['--cpu-depth']
   if a.soak_minutes:cmd+=['--lifecycle-stats']
   if a.color_readback_cache:cmd+=['--color-readback-cache']
@@ -157,17 +166,17 @@ def main():
  if os.name=='nt':
   from windows_gameplay import WindowsDesktop
   desktop=WindowsDesktop()
- process=subprocess.Popen(cmd);start=time.monotonic();events=[];window=None;video=None;video_log=None;resources=None;capture_ns=None;cpu_sampler=None
+ process=subprocess.Popen(cmd);start=time.perf_counter();events=[];window=None;video=None;video_log=None;resources=None;capture_ns=None;cpu_sampler=None
  def event(label,**fields):
   if not out.is_dir():return
-  stamp=time.monotonic_ns()
+  stamp=time.perf_counter_ns()
   row=dict(seconds=stamp/1e9-start,monotonic_ns=stamp,label=label,**fields)
   if a.vertex_profile and label in ('resource-start','resource-end'):
    log=out/'startup.log'
    offset=log.stat().st_size
    (out/'diagnostic.trigger').write_text('snapshot')
-   deadline=time.monotonic()+5
-   while process.poll() is None and time.monotonic()<deadline:
+   deadline=time.perf_counter()+5
+   while process.poll() is None and time.perf_counter()<deadline:
     with log.open('rb') as stream:
      stream.seek(offset)
      text=stream.read().decode(errors='replace')
@@ -175,7 +184,7 @@ def main():
     if '[diagnostic] reason=snapshot requested' in text and all(
        key in counts for key in ('guest-draw','pipeline','texture-upload','window-present')):
      row['vulkan_counts']={key:int(value,16) for key,value in counts.items()}
-     row['vulkan_counts_observed_ns']=time.monotonic_ns()
+     row['vulkan_counts_observed_ns']=time.perf_counter_ns()
      break
     time.sleep(.01)
    else:raise RuntimeError('Vertex diagnostic snapshot was not recorded')
@@ -192,7 +201,7 @@ def main():
  def capture(label):
   nonlocal capture_ns
   path=out/(label+'.png')
-  capture_ns=time.monotonic_ns()
+  capture_ns=time.perf_counter_ns()
   if desktop:
    pid=int((out/'pid').read_text());captured=desktop.capture(int(window),pid,path,out/(label+'-timer.png'))
    (out/(label+'-capture.json')).write_text(json.dumps(captured))
@@ -212,7 +221,7 @@ def main():
   # image so a failed capture cannot reuse the previous scene's evidence.
   for _ in range(3):
    path.unlink(missing_ok=True)
-   capture_ns=time.monotonic_ns()
+   capture_ns=time.perf_counter_ns()
    captured=subprocess.run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-f','x11grab','-window_id',window,'-i',os.environ['DISPLAY'],'-frames:v','1','-y',str(path)],capture_output=True,timeout=10)
    if captured.returncode==0 and path.is_file() and path.stat().st_size:break
    time.sleep(.2)
@@ -280,8 +289,8 @@ def main():
    if owner==expected:request_close(window)
   except (FileNotFoundError,ValueError,subprocess.CalledProcessError):pass
  def wait(label,words,timeout=65):
-  deadline=time.monotonic()+timeout;text=''
-  while process.poll() is None and time.monotonic()<deadline:
+  deadline=time.perf_counter()+timeout;text=''
+  while process.poll() is None and time.perf_counter()<deadline:
    text=capture('navigation')
    if a.reference_template and ('AUTO LOAD' in text or 'HDD ACCESS' in text):press(0x4000,'autosave notice');continue
    if a.reference_template and 'NOT SIGNED' in text:press(0x2000,'offline notice');continue
@@ -330,7 +339,10 @@ def main():
    if a.host_resources:hold_scene('briefing',lambda text:'RULES' in text)
   else:
    press(0x40,'Campaign');press(0x4000,'open Campaign');wait('players',['PLAYER']);press(0x4000,'Single Player');wait('chapter',['CHAPTER']);press(0x4000,'Mission 1');time.sleep(5);press(0x4000,'default camouflage');wait('briefing',['CONTROLS'],85)
-  press(0x4000,'continue briefing');time.sleep(7)
+  # The telemetry observer supplies the five-second gameplay warm-up after
+  # this boundary. Avoid spending another seven seconds of a short Battle
+  # round before arming that warm-up.
+  press(0x4000,'continue briefing');time.sleep(2)
   before=capture('gameplay-before')
   # OCR can fail on one animated/stylized digit. Retry fresh owned-window
   # captures before arming telemetry, retaining every rejected boundary.
@@ -351,8 +363,11 @@ def main():
    if m['interval_seconds']:break
    time.sleep(.2)
   pad.write_text('')
-  origin=time.monotonic()
-  while time.monotonic()-origin<a.profile_seconds+9 and process.poll() is None:time.sleep(.5)
+  with (out/'gameplay.jsonl').open() as timing:deadline=interval_end_ns(m,json.loads(timing.readline()))
+  event('timing-deadline',deadline_monotonic_ns=deadline)
+  # Capture at the actual interval end, not several seconds later: a round
+  # ending in that extra delay used to invalidate otherwise complete intervals.
+  while time.perf_counter_ns()<deadline+200_000_000 and process.poll() is None:time.sleep(.1)
   pad.write_text('');after=capture('gameplay-after');event('end-gameplay-boundary',ocr=after)
   if invalid_ending_scene(after) or a.scene=='battle' and not a.pending_review and not live_battle_timer((out/'gameplay-after-timer.txt').read_text()):
    event('invalid-ending-scene',reason='gameplay did not span full requested interval');(out/'invalid-scene.json').write_text(json.dumps(dict(reason='ending scene was not live gameplay')))
@@ -360,9 +375,9 @@ def main():
    last_live=None if (out/'invalid-scene.json').exists() else capture_ns
    if last_live:
     (out/'round-last-live.png').write_bytes((out/'gameplay-after.png').read_bytes())
-   watch_deadline=time.monotonic()+200
+   watch_deadline=time.perf_counter()+200
    current=after
-   while not is_debrief(current) and time.monotonic()<watch_deadline and process.poll() is None:
+   while not is_debrief(current) and time.perf_counter()<watch_deadline and process.poll() is None:
     time.sleep(2)
     current=capture('round-watch')
     if not invalid_ending_scene(current) and live_battle_timer((out/'round-watch-timer.txt').read_text()):
@@ -385,9 +400,9 @@ def main():
    (out/'countdown.json').write_text(json.dumps(dict(boundaries=countdown,wall_seconds=elapsed,game_seconds_per_wall_second=progression,method='image-hash-bound visual review' if a.manual_boundaries else 'Windows OCR',limitations='Integer boundary samples; no RPCS3 reference captured on this host.'),indent=2))
   if a.soak_minutes:
    # Long session: Confirm every 20 s cycles rounds/results; resources sampled every 10 s.
-   pid=int((out/'pid').read_text());soak_begin=time.monotonic();soak_end=soak_begin+60*a.soak_minutes;last_press=0;samples=[]
-   while time.monotonic()<soak_end and process.poll() is None:
-    now=time.monotonic()
+   pid=int((out/'pid').read_text());soak_begin=time.perf_counter();soak_end=soak_begin+60*a.soak_minutes;last_press=0;samples=[]
+   while time.perf_counter()<soak_end and process.poll() is None:
+    now=time.perf_counter()
     if now-last_press>=20:
      text=capture('soak-latest');event('soak-scene',ocr=text)
      control=out/'soak-control.json'
@@ -404,7 +419,7 @@ def main():
      (out/'soak.json').write_text(json.dumps(samples,indent=1)+'\n')
     except (FileNotFoundError,KeyError,ValueError):pass
     time.sleep(10)
-   event('soak-end',samples=len(samples),elapsed_seconds=time.monotonic()-soak_begin,duration_passed=time.monotonic()>=soak_end)
+   event('soak-end',samples=len(samples),elapsed_seconds=time.perf_counter()-soak_begin,duration_passed=time.perf_counter()>=soak_end)
    capture('soak-final')
   import signal
   guest_alive=desktop.owner(int(window))==int((out/'pid').read_text()) if desktop else Path('/proc', (out/'pid').read_text().strip()).exists() if not a.reference_template else True
@@ -413,8 +428,8 @@ def main():
     log=out/'startup.log'
     offset=log.stat().st_size
     (out/'diagnostic.trigger').write_text('snapshot')
-    deadline=time.monotonic()+5
-    while process.poll() is None and time.monotonic()<deadline:
+    deadline=time.perf_counter()+5
+    while process.poll() is None and time.perf_counter()<deadline:
      with log.open('rb') as stream:
       stream.seek(offset)
       snapshot=stream.read().decode(errors='replace')
@@ -424,9 +439,9 @@ def main():
    except ProcessLookupError:guest_alive=False
   if a.reference_template:(out/'stop.json').write_text('{}')
   elif guest_alive:close_owned_window()
-  close_requested=time.monotonic()
+  close_requested=time.perf_counter()
   process.wait(timeout=20)
-  event('closed',seconds_to_exit=round(time.monotonic()-close_requested,2))
+  event('closed',seconds_to_exit=round(time.perf_counter()-close_requested,2))
  except BaseException as error:
   event('route-failure',error=str(error))
   if a.reference_template and out.exists():

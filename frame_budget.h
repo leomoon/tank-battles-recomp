@@ -23,6 +23,9 @@
 #define TB_FT_SCALE_STATE  27 /* instant: presented source; a=requested %, b=effective % */
 #define TB_FT_SCALE_SCENE  28 /* instant: scene candidate host extent; a=width, b=height */
 #define TB_FT_SCALE_OUTPUT 29 /* instant: actual present-source extent; a=width, b=height */
+#define TB_FT_COLOR_STORE 30 /* completed guest color write; a=location<<31|surface offset, b=bytes */
+#define TB_FT_DEPTH_STORE 31 /* completed guest depth write; same payload */
+#define TB_FT_DEPTH_ALIAS 32 /* newly converted GPU depth alias; same payload, not a guest write */
 
 /* Per-frame work counters (TB_FT_COUNT). Ids are part of the trace format:
  * append only, and keep scripts/frame_budget.py COUNTER_NAMES in step. */
@@ -39,6 +42,9 @@ enum {
     TB_FC_COLOR_READBACK, TB_FC_COLOR_READBACK_BYTES,
     TB_FC_SCALE_SKIP_ALIAS, TB_FC_SCALE_SKIP_STENCIL, TB_FC_SCALE_RESOURCE_REJECT,
     TB_FC_SCALE_PRESENT_NATIVE, TB_FC_SCALE_PRESENT_SCALED, TB_FC_SCALE_FALLBACK_PRESENT,
+    TB_FC_DEPTH_MATERIALIZE, TB_FC_DEPTH_MATERIALIZE_BYTES,
+    TB_FC_GPU_DEPTH_CONVERT, TB_FC_GPU_DEPTH_CONVERT_BYTES,
+    TB_FC_COLOR_MATERIALIZE, TB_FC_COLOR_MATERIALIZE_BYTES,
 };
 
 #ifdef __cplusplus

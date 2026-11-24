@@ -10,6 +10,11 @@ from build_identity import measurement_build, read_command_log
 
 
 class BuildTests(unittest.TestCase):
+    def test_end_capture_uses_measurement_clock_not_harness_wait_start(self):
+        from script_gameplay import interval_end_ns
+        manifest=dict(interval_seconds=[15.,75.])
+        self.assertEqual(interval_end_ns(manifest,dict(monotonic_ns=120_000_000_000,elapsed_ns=20_000_000_000)),175_000_000_000)
+        self.assertEqual(interval_end_ns(manifest,dict(monotonic_ns=140_000_000_000,elapsed_ns=40_000_000_000)),175_000_000_000)
     def test_timer_ocr_requires_unique_word_inside_hud_timer(self):
         from script_gameplay import windows_hud_countdown
         def word(text,x=615,y=75):

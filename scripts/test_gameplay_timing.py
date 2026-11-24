@@ -4,6 +4,11 @@ from gameplay_report import summarize,compare,COMPAT,renderer_failures
 from port import ROOT
 
 class GameplayTimingTests(unittest.TestCase):
+ def test_changed_overlay_rejects_an_otherwise_clean_interval(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   path=Path(tmp);manifest=self.fixture(path);manifest['overlay_consistent']=False
+   (path/'measurement.json').write_text(json.dumps(manifest))
+   with self.assertRaisesRegex(ValueError,'Overlay setting changed'):summarize(path)
  def test_display_settings_mismatch_rejects_comparison(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p);r=summarize(p)

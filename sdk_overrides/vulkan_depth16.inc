@@ -112,5 +112,7 @@ static u32 tb_vk_depth16(void* user,u32 depth,u32 w,u32 h,u32 format) {
  if(batched)vk_eb_recorded();
  else if(vk_submit_and_wait()){vk_eng_release(user,handle);return 0;}
  {static int reported;if(!reported){if(batched)VK_LOG("exact Z16 GPU conversion active (batched, pooled snapshots)\n");else VK_LOG("exact Z16 GPU conversion active (waited, pooled snapshots)\n");reported=1;}}
+ tb_frame_budget_count(TB_FC_GPU_DEPTH_CONVERT, 1);
+ tb_frame_budget_count(TB_FC_GPU_DEPTH_CONVERT_BYTES, w*h*2u);
  return handle;
 }

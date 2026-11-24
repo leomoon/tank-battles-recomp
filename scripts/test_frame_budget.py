@@ -30,6 +30,16 @@ def two_frames():
 
 
 class FrameBudgetTests(unittest.TestCase):
+    def test_materialization_resources_keep_location_and_operation_separate(self):
+        from frame_budget import materializations
+        trace=two_frames()+[(30,0,0x1234,16,1.,1.),(30,0,0x80001234,32,2.,2.),
+                            (32,0,0x1234,64,3.,3.),(31,0,0x1234,99,70.,70.)]
+        result=materializations(trace)
+        self.assertEqual(sum(r['bytes'] for r in result['resources']),112)
+        self.assertEqual(len(result['resources']),3)
+        self.assertEqual(result['resources'][1]['location'],1)
+        self.assertEqual(materializations([])['status'],'unavailable')
+
     def test_scale_observations_do_not_infer_activation_from_requested_scale(self):
         from frame_budget import render_scale_observations
         trace = two_frames() + [(27,0,150,100,1.,1.),(27,0,150,150,31.,31.),

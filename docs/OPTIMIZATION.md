@@ -39,6 +39,56 @@ Local Windows validation on 2026-11-17 produced a valid 60-second Battle sample 
 
 The audio fix in `2584b04` is part of the baseline. Preserve paced guest-ring consumption, bounded whole-block queueing, MMCSS and producer scheduling. User confirmation establishes that audible crackling was fixed on the Intel host; startup/menu silence statistics alone are neither underrun counts nor gameplay/soak acceptance. The outstanding Intel pending-present center-pixel fixture failure remains a separate rendering gate.
 
+## NUC resolution baseline, 2026-11-24
+
+Step 1 freezes an initial snapshot on the Intel NUC6i7KYB, i7-6770HQ, Iris Pro
+580, 32 GiB DDR4-2400, Windows 11 IoT Enterprise build 26300 and graphics driver
+27.20.100.8681, using Balanced power. Measurements followed compilation;
+temperature, CPU/GPU clocks, power and per-process GPU residency are unavailable.
+
+| Native clean scene | Completed GAME FPS, 60 seconds | Mean / p95 / p99 ms | Overlay |
+| --- | ---: | --- | --- |
+| Default Battle, neutral player one and three CPUs | 29.22 (1,753 frames) | 34.22 / 49.23 / 50.56 | On throughout |
+| First Campaign mission | 47.47 (2,848 frames) | 21.07 / 33.35 / 35.17 | Off |
+
+Both runs passed strict execution, owned-window visibility and real host-audio
+checks. These are separate scene snapshots, not a matched comparison or the
+three-repeat acceptance cohort. Neither establishes the 60 FPS objective.
+The freshly rebuilt clean player has SHA-256
+`7bd953a8b5bfcf2626df33d88e039afa21ecbc294f7519d853ec9e426273d1aa`;
+local evidence is `analysis/performance/nuc-resolution-step1/`.
+
+Separate diagnostics now record logical draws, emitted Native/scaled engine
+draws, fallback presentation, actual scene/present-source extents, issued color
+readbacks, completed color/depth guest stores and GPU depth conversions.
+Materialization records include location/offset, allowing roles to be joined
+to complete resolve and active consumer evidence instead of dimensions alone.
+`resolution_baseline_report.py <run-directory>` summarizes counters, GPU times
+and Windows read-only per-thread CPU/working-set/private-byte samples. CPU
+time is distinct from frame-budget wall time outside instrumented blocking.
+
+The Native Campaign diagnostic emitted 221.18 Native engine draws per 221.18
+logical draws, zero scaled draws, and observed 2560x1440 scene backing with a
+1280x720 present source. GPU command time was 14.85 ms/frame. Three separate
+Battle RSX scopes prove all six resolve tiles per display, and a 2048x2048
+depth-only producer consumed through the shadow GPU alias. Native captures
+show one 8 MiB Z16 alias conversion/frame and zero completed CPU guest stores;
+GPU transfers still occur. Heavy captures never supply accepted FPS.
+
+The 150% diagnostic exposes the existing duplicated work: 220.43 logical draws
+emit 220.43 Native plus 157.44 scaled engine draws/frame. Observed scaled
+scene/present extents are 3840x2160 and 1920x1080, with a Native fallback also
+recorded. This and a separate Battle diagnostic faulted after window-close
+requests in Intel `igvk64.dll`; their counter observations are retained, but
+their timing reports remain rejected. The existing clean/diagnostic GPU
+fixture assertion also remains an open rendering gate.
+
+Windows measurement clocks now use `perf_counter`, matching the runtime's
+QueryPerformanceCounter. Python 3.11 `monotonic` uses GetTickCount64 with a
+different epoch. End captures follow the recorded producer deadline, and
+overlay-setting changes reject a timing interval. Reviewed countdown values
+are bound to retained image hashes and identify the actual reviewer.
+
 ## Per-frame cost breakdown
 
 `python scripts/frame_budget.py run --output analysis/performance/<new> --build-dir build-player --seconds 20` arms the timeline inside live Battle gameplay. The report covers more than walker/guest thread time:

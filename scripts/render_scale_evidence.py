@@ -90,7 +90,8 @@ def resolve_routes(surfaces, displays, tiles):
                 rectangles.append((x, y, x+w, y+h))
             else:
                 if sum((r-l)*(b-t) for l,t,r,b in rectangles) == display.width * display.height:
-                    routes.append(dict(color=hex(source.offset), zeta=hex(entry['zeta'][1]),
+                    routes.append(dict(color=hex(source.offset), color_location=source.location,
+                                       zeta=hex(entry['zeta'][1]), zeta_location=entry['zeta'][0],
                                        buffer=buffer, destination=hex(display.offset), tiles=len(rectangles)))
     return routes
 

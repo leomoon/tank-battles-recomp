@@ -31,6 +31,7 @@ def summarize(directory, minimum_seconds=60):
     if minimum_seconds != 60 and (not (m['diagnostics'].get('scopes') or m.get('quick_bench')) or not 10<=minimum_seconds<=60):raise ValueError('Short intervals require an explicit CPU/GPU profile or quick bench')
     if duration<minimum_seconds:raise ValueError('Need complete requested steady interval')
     if not m['visible_entire_interval']:raise ValueError('Hidden-window interval')
+    if m.get('overlay_consistent') is False:raise ValueError('Overlay setting changed during interval')
     if m.get('renderer_failures'):raise ValueError('Renderer failure in interval/run')
     log=directory/'startup.log'
     if log.exists() and renderer_failures(log.read_text(errors='replace')):
