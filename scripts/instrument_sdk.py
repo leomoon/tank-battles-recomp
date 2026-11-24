@@ -562,14 +562,11 @@ int tb_vk_scale_present(u32 native, u32 scaled)
     VkRect2D sc = { { 0, 0 }, { w, h } };
     if (rt0->scale_percent && s_e2.have_sc) sc = tb_vk_scale_scissor(rt0, s_e2.sc);
     else if (s_e2.have_sc)'''),
-    ('    pvkCmdSetDepthBias(s_vk.cmd, s_e2.depth_bias, 0.0f, s_e2.depth_slope);',
-     '''    /* The slope is measured per raster pixel. Keep the existing constant
-     * term, which is applied in depth-buffer units. */
-    const float slope = rt0->scale_percent
-        ? s_e2.depth_slope * (raster_x > raster_y ? raster_x : raster_y) : s_e2.depth_slope;
-    pvkCmdSetDepthBias(s_vk.cmd, s_e2.depth_bias, 0.0f, slope);'''),
-    ('        pvkCmdDraw(s_vk.cmd, vertex_count, 1, 0, 0);\n    }',
-     '        pvkCmdDraw(s_vk.cmd, vertex_count, 1, 0, 0);\n    }\n'
+    ('.depth_bias=s_e2.depth_bias,.depth_slope=s_e2.depth_slope,',
+     '''.depth_bias=s_e2.depth_bias,
+        .depth_slope=rt0->scale_percent
+            ? s_e2.depth_slope * (raster_x > raster_y ? raster_x : raster_y) : s_e2.depth_slope,'''),
+    ('    else tb_group_emit(&draw);', '    else tb_group_emit(&draw);\n'
      '    if (rt0->scale_percent && s_eng_bound.rt[0] == tb_scaled.active_color) tb_scaled.rasterized = 1;'),
    ]
    for before,after in install_scale:

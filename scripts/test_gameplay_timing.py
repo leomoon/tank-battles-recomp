@@ -4,6 +4,13 @@ from gameplay_report import summarize,compare,COMPAT,renderer_failures
 from port import ROOT
 
 class GameplayTimingTests(unittest.TestCase):
+ def test_display_settings_mismatch_rejects_comparison(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);self.fixture(p);r=summarize(p)
+   base=dict(r,manifest=dict(r['manifest'],render_scale=100,window_mode='windowed',fxaa=False))
+   for field,value in [('render_scale',150),('window_mode','borderless'),('fxaa',True)]:
+    changed=dict(base,manifest=dict(base['manifest'],**{field:value}))
+    with self.assertRaisesRegex(ValueError,'Incompatible '+field):compare([base,changed])
  def test_backend_resource_lifetime_failures_reject_measurement(self):
   refused='[RSX vulkan] engine: stale texture release of object 352 (kind 1, 2048x2048) refused'
   full='[RSX vulkan] engine: object table full (2048)'

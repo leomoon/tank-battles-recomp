@@ -86,6 +86,12 @@ def main():
     parser.add_argument('--rsx-trace', action='store_true', help='Record three complete GPU command/state frames when rsx/request receives a unique scene label')
     parser.add_argument('--render-scale', type=int, choices=[100, 150, 200, 300], default=100,
                         help='Scene raster scale. Use with --rsx-trace to capture scaled attachments before presentation')
+    parser.add_argument('--window-mode', choices=['windowed', 'borderless'], default='windowed')
+    parser.add_argument('--fxaa', choices=['0', '1'], default='0')
+    parser.add_argument('--gpu-device', type=int, help='Explicit local Vulkan device index')
+    parser.add_argument('--frame-budget-after', type=float, help='Arm CPU/GPU frame diagnostics at this elapsed second; not a clean timing baseline')
+    parser.add_argument('--frame-budget-seconds', type=positive_seconds, default=20)
+    parser.add_argument('--memory', action='store_true', help='Sample Linux process RSS once per second')
     parser.add_argument('--audio', choices=['dummy','host'], default='dummy', help='Dummy for isolated diagnostics; host enables audible playback')
     parser.add_argument('--frame-order', action='store_true', help='Write bounded scalar scanout-generation records without saving framebuffer images')
     parser.add_argument('--fps', action='store_true', help='Show the window FPS overlay; hidden by default in reference comparisons')
@@ -106,6 +112,13 @@ def main():
         parser.error('--user-profile must be inside ignored analysis/')
     if args.actions and args.driver != 'x11':
         parser.error('Automated keyboard actions require --driver x11')
+    if args.gpu_device is not None and args.gpu_device < 0:
+        parser.error('--gpu-device must be nonnegative')
+    if args.frame_budget_after is not None and (
+            not math.isfinite(args.frame_budget_after) or args.frame_budget_after < 0 or
+            args.frame_budget_seconds > 120 or
+            args.frame_budget_after + args.frame_budget_seconds > args.timeout - 2):
+        parser.error('Frame budget must last at most 120 seconds and finish before the session ends')
     if args.profile and args.cadence_only:
         parser.error('Choose --profile or --cadence-only')
     if not 0 <= args.frame_history <= 240 or not math.isfinite(args.history_after) or args.history_after < 0:
@@ -150,6 +163,14 @@ def main():
     elif env.get('SDL_AUDIODRIVER')=='dummy':env.pop('SDL_AUDIODRIVER')
     env['TB_FPS_OVERLAY']='1' if args.fps else '0'
     env['TB_RENDER_SCALE'] = str(args.render_scale)
+    env['PS3RECOMP_FULLSCREEN'] = '1' if args.window_mode == 'borderless' else '0'
+    env['TB_FXAA'] = args.fxaa
+    if args.gpu_device is not None:
+        env['PS3RECOMP_VK_DEVICE'] = str(args.gpu_device)
+    if args.frame_budget_after is not None:
+        env.update(TB_FRAME_BUDGET_TRIGGER=str(output / 'frame-budget.trigger'),
+                   TB_FRAME_BUDGET=str(output / 'frame-budget.trace'),
+                   TB_FRAME_BUDGET_DELAY='0', TB_FRAME_BUDGET_SECONDS=str(args.frame_budget_seconds))
     if args.offline_trace:
         env['TB_OFFLINE_TRACE']='1'
     command = [str(resolve(args.build_dir) / 'TankBattlesRecomp'), str(content / 'USRDIR/EBOOT.elf')]
@@ -217,17 +238,32 @@ def main():
         env.update(PS3RECOMP_VK_DUMP=str(frame), PS3RECOMP_VK_DUMP_EVERY='15')
     stop, events, captures = threading.Event(), [], []
     window_states = []
+    memory_samples = []
     recorder = None
     video_log = None
     video_window = None
     started = time.monotonic()
     def watch():
         nonlocal recorder, video_log, video_window, entitlement_flags
-        index, next_capture, next_window = 0, 4.0, 0.0
+        index, next_capture, next_window, next_memory = 0, 4.0, 0.0, 0.0
         focused = False
+        budget_armed = False
         try:
             while not stop.wait(.1):
                 elapsed = time.monotonic() - started
+                if args.frame_budget_after is not None and not budget_armed and elapsed >= args.frame_budget_after:
+                    (output / 'frame-budget.trigger').write_text('snapshot\n')
+                    events.append(dict(elapsed_seconds=elapsed, frame_budget_armed=True))
+                    budget_armed = True
+                if args.memory and guest_process is not None and elapsed >= next_memory:
+                    next_memory = elapsed + 1
+                    try:
+                        status_text = Path(f'/proc/{guest_process.pid}/status').read_text()
+                        values = {key: int(value) for key, value in re.findall(
+                            r'^(VmRSS|VmHWM):\s+(\d+) kB$', status_text, re.M)}
+                        memory_samples.append(dict(elapsed_seconds=elapsed, **values))
+                    except FileNotFoundError:
+                        pass  # Process exited between samples.
                 if args.observe_entitlement and guest_process is not None and entitlement_flags is None:
                     try:
                         entitlement_flags = guest_flags(guest_process, trial_slot, executable, symbol, pie)
@@ -322,7 +358,19 @@ def main():
     text = (output / 'startup.log').read_text(errors='replace')
     counts = {k: int(v, 16) for k, v in re.findall(r'\[execution-count\] ([a-z-]+)=0x([0-9A-Fa-f]+)', text)}
     failures = ('ppu-miss', 'hle-missing', 'spu-interpreter', 'spu-untranslated', 'ppu-recovery')
-    report = dict(entitlement_flags=entitlement_flags, host_ip_denied=args.deny_host_ip, offline_trace=args.offline_trace, video=video, session=session, window_states=window_states, focus_requested=args.focus_window, actions=events, captures=captures, driver=args.driver, batch=args.batch, no_gamepad=args.no_gamepad,
+    budget = None
+    if args.frame_budget_after is not None:
+        from frame_budget import report as budget_report
+        try:
+            budget = budget_report(output / 'frame-budget.trace', resolve(args.build_dir), output / 'frame-budget.json')
+        except (OSError, ValueError, KeyError, ZeroDivisionError) as error:
+            budget = dict(error=str(error))
+    report = dict(render_scale=args.render_scale, window_mode=args.window_mode, fxaa=args.fxaa == '1',
+        gpu_device=args.gpu_device, frame_budget_after=args.frame_budget_after,
+        frame_budget_seconds=args.frame_budget_seconds if args.frame_budget_after is not None else None,
+        frame_budget=budget,
+        memory_samples=memory_samples, memory_units='KiB, process resident memory, not GPU memory',
+        entitlement_flags=entitlement_flags, host_ip_denied=args.deny_host_ip, offline_trace=args.offline_trace, video=video, session=session, window_states=window_states, focus_requested=args.focus_window, actions=events, captures=captures, driver=args.driver, batch=args.batch, no_gamepad=args.no_gamepad,
         frame_history_limit=args.frame_history, history_after_seconds=args.history_after, profile_enabled=args.profile, cadence_only=args.cadence_only, capture_enabled=args.capture, pass_capture_enabled=args.passes, texture_capture_enabled=args.textures, rsx_trace_enabled=args.rsx_trace, fps_overlay_enabled=args.fps, content_root=str(content), build_dir=str(resolve(args.build_dir)), wait_trace_enabled=args.wait_trace, audio=args.audio, saves='isolated '+profile_metadata['operation']+' profile', user_profile=profile_metadata,
         elapsed_origin='launcher monotonic start; actions are elapsed-time based, verify actual reached screens visually',
         strict_counts=counts, strict_passed=all(counts.get(k) == 0 for k in failures),
@@ -338,7 +386,8 @@ def main():
     if args.video_fps and not video['passed']:
         raise SystemExit('Window recording did not achieve 30 fps; inspect video.json/video.log')
     timing_failed = (args.profile or args.cadence_only) and (not report['timing'] or 'error' in report['timing'])
-    if status != 124 or not report['strict_passed'] or timing_failed or any('error' in event for event in events):
+    budget_failed = args.frame_budget_after is not None and (not budget or 'error' in budget)
+    if status != 124 or not report['strict_passed'] or timing_failed or budget_failed or any('error' in event for event in events):
         raise SystemExit('Incomplete scenario; inspect local session.json and startup.log')
 
 

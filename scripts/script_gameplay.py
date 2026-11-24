@@ -20,7 +20,8 @@ def default_battle_map(text):
  # Recognize the selected map as well as the heading; OCR often loses the
  # heading's animated letters. This does not establish live gameplay.
  normalized=' '.join(text.upper().split())
- return bool(re.search(r'FIELD [O0]F WAR [I1]',normalized) and 'CONFIRM' in normalized and 'BACK' in normalized)
+ return bool(re.search(r'FIELD [O0]F WAR [I1]',normalized) and
+             ('CONFIRM' in normalized or 'ELECT MAP' in normalized) and 'BACK' in normalized)
 
 
 def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=False):
@@ -48,6 +49,7 @@ def main():
  parser.add_argument('--mailbox-profile',action='store_true',help='Record Linux raw SPU mailbox status counters by scene')
  parser.add_argument('--linux-symbols',action='store_true',help='Diagnostic user-space CPU samples across the Linux resource route')
  parser.add_argument('--vertex-profile',action='store_true',help='Diagnostic vertex preparation costs across the native Linux resource route')
+ parser.add_argument('--render-scale',type=int,choices=[100,150,200,300],default=100)
  a=parser.parse_args()
  if (a.linux_symbols or a.mailbox_profile or a.vertex_profile) and (not a.host_resources or a.reference_template):
   parser.error('CPU attribution requires the native --host-resources route')
@@ -68,11 +70,13 @@ def main():
  if not out.is_relative_to(ROOT/'analysis/performance') or out.exists():parser.error('Use a new output inside analysis/performance/')
  if not 1<=a.repeat<=5:parser.error('--repeat must be 1..5')
  if a.reference_template and not a.appimage:parser.error('--reference-template requires --appimage')
+ if a.reference_template and a.render_scale!=100:parser.error('--render-scale applies only to the native player')
  if a.repeat>1:
   out.mkdir(parents=True,exist_ok=False)
   outcomes=[]
   for index in range(a.repeat):
    command=[sys.executable,__file__,'--output',str(out/f'run-{index+1}'),'--scene',a.scene,'--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
+   command+=['--render-scale',str(a.render_scale)]
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
    if a.manual_boundaries:command+=['--manual-boundaries']
    if a.pending_review:command+=['--pending-review']
@@ -108,6 +112,7 @@ def main():
  else:
   cmd=[sys.executable,str(ROOT/'scripts/measure_gameplay.py'),'--output',str(out),'--scene',a.scene,'--profile',str(ROOT/'analysis/performance/profiles'/out.relative_to(ROOT/'analysis/performance').as_posix().replace('/','-')),'--pin-window','--scripted-input',str(pad),'--timeout',str(int(260+210*a.host_resources+60*a.soak_minutes+(240 if a.manual_boundaries else 0)))]
   cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
+  cmd+=['--render-scale',str(a.render_scale)]
   if a.cpu_depth:cmd+=['--cpu-depth']
   if a.soak_minutes:cmd+=['--lifecycle-stats']
   if a.color_readback_cache:cmd+=['--color-readback-cache']
@@ -190,6 +195,13 @@ def main():
   else:raise RuntimeError(f'No fresh capture for {label}: {captured.stderr.decode(errors="replace").strip()}')
   normalized=out/'ocr.png';subprocess.run(['magick',str(path),'-resize','1280x720!','-resize','300%','-colorspace','gray','-negate','-threshold','40%','-morphology','Erode','Disk:2',str(normalized)],check=True,capture_output=True)
   text=subprocess.run(['tesseract',str(normalized),'stdout','--psm','11'],capture_output=True,text=True).stdout.upper()
+  if label == 'navigation':
+   # The selected map's gold text survives higher-resolution rendering better
+   # as a single line than the full-screen thresholded OCR used for menus.
+   selected_map=subprocess.check_output(['magick',str(path),'-resize','1280x720!',
+       '-crop','340x38+460+418','+repage','-resize','300%','png:-'])
+   text+='\n'+subprocess.run(['tesseract','stdin','stdout','--psm','7'],
+       input=selected_map,capture_output=True,check=True).stdout.decode().upper()
   for box in ['280x40+500+356','280x40+500+252']:
    crop=out/'button.png';subprocess.run(['magick',str(path),'-resize','1280x720!','-crop',box,'-resize','300%','-colorspace','gray','-negate','-threshold','40%','-morphology','Erode','Disk:2',str(crop)],check=True,capture_output=True)
    text+='\n'+subprocess.run(['tesseract',str(crop),'stdout','--psm','7'],capture_output=True,text=True).stdout.upper()

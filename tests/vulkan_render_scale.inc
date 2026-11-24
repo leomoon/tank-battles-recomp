@@ -52,6 +52,105 @@ static void scale_pixel(u32 target, u32 x, u32 y, unsigned r, unsigned g, unsign
     }
 }
 
+static void check_scaled_batch_switches(u32 native, u32 native_z, u32 scaled, u32 scaled_z)
+{
+    static const char vs[] = "struct I { float4 p : POSITION; }; float4 main(I v) : SV_Position { return v.p; }";
+    static const char ps[] = "cbuffer F : register(b1) { float4 color; }; float4 main() : SV_Target0 { return float4(color.rgb, 1); }";
+    const rsx_vertex_layout_plan layout = {.count = 1, .stride = 16};
+    const rsx_be_render_state state = {.color_mask = 0xffffffff, .depth_func = 0x207};
+    const u32 pipe = vk_eng_pipeline_create(NULL, vs, ps, &state, &layout, 16, RSX_BE_FMT_R8G8B8A8, 1);
+    assert(pipe);
+    vk_eng_bind_pipeline(NULL, pipe);
+    vk_eng_set_viewport(NULL, 0, 0, 11, 7);
+    vk_eng_submit_and_wait(NULL, RSX_BE_FLUSH_GUEST_REFERENCE);
+    // More than two complete batches, alternating attachments for each draw.
+    // The old target-switch flush leaves just one draw pending and fails here.
+    for (unsigned i = 0; i < 73; ++i) {
+        const int right = i & 1;
+        vk_eng_set_scissor(NULL, right ? 5 : 0, 0, right ? 6 : 5, 7);
+        vk_eng_bind_targets(NULL, &native, 1, native_z);
+        scale_draw(scale_triangle, 3, !right, 0, right, 0);
+        vk_eng_bind_targets(NULL, &scaled, 1, scaled_z);
+        scale_draw(scale_triangle, 3, right, !right, right, .5f);
+        assert(s_eb_pending == (2 * (i + 1)) % 64);
+        assert(tb_group_mirror_count == (i + 1) % 32);
+    }
+    scale_pixel(native, 2, 2, 255, 0, 0);
+    scale_pixel(native, 8, 2, 0, 0, 255);
+    scale_pixel(scaled, 4, 4, 0, 255, 0);
+    scale_pixel(scaled, 16, 4, 255, 0, 255);
+    // Texture reads of the previous attachment must keep the full dependency.
+    static const char sampled_ps[] = "Texture2D rsx_tex[16] : register(t0); SamplerState rsx_samp[16] : register(s0); float4 main() : SV_Target0 { return rsx_tex[0].Sample(rsx_samp[0],float2(.25,.25)); }";
+    const u32 sampled_pipe = vk_eng_pipeline_create(NULL, vs, sampled_ps, &state, &layout, 16, RSX_BE_FMT_R8G8B8A8, 1);
+    const u32 targets[] = {native, scaled}, depths[] = {native_z, scaled_z};
+    const u32 views[] = {vk_eng_surface_view(NULL, native, 0xaae4, 0x85),
+                         vk_eng_surface_view(NULL, scaled, 0xaae4, 0x85)};
+    assert(sampled_pipe && views[0] && views[1]);
+    u32 textures[RSX_MAX_TEXTURES] = {0};
+    rsx_be_sampler_desc samplers[RSX_MAX_TEXTURES] = {0};
+    vk_eng_set_scissor(NULL, 0, 0, 11, 7);
+    for (unsigned i = 0; i < 2; ++i) {
+        vk_eng_bind_textures(NULL, textures, samplers, 0);
+        vk_eng_bind_pipeline(NULL, pipe);
+        vk_eng_bind_targets(NULL, &targets[i], 1, depths[i]);
+        scale_draw(scale_triangle, 3, 0, !i, 1, i ? .5f : 0);
+        textures[0] = views[i];
+        vk_eng_bind_textures(NULL, textures, samplers, 1);
+        vk_eng_bind_pipeline(NULL, sampled_pipe);
+        vk_eng_bind_targets(NULL, &targets[1-i], 1, depths[1-i]);
+        scale_draw(scale_triangle, 3, 0, 0, 0, i ? 0 : .5f);
+        assert(s_eb_pending == 1);
+        scale_pixel(targets[1-i], i ? 2 : 4, i ? 2 : 4, 0, i ? 0 : 255, 255);
+    }
+    vk_eng_bind_textures(NULL, textures, samplers, 0);
+    // A Native draw may sample a queued mirror without changing its target.
+    vk_eng_bind_pipeline(NULL, pipe);
+    vk_eng_bind_targets(NULL, &native, 1, native_z);
+    scale_draw(scale_triangle, 3, 1, 0, 0, 0);
+    vk_eng_bind_targets(NULL, &scaled, 1, scaled_z);
+    scale_draw(scale_triangle, 3, 0, 1, 1, .5f);
+    assert(tb_group_mirror_count == 1);
+    textures[0] = views[1];
+    vk_eng_bind_textures(NULL, textures, samplers, 1);
+    vk_eng_bind_pipeline(NULL, sampled_pipe);
+    vk_eng_bind_targets(NULL, &native, 1, native_z);
+    scale_draw(scale_triangle, 3, 0, 0, 0, 0);
+    assert(!tb_group_mirror_count && s_eb_pending == 1);
+    scale_pixel(native, 2, 2, 0, 255, 255);
+
+    // Mutating a shared asset must replay old mirrors before its upload.
+    const u32 asset = vk_eng_texture_create(NULL, RSX_BE_FMT_R8G8B8A8, 1, 1, 1, 1, 0xaae4, 0x85);
+    const u8 red[] = {255, 0, 0, 255}, green[] = {0, 255, 0, 255};
+    assert(asset);
+    vk_eng_texture_upload(NULL, asset, 0, 0, 1, 1, red, 4, 1);
+    for (unsigned half = 0; half < 2; ++half) {
+        vk_eng_bind_textures(NULL, textures, samplers, 0);
+        vk_eng_bind_pipeline(NULL, pipe);
+        vk_eng_set_scissor(NULL, half ? 5 : 0, 0, half ? 6 : 5, 7);
+        vk_eng_bind_targets(NULL, &native, 1, native_z);
+        scale_draw(scale_triangle, 3, 0, 0, 0, 0);
+        textures[0] = asset;
+        vk_eng_bind_textures(NULL, textures, samplers, 1);
+        vk_eng_bind_pipeline(NULL, sampled_pipe);
+        vk_eng_bind_targets(NULL, &scaled, 1, scaled_z);
+        scale_draw(scale_triangle, 3, 0, 0, 0, .5f);
+        assert(tb_group_mirror_count == 1);
+        if (!half) {
+            vk_eng_texture_upload(NULL, asset, 0, 0, 1, 1, green, 4, 1);
+            assert(!tb_group_mirror_count);
+        }
+    }
+    scale_pixel(scaled, 4, 4, 255, 0, 0);
+    scale_pixel(scaled, 16, 4, 0, 255, 0);
+    vk_eng_bind_textures(NULL, textures, samplers, 0);
+    vk_eng_texture_release(NULL, asset);
+    vk_eng_texture_release(NULL, views[0]);
+    vk_eng_texture_release(NULL, views[1]);
+    vk_eng_pipeline_release(NULL, sampled_pipe);
+    vk_eng_bind_targets(NULL, NULL, 0, 0);
+    vk_eng_pipeline_release(NULL, pipe);
+}
+
 static void check_scaled_raster(const tb_scale_layout* group)
 {
     static const char vs[] =
@@ -226,6 +325,7 @@ static void check_scaled_raster(const tb_scale_layout* group)
     scale_draw(scale_triangle, 3, 0, 1, 1, 0);
     scale_pixel(native, 1, 2, 0, 0, 255);
     scale_pixel(native, 2, 2, 0, 255, 255);
+    check_scaled_batch_switches(native, native_z, binding.color, binding.depth);
     vk_eng_bind_targets(NULL, NULL, 0, 0);
     vk_eng_pipeline_release(NULL, depth_stencil);
     vk_eng_pipeline_release(NULL, pipeline);
