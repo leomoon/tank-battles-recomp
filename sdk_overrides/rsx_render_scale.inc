@@ -18,6 +18,17 @@ __attribute__((weak)) int tb_vk_scale_bindings(tb_scale_surface color, tb_scale_
 __attribute__((weak)) void tb_vk_scale_skip_frame(void) {}
 __attribute__((weak)) void tb_vk_scale_capture(tb_scale_surface color, const char* path)
 { (void)color; (void)path; }
+__attribute__((weak)) int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,
+        tb_scale_rect source, tb_scale_rect dest)
+{ (void)color; (void)display; (void)source; (void)dest; return 0; }
+__attribute__((weak)) void tb_vk_scale_publish(tb_scale_surface display, int complete)
+{ (void)display; (void)complete; }
+__attribute__((weak)) u32 tb_vk_scale_scanout(tb_scale_surface display)
+{ (void)display; return 0; }
+__attribute__((weak)) int tb_vk_scale_patch(tb_scale_surface surface, u32 native, tb_scale_rect rect, int pending)
+{ (void)surface; (void)native; (void)rect; (void)pending; return 0; }
+__attribute__((weak)) int tb_vk_scale_present(u32 native, u32 scaled)
+{ (void)native; (void)scaled; return 0; }
 
 typedef struct {
     tb_scale_surface color, depth;
@@ -26,8 +37,14 @@ typedef struct {
 typedef struct {
     tb_scale_route route;
     tb_scale_surface depth;
-    unsigned tiles;
+    unsigned tiles, scaled_tiles;
 } tb_scale_resolve;
+
+typedef struct {
+    u32 handle;
+    tb_scale_surface surface;
+    tb_scale_rect rect;
+} tb_scale_update;
 
 static struct {
     unsigned percent;
@@ -76,20 +93,44 @@ static void tb_scale_forget_route(u32 buffer)
     tb_scale_scene.proven[buffer] = (tb_scale_resolve){0};
 }
 
-static void tb_scale_guest_write(u32 location, u32 offset, u32 pitch, u32 w, u32 h)
+static void tb_scale_native_write(u32 location, u32 offset, u32 pitch, u32 w, u32 h,
+                                 const tb_scale_update* update)
 {
-    if (tb_scale_scene.percent <= 100) return;
+    if (tb_scale_scene.percent <= 100 || !pitch || !w || !h) return;
     const u64 size = (u64)(h - 1) * pitch + (u64)w * 4;
     for (u32 i = 0; i < TB_SCALE_MAX_ROUTES; ++i) {
         const tb_scale_resolve* p = &tb_scale_scene.pending[i];
         const tb_scale_resolve* r = &tb_scale_scene.proven[i];
-        if (tb_scale_overlaps(r->route.color, location, offset, size) ||
+        if (!(tb_scale_overlaps(r->route.color, location, offset, size) ||
             tb_scale_overlaps(r->route.display, location, offset, size) ||
             tb_scale_overlaps(r->depth, location, offset, size) ||
             tb_scale_overlaps(p->route.color, location, offset, size) ||
             tb_scale_overlaps(p->route.display, location, offset, size) ||
-            tb_scale_overlaps(p->depth, location, offset, size))
-            tb_scale_forget_route(i);
+            tb_scale_overlaps(p->depth, location, offset, size))) continue;
+
+        if (update && update->handle && update->rect.width == w && update->rect.height == h &&
+            (tb_scale_same_surface(update->surface, r->route.color) ||
+             tb_scale_same_surface(update->surface, r->route.display) ||
+             tb_scale_same_surface(update->surface, p->route.color) ||
+             tb_scale_same_surface(update->surface, p->route.display)) &&
+            tb_vk_scale_patch(update->surface, update->handle, update->rect, p->scaled_tiles != 0)) continue;
+        tb_scale_forget_route(i);
+    }
+}
+
+static void tb_scale_clear_scanout(const eng_surface* surface, tb_scale_rect rect)
+{
+    if (tb_scale_scene.percent <= 100) return;
+    const tb_scale_surface id = tb_scale_color_id(surface);
+    const u64 address = (u64)id.offset + (u64)rect.y * id.pitch + (u64)rect.x * 4;
+    const u64 end = address + (u64)(rect.height - 1) * id.pitch + (u64)rect.width * 4;
+    for (u32 i = 0; i < TB_SCALE_MAX_ROUTES; ++i) {
+        const eng_display_buffer* d = &g.display_buffers[i];
+        if (!d->valid || d->location != id.location ||
+            address >= (u64)d->offset + (u64)d->pitch * d->height || d->offset >= end) continue;
+        const tb_scale_update update = {surface->handle, id, rect};
+        tb_scale_native_write(id.location, (u32)address, id.pitch, rect.width, rect.height, &update);
+        return;
     }
 }
 
@@ -122,10 +163,10 @@ static void tb_scale_note_draw(const rsx_dsp_surface* sf, u32 slot, u32 zslot)
     }
 }
 
-static void tb_scale_note_resolve(u32 ss, u32 ds, u32 sx, u32 sy, u32 dx, u32 dy,
+static int tb_scale_note_resolve(u32 ss, u32 ds, u32 sx, u32 sy, u32 dx, u32 dy,
                                   u32 kx, u32 ky, u32 width, u32 height)
 {
-    if (tb_scale_scene.percent <= 100) return;
+    if (tb_scale_scene.percent <= 100) return 0;
     const tb_scale_surface display = tb_scale_color_id(&g.surfaces[ds]);
     for (u32 i = 0; i < TB_SCALE_MAX_ROUTES; ++i) {
         if (!tb_scale_display_matches(&g.display_buffers[i], display)) continue;
@@ -135,8 +176,7 @@ static void tb_scale_note_resolve(u32 ss, u32 ds, u32 sx, u32 sy, u32 dx, u32 dy
             kx != 2 || ky != 2 || sx != dx * 2 + 1 || sy != dy * 2 + 1 ||
             dx % 512 || dy % 512 || dx >= 1280 || dy >= 720 ||
             width != (dx == 1024 ? 256 : 512) || height != (dy == 512 ? 208 : 512)) {
-            tb_scale_forget_route(i);
-            return;
+            return 0;
         }
         const unsigned tile = 1u << (dy / 512 * 3 + dx / 512);
         tb_scale_resolve* p = &tb_scale_scene.pending[i];
@@ -151,8 +191,14 @@ static void tb_scale_note_resolve(u32 ss, u32 ds, u32 sx, u32 sy, u32 dx, u32 dy
         p->route = (tb_scale_route){draw.color, display};
         p->depth = draw.depth;
         p->tiles |= tile;
-        return;
+        /* Native samples the second texel of each 2x2 footprint. Resolve
+         * the entire matching footprint at the scaled display grid. */
+        const tb_scale_rect source = {sx - 1, sy - 1, width * 2, height * 2};
+        const tb_scale_rect dest = {dx, dy, width, height};
+        if (tb_vk_scale_resolve(draw.color, display, source, dest)) p->scaled_tiles |= tile;
+        return 1;
     }
+    return 0;
 }
 
 static int tb_scale_live_color(tb_scale_surface surface)
@@ -177,6 +223,7 @@ static int tb_scale_present(u32 buffer, u32 target)
     if (pending->tiles) {
         if (pending->tiles == 0x3f &&
             tb_scale_same_surface(pending->route.display, tb_scale_color_id(&g.surfaces[target]))) {
+            tb_vk_scale_publish(pending->route.display, pending->scaled_tiles == 0x3f);
             tb_scale_scene.proven[buffer] = *pending;
             *pending = (tb_scale_resolve){0};
             resolved = 1;

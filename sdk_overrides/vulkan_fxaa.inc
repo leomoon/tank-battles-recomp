@@ -10,12 +10,14 @@ static struct {
     VkPipeline pipeline;
     VkSampler sampler;
     vk_image output;
+    VkExtent2D extent;
+    VkImageView source;
     int written;
 } tb_fxaa;
 
 static void tb_fxaa_shutdown(void)
 {
-    vk_destroy_image(&tb_fxaa.output);
+    tb_present_destroy_image(&tb_fxaa.output);
     if (tb_fxaa.pipeline) pvkDestroyPipeline(s_vk.device, tb_fxaa.pipeline, NULL);
     if (tb_fxaa.sampler) pvkDestroySampler(s_vk.device, tb_fxaa.sampler, NULL);
     if (tb_fxaa.pool) pvkDestroyDescriptorPool(s_vk.device, tb_fxaa.pool, NULL);
@@ -82,9 +84,6 @@ static int tb_fxaa_init(void)
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
     };
     if (pvkCreateSampler(s_vk.device, &sampler, NULL, &tb_fxaa.sampler)) goto fail;
-    if (vk_create_image(&tb_fxaa.output, VK_FORMAT_R8G8B8A8_UNORM, s_vk.width, s_vk.height,
-            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT)) goto fail;
     const VkShaderModuleCreateInfo mc = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = sizeof tb_fxaa_spirv, .pCode = tb_fxaa_spirv
@@ -101,8 +100,34 @@ static int tb_fxaa_init(void)
     pvkDestroyShaderModule(s_vk.device, module, NULL);
     module = VK_NULL_HANDLE;
     if (result) goto fail;
+    tb_fxaa.state = 1;
+    return 1;
+fail:
+    if (module) pvkDestroyShaderModule(s_vk.device, module, NULL);
+    tb_fxaa_shutdown();
+    tb_fxaa.state = -1;
+    VK_LOG("optional FXAA unavailable on this device\n");
+    return 0;
+}
+
+static int tb_fxaa_bind_source(const vk_image* source, VkExtent2D extent)
+{
+    if (tb_fxaa.extent.width != extent.width || tb_fxaa.extent.height != extent.height) {
+        tb_present_destroy_image(&tb_fxaa.output);
+        tb_fxaa.written = 0;
+        tb_fxaa.source = VK_NULL_HANDLE;
+        tb_fxaa.extent = extent;
+        if (vk_create_image(&tb_fxaa.output, VK_FORMAT_R8G8B8A8_UNORM, extent.width, extent.height,
+                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                VK_IMAGE_ASPECT_COLOR_BIT)) {
+            tb_present_destroy_image(&tb_fxaa.output);
+            VK_LOG("optional FXAA target unavailable at %ux%u\n", extent.width, extent.height);
+        } else VK_LOG("optional FXAA ready (%ux%u), F4 toggles antialiasing\n", extent.width, extent.height);
+    }
+    if (!tb_fxaa.output.img) return 0;
+    if (tb_fxaa.source == source->view) return 1;
     const VkDescriptorImageInfo images[2] = {
-        { tb_fxaa.sampler, s_vk.color.view, VK_IMAGE_LAYOUT_GENERAL },
+        { tb_fxaa.sampler, source->view, VK_IMAGE_LAYOUT_GENERAL },
         { VK_NULL_HANDLE, tb_fxaa.output.view, VK_IMAGE_LAYOUT_GENERAL }
     };
     const VkWriteDescriptorSet writes[2] = {
@@ -114,27 +139,22 @@ static int tb_fxaa_init(void)
           .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &images[1] }
     };
     pvkUpdateDescriptorSets(s_vk.device, 2, writes, 0, NULL);
-    tb_fxaa.state = 1;
-    VK_LOG("optional FXAA ready (%ux%u), F4 toggles antialiasing\n", s_vk.width, s_vk.height);
+    tb_fxaa.source = source->view;
     return 1;
-fail:
-    if (module) pvkDestroyShaderModule(s_vk.device, module, NULL);
-    tb_fxaa_shutdown();
-    tb_fxaa.state = -1;
-    VK_LOG("optional FXAA unavailable on this device\n");
-    return 0;
 }
 
 static VkImage tb_fxaa_window_source(VkCommandBuffer cb)
 {
-    if (!tb_settings_antialiasing() || !tb_fxaa_init()) return s_vk.color.img;
-    vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    const vk_image* source = tb_present_image();
+    const VkExtent2D extent = tb_present_extent();
+    if (!tb_settings_antialiasing() || !tb_fxaa_init() || !tb_fxaa_bind_source(source, extent)) return source->img;
+    vk_barrier_image_on(cb, source->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
     vk_barrier_image_on(cb, tb_fxaa.output.img, VK_IMAGE_ASPECT_COLOR_BIT,
         tb_fxaa.written ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED);
     pvkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tb_fxaa.pipeline);
     pvkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tb_fxaa.layout,
         0, 1, &tb_fxaa.set, 0, NULL);
-    pvkCmdDispatch(cb, (s_vk.width + 7) / 8, (s_vk.height + 7) / 8, 1);
+    pvkCmdDispatch(cb, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
     vk_barrier_image_on(cb, tb_fxaa.output.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
     tb_fxaa.written = 1;
     return tb_fxaa.output.img;

@@ -2,6 +2,9 @@
  * attachments stay outside the engine's guest address and alias tables. */
 #include "render_scale.h"
 
+static int tb_vk_color_blit(u32 source, tb_scale_rect source_rect, u32 dest,
+                           tb_scale_rect dest_rect, VkFilter filter);
+
 typedef struct {
     u32 handle;
     tb_scale_extent extent;
@@ -17,6 +20,7 @@ typedef struct {
     tb_vk_scale_image depth;
     tb_vk_scale_image color[TB_SCALE_MAX_ROUTES];
     tb_vk_scale_image display[TB_SCALE_MAX_ROUTES];
+    unsigned display_ready[TB_SCALE_MAX_ROUTES];
 } tb_vk_scale_bank;
 
 static tb_vk_scale_bank tb_scaled;
@@ -83,6 +87,11 @@ static tb_scale_size tb_vk_scale_limit(void)
     if (limits->maxViewportDimensions[0] < limit.width) limit.width = limits->maxViewportDimensions[0];
     if (limits->maxViewportDimensions[1] < limit.height) limit.height = limits->maxViewportDimensions[1];
     const VkFormat formats[] = {VK_FORMAT_R8G8B8A8_UNORM, s_vk.depth_format};
+    VkFormatProperties color;
+    pvkGetPhysicalDeviceFormatProperties(s_vk.phys, formats[0], &color);
+    const VkFormatFeatureFlags blit = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    if ((color.optimalTilingFeatures & blit) != blit) return (tb_scale_size){0};
     const VkImageUsageFlags usages[] = {
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -219,6 +228,49 @@ static u32 tb_vk_scale_find_color(tb_scale_surface id)
         if (!memcmp(&id, &tb_scaled.layout.routes[i].color, sizeof id))
             return tb_scaled.color[i].handle;
     return 0;
+}
+
+static u32 tb_vk_scale_display_index(tb_scale_surface id)
+{
+    for (u32 i = 0; i < tb_scaled.layout.count; ++i)
+        if (!memcmp(&id, &tb_scaled.layout.routes[i].display, sizeof id)) return i;
+    return TB_SCALE_MAX_ROUTES;
+}
+
+int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,
+                        tb_scale_rect source, tb_scale_rect dest)
+{
+    const u32 route = tb_vk_scale_display_index(display);
+    if (route == TB_SCALE_MAX_ROUTES) return 0;
+    tb_scaled.display_ready[route] = 0;
+    const u32 handle = tb_vk_scale_find_color(color);
+    if (!tb_scaled.rasterized || !handle || handle != tb_scaled.active_color ||
+        handle != tb_scaled.color[route].handle) return 0;
+    return tb_vk_color_blit(handle, source, tb_scaled.display[route].handle, dest, VK_FILTER_LINEAR);
+}
+
+void tb_vk_scale_publish(tb_scale_surface display, int complete)
+{
+    const u32 route = tb_vk_scale_display_index(display);
+    if (route != TB_SCALE_MAX_ROUTES) tb_scaled.display_ready[route] = !!complete;
+}
+
+u32 tb_vk_scale_scanout(tb_scale_surface display)
+{
+    const u32 route = tb_vk_scale_display_index(display);
+    return route != TB_SCALE_MAX_ROUTES && tb_scaled.display_ready[route] ? tb_scaled.display[route].handle : 0;
+}
+
+int tb_vk_scale_patch(tb_scale_surface surface, u32 native, tb_scale_rect rect, int pending)
+{
+    const u32 route = tb_vk_scale_display_index(surface);
+    if (route != TB_SCALE_MAX_ROUTES) {
+        if (!pending && !tb_scaled.display_ready[route]) return 1;
+        return tb_vk_color_blit(native, rect, tb_scaled.display[route].handle, rect, VK_FILTER_NEAREST);
+    }
+    const u32 color = tb_vk_scale_find_color(surface);
+    if (!color || color != tb_scaled.active_color) return 1;
+    return tb_vk_color_blit(native, rect, color, rect, VK_FILTER_NEAREST);
 }
 
 void tb_vk_scale_skip_frame(void)

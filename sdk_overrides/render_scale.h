@@ -80,3 +80,9 @@ int tb_vk_scale_bindings(tb_scale_surface color, tb_scale_surface depth, int ste
                         tb_scale_binding* binding);
 void tb_vk_scale_skip_frame(void);
 void tb_vk_scale_capture(tb_scale_surface color, const char* path);
+int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,
+                        tb_scale_rect source, tb_scale_rect dest);
+void tb_vk_scale_publish(tb_scale_surface display, int complete);
+uint32_t tb_vk_scale_scanout(tb_scale_surface display);
+int tb_vk_scale_patch(tb_scale_surface surface, uint32_t native, tb_scale_rect rect, int pending);
+int tb_vk_scale_present(uint32_t native, uint32_t scaled);

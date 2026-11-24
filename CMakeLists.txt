@@ -242,6 +242,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_render_scale.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/rsx_scale_raster.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_render_scale.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_present_image.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_fence_poll.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/vulkan_present_mode.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk_overrides/gcm_label_publication.inc"

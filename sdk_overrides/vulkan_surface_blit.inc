@@ -313,3 +313,66 @@ int tb_vk_surface_blit(u32 src, u32 sx, u32 sy, u32 kx, u32 ky, u32 dst, u32 dx,
     if (!s_vk.device || !s_vk.eng_active || !tb_vk_blit_exact()) return 0;
     return tb_vk_gather_record(src, sx, sy, kx, ky, dst, dx, dy, dw, dh);
 }
+
+/* Convert each end from its own guest extent. The Native NV3089 path
+ * above keeps its exact integer samples. The display resolve filters the
+ * scaled scene at the scaled output grid. Native uploads use nearest. */
+static int tb_vk_color_rect(const vk_eng_obj* image, tb_scale_rect guest, tb_scale_rect* host)
+{
+    const tb_scale_size size = {image->w, image->h};
+    return tb_scale_rect_map((tb_scale_extent){image->scale_percent ? image->guest_size : size, size},
+                             guest, host);
+}
+
+static void tb_vk_record_color_blit(VkCommandBuffer cb, VkImage src, tb_scale_rect s,
+                                   VkImage dst, tb_scale_rect d, VkFilter filter)
+{
+    vk_barrier_image_on(cb, src, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    vk_barrier_image_on(cb, dst, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    const VkImageBlit blit = {
+        .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        .srcOffsets = {{(int32_t)s.x, (int32_t)s.y, 0},
+                       {(int32_t)(s.x+s.width), (int32_t)(s.y+s.height), 1}},
+        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        .dstOffsets = {{(int32_t)d.x, (int32_t)d.y, 0},
+                       {(int32_t)(d.x+d.width), (int32_t)(d.y+d.height), 1}}
+    };
+    pvkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, filter);
+}
+
+static int tb_vk_color_blit(u32 source, tb_scale_rect source_rect, u32 dest,
+                           tb_scale_rect dest_rect, VkFilter filter)
+{
+    const vk_eng_obj* src = vk_eng_get(source, VK_ENG_COLOR);
+    const vk_eng_obj* dst = vk_eng_get(dest, VK_ENG_COLOR);
+    tb_scale_rect s, d;
+    if (!src || !dst || src->fmt != VK_FORMAT_R8G8B8A8_UNORM || dst->fmt != src->fmt ||
+        !tb_vk_color_rect(src, source_rect, &s) || !tb_vk_color_rect(dst, dest_rect, &d)) return 0;
+
+    vk_image snapshot = {0};
+    const int alias = src->im.img == dst->im.img;
+    if (alias && vk_create_image(&snapshot, src->fmt, s.width, s.height,
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT)) {
+        vk_destroy_image(&snapshot);
+        return 0;
+    }
+    const int batched = !alias && (vk_eb_active() || tb_async_record());
+    int ok = 0;
+    if (batched ? (!s_eb_pending && vk_begin()) : vk_begin()) goto done;
+    tb_group_end();
+    VkImage from = src->im.img;
+    if (alias) {
+        const tb_scale_rect whole = {0, 0, s.width, s.height};
+        vk_barrier_image(snapshot.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+        tb_vk_record_color_blit(s_vk.cmd, from, s, snapshot.img, whole, VK_FILTER_NEAREST);
+        from = snapshot.img;
+        s = whole;
+    }
+    tb_vk_record_color_blit(s_vk.cmd, from, s, dst->im.img, d, filter);
+    if (batched) { vk_eb_recorded(); ok = 1; }
+    else ok = !vk_submit_and_wait();
+done:
+    if (alias) vk_destroy_image(&snapshot);
+    return ok;
+}

@@ -390,7 +390,135 @@ def main():
    text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/gcm_label_publication.inc')+'"\n'+text
   if relative=='libs/video/rsx_vulkan_backend.c':
    scale_header = Path(__file__).resolve().parent.parent/'sdk_overrides/render_scale.h'
+   present_image = scale_header.with_name('vulkan_present_image.inc')
    install_scale = [
+    ('static vk_rect vk_window_fit(void)', '#include "'+str(present_image)+'"\n\nstatic vk_rect vk_window_fit(void)'),
+    ('''    if (!s_vk.width || !s_vk.height) return r;
+    if ((u64)dw * s_vk.height > (u64)dh * s_vk.width) {
+        r.w = (u32)(((u64)dh * s_vk.width + s_vk.height / 2) / s_vk.height);
+        r.x = (dw - r.w) / 2;
+    } else {
+        r.h = (u32)(((u64)dw * s_vk.height + s_vk.width / 2) / s_vk.width);''',
+     '''    const VkExtent2D extent = tb_present_extent();
+    if (!extent.width || !extent.height) return r;
+    if ((u64)dw * extent.height > (u64)dh * extent.width) {
+        r.w = (u32)(((u64)dh * extent.width + extent.height / 2) / extent.height);
+        r.x = (dw - r.w) / 2;
+    } else {
+        r.h = (u32)(((u64)dw * extent.height + extent.width / 2) / extent.width);'''),
+    ('''    vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    VkImageMemoryBarrier b = {''',
+     '''    const VkExtent2D extent = tb_present_extent();
+    vk_barrier_image_on(cb, tb_present_image()->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    VkImageMemoryBarrier b = {'''),
+    ('        /* The bars. The clear and the blit write disjoint pixels, so they need no barrier between them. */',
+     '        /* The clear writes the whole swapchain image, including the blit area. */'),
+    ('''                              &b.subresourceRange);
+    }
+    VkImageBlit blit''', '''                              &b.subresourceRange);
+        VkImageMemoryBarrier after_clear = b;
+        after_clear.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        after_clear.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                              0, 0, NULL, 0, NULL, 1, &after_clear);
+    }
+    VkImageBlit blit'''),
+    ('''        .srcOffsets = { { 0, 0, 0 }, { (int32_t)s_vk.width, (int32_t)s_vk.height, 1 } },
+        .dstSubresource''',
+     '''        .srcOffsets = { { 0, 0, 0 }, { (int32_t)extent.width, (int32_t)extent.height, 1 } },
+        .dstSubresource'''),
+    ('    fprintf(f, "P6\\n%u %u\\n255\\n", s_vk.width, s_vk.height);\n    for (size_t i = 0; i < (size_t)s_vk.width * s_vk.height; i++)',
+     '''    const VkExtent2D extent = tb_present_extent();
+    fprintf(f, "P6\\n%u %u\\n255\\n", extent.width, extent.height);
+    for (size_t i = 0; i < (size_t)extent.width * extent.height; i++)'''),
+    ('''    vk_invalidate(&s_vk.readback);
+    const unsigned char* px = (const unsigned char*)s_vk.readback.ptr;
+    size_t c = ((size_t)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4;''',
+     '''    const VkExtent2D extent = tb_present_extent();
+    vk_buffer* const readback = tb_present_readback();
+    vk_invalidate(readback);
+    const unsigned char* px = readback->ptr;
+    const int full = tb_present_full_capture();
+    const size_t c = full ? ((size_t)(extent.height / 2) * extent.width + extent.width / 2) * 4 : 0;'''),
+    ('    tb_frame_history(px,s_vk.width,s_vk.height,s_vk.presented);',
+     '    if (full) tb_frame_history(px, extent.width, extent.height, s_vk.presented);'),
+    ('static void vk_present_record_end(VkCommandBuffer cb)\n{', '''static void vk_present_record_end(VkCommandBuffer cb)
+{
+    const VkExtent2D extent = tb_present_extent();
+    const VkImage image = tb_present_image()->img;
+    const VkBuffer readback = tb_present_readback()->buf;'''),
+    ('''    vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    VkBufferImageCopy region''',
+     '''    vk_barrier_image_on(cb, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    VkBufferImageCopy region'''),
+    ('''        .imageExtent = { s_vk.width, s_vk.height, 1 },
+    };
+    {
+        static int full=-1;
+        if (full<0) { const char* history=getenv("TB_FRAME_HISTORY"); full=s_vk.dump_path || (history && *history); }
+        if (!full) {
+            region.bufferOffset = ((VkDeviceSize)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4u;
+            region.imageOffset = (VkOffset3D){ (int32_t)(s_vk.width / 2), (int32_t)(s_vk.height / 2), 0 };
+            region.imageExtent = (VkExtent3D){ 1, 1, 1 };
+        }
+    }
+    pvkCmdCopyImageToBuffer(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
+                            s_vk.readback.buf, 1, &region);''',
+     '''        .imageExtent = { extent.width, extent.height, 1 },
+    };
+    if (!tb_present_full_capture()) {
+        region.imageOffset = (VkOffset3D){(int32_t)(extent.width / 2), (int32_t)(extent.height / 2), 0};
+        region.imageExtent = (VkExtent3D){1, 1, 1};
+    }
+    pvkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, readback, 1, &region);'''),
+    ('        .buffer = s_vk.readback.buf, .offset = 0, .size = VK_WHOLE_SIZE,',
+     '        .buffer = readback, .offset = 0, .size = VK_WHOLE_SIZE,'),
+    ('    if (cb) vk_present_record_end(cb);',
+     '    if (cb) { tb_present_scaled.active = 0; vk_present_record_end(cb); }'),
+    ('static void vk_eng_present(void* user, u32 surface)',
+     'static void vk_eng_present_source(void* user, u32 surface, u32 scaled)'),
+    ('''    if (cb) {
+        if (o) {
+            tb_vulkan_event(6,surface,o->w,o->h);
+            vk_barrier_image_on(cb, o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+            vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);''',
+     '''    if (cb) {
+        const vk_eng_obj* hi = vk_eng_get(scaled, VK_ENG_COLOR);
+        tb_present_scaled.active = hi && hi->scale_percent && tb_present_prepare_scaled(hi->w, hi->h);
+        if (tb_present_scaled.active) o = &s_eobj[scaled];
+        if (o) {
+            const VkExtent2D extent = tb_present_extent();
+            const VkImage output = tb_present_image()->img;
+            tb_vulkan_event(6,surface,o->w,o->h);
+            vk_barrier_image_on(cb, o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+            const int first = tb_present_scaled.active && !tb_present_scaled.written;
+            vk_barrier_image_on(cb, output, VK_IMAGE_ASPECT_COLOR_BIT,
+                                first ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL);
+            if (tb_present_scaled.active) tb_present_scaled.written = 1;'''),
+    ('''                .dstOffsets = { { 0, 0, 0 }, { (int32_t)s_vk.width, (int32_t)s_vk.height, 1 } },
+            };
+            pvkCmdBlitImage(cb, o->im.img, VK_IMAGE_LAYOUT_GENERAL,
+                            s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL, 1, &blit,
+                            (o->w == s_vk.width && o->h == s_vk.height) ? VK_FILTER_NEAREST''',
+     '''                .dstOffsets = { { 0, 0, 0 }, { (int32_t)extent.width, (int32_t)extent.height, 1 } },
+            };
+            pvkCmdBlitImage(cb, o->im.img, VK_IMAGE_LAYOUT_GENERAL, output, VK_IMAGE_LAYOUT_GENERAL, 1, &blit,
+                            (o->w == extent.width && o->h == extent.height) ? VK_FILTER_NEAREST'''),
+    ('/* Pixels a 2D transfer put into guest memory', '''static void vk_eng_present(void* user, u32 surface)
+{
+    vk_eng_present_source(user, surface, 0);
+}
+
+int tb_vk_scale_present(u32 native, u32 scaled)
+{
+    if (!s_vk.device) return 0;
+    vk_eng_present_source(NULL, native, scaled);
+    return 1;
+}
+
+/* Pixels a 2D transfer put into guest memory'''),
+    ('        tb_fxaa_shutdown();\n        vk_destroy_buffer(&tb_fps_buffer);',
+     '        tb_fxaa_shutdown();\n        tb_present_image_shutdown();\n        vk_destroy_buffer(&tb_fps_buffer);'),
     ('X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)',
      'X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage) X(vkCmdClearAttachments)'),
     ('X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties)',
@@ -477,6 +605,16 @@ def main():
     }
     /* Counted only when the draw ran'''),
     ('\n}\n\n/* Resolve a flip', '\n    tb_scale_mirror_clear(&sf, targets[0], n_targets, mask);\n}\n\n/* Resolve a flip'),
+    ('''            } else
+                g.be->clear_color(g.be->user, s->handle, rgba);
+            wrote = 1;''', '''            } else {
+                g.be->clear_color(g.be->user, s->handle, rgba);
+                rc[0] = rc[1] = 0;
+                rc[2] = s->w;
+                rc[3] = s->h;
+            }
+            tb_scale_clear_scanout(s, (tb_scale_rect){rc[0], rc[1], rc[2], rc[3]});
+            wrote = 1;'''),
     ('    tb_scanout_sample(buffer_id,target,g.surfaces[target].offset);', '''    if (tb_scale_present(buffer_id, target)) {
         if (tb_trace.methods) {
             char path[4096];
@@ -486,12 +624,29 @@ def main():
         tb_vk_scale_skip_frame();
     }
     tb_scanout_sample(buffer_id,target,g.surfaces[target].offset);'''),
+    ('    g.be->present(g.be->user, g.surfaces[target].handle);', '    tb_scanout_present(buffer_id, target);'),
     ('    g.ready = 1;', '    memset(&tb_scale_scene, 0, sizeof tb_scale_scene);\n    tb_scale_scene.percent = tb_vk_scale_requested();\n    g.ready = 1;'),
-    ('    if (!g.be->color_target_write) return;', '    tb_scale_guest_write(location, offset, pitch, w, h);\n    if (!g.be->color_target_write) return;'),
    ]
    for before,after in install_scale:
     if text.count(before)!=1:raise SystemExit('RSX render-scale anchor mismatch: '+before)
     text=text.replace(before,after,1)
+   start = text.index('void rsx_draw_engine_guest_wrote(')
+   end = text.index('\nstatic u32 eng_current_surface(', start)
+   write = text[start:end]
+   anchor = '    if (!g.be->color_target_write) return;'
+   if write.count(anchor) != 1: raise SystemExit('Scaled upload anchor mismatch')
+   entry, body = write.split(anchor, 1)
+   body = body.replace('return;', 'goto notify_scale;')
+   body = body.replace('    x /= 4u;', '    const int aligned = x % 4u == 0;\n    x /= 4u;')
+   anchor = '    g.surfaces[slot].guest_dirty=0;'
+   if body.count(anchor) != 1: raise SystemExit('Scaled upload dirty-state anchor mismatch')
+   body = body.replace(anchor, '''    if (!x && !y && w == s->w && h == s->h) g.surfaces[slot].guest_dirty = 0;
+    if (aligned) update = (tb_scale_update){s->handle, tb_scale_color_id(s), {x, y, w, h}};
+notify_scale:
+    tb_scale_native_write(location, offset, pitch, width, height, &update);''')
+   text = text[:start] + entry + '''    const u32 width = w, height = h;
+    tb_scale_update update = {0};
+    if (!g.be->color_target_write) goto notify_scale;''' + body + text[end:]
   if relative=='libs/video/rsx_draw_engine.c':
    text='#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/depth_cost_trace.h')+'"\n'+text
    for function,label in [('eng_vertex_layout','vertex-layout'),('dc_fetch','vertex-fetch'),('eng_pipeline_get','engine-pipeline'),('sink_bind_textures','texture-binding')]:
@@ -517,7 +672,7 @@ def main():
   target=out/relative;target.parent.mkdir(parents=True,exist_ok=True)
   if not target.exists() or target.read_text()!=text:target.write_text(text)
   record=dict(source=relative,sha256=digest,output_sha256=hashlib.sha256(text.encode()).hexdigest())
-  overrides={'libs/video/rsx_vulkan_backend.c':['render_scale.h','vulkan_render_scale.inc','fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_depth_bias.inc','vulkan_fxaa.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['render_scale.h','render_scale_shader.h','rsx_render_scale.inc','rsx_scale_raster.inc','rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
+  overrides={'libs/video/rsx_vulkan_backend.c':['render_scale.h','vulkan_render_scale.inc','vulkan_present_image.inc','fps_vulkan.inc','lifecycle_stats.inc','gpu_timing.inc','vulkan_draw_group.inc','vulkan_depth16.inc','vulkan_depth_bias.inc','vulkan_fxaa.inc','vulkan_fence_poll.inc','vulkan_present_mode.inc','vulkan_async_batches.inc','vulkan_surface_blit.inc','vulkan_frame_counters.inc','vulkan_gpu_frame_timing.inc'],'libs/audio/cellAudio.c':'audio_clock.inc','libs/video/cellGcmSys.c':['rsx_memory_copy.inc','gcm_label_publication.inc','nv3089_gpu.inc'],'libs/filesystem/edat.c':'edat_cache.inc','libs/video/rsx_draw_engine.c':['render_scale.h','render_scale_shader.h','rsx_render_scale.inc','rsx_scale_raster.inc','rsx_scanout.inc','rsx_texture_coherence.inc','rsx_trace.inc','depth_path_trace.inc','depth_guest_read.inc','page_census_arm.inc','gpu_blit_engine.inc']}
   if relative in overrides:
    names=overrides[relative] if isinstance(overrides[relative],list) else [overrides[relative]]
    record['port_inputs']={name:hashlib.sha256((Path(__file__).resolve().parent.parent/'sdk_overrides'/name).read_bytes()).hexdigest() for name in names}

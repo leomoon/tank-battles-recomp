@@ -115,6 +115,64 @@ static void check_scaled_raster(const tb_scale_layout* group)
         scale_pixel(binding.color, 5, y, 0, 0, 0);
     }
 
+    const tb_scale_surface display = group->routes[0].display;
+    const u32 scaled_display = tb_scaled.display[0].handle;
+    const u32 native_display = vk_eng_color_target_create(NULL, RSX_BE_FMT_R8G8B8A8, 6, 4, NULL, 0);
+    const float blue[] = {0, 0, 1, 1};
+    assert(native_display);
+    vk_eng_clear_color(NULL, native_display, scale_black);
+    vk_eng_clear_color(NULL, scaled_display, scale_black);
+    assert(tb_vk_scale_resolve(color, display, (tb_scale_rect){0, 0, 6, 7}, (tb_scale_rect){0, 0, 3, 4}));
+    assert(!tb_vk_scale_scanout(display));
+    assert(tb_vk_scale_resolve(color, display, (tb_scale_rect){6, 0, 5, 7}, (tb_scale_rect){3, 0, 3, 4}));
+    tb_vk_scale_publish(display, 1);
+    assert(tb_vk_scale_scanout(display) == scaled_display);
+    tb_scale_surface obsolete = display;
+    ++obsolete.generation;
+    assert(!tb_vk_scale_scanout(obsolete));
+
+    assert(tb_vk_scale_present(native_display, scaled_display));
+    assert(tb_present_scaled.active && !tb_present_scaled.readback.ptr);
+    setenv("TB_FRAME_HISTORY", "fixture", 1); // Request full output backing.
+    assert(tb_vk_scale_present(native_display, scaled_display));
+    const VkExtent2D output = tb_present_extent();
+    assert(output.width == 12 && output.height == 8 && tb_present_scaled.readback.ptr);
+    const u8* frame = tb_present_readback()->ptr;
+    unsigned detail = 0;
+    for (u32 i = 0; i < output.width * output.height; ++i) detail += frame[i * 4] != 0;
+    assert(detail > 0); // The black Native image cannot produce this detail at any scale.
+    scale_pixel(native_display, 2, 2, 0, 0, 0);
+
+    // Replay a pitched guest upload without overwriting adjacent scaled pixels.
+    const u8 guest_rows[] = {0, 0, 255, 255, 17, 17, 17, 17,
+                             0, 255, 0, 255, 18, 18, 18, 18};
+    const tb_scale_rect patch = {3, 1, 1, 2};
+    vk_eng_color_target_write(NULL, native_display, patch.x, patch.y, patch.width, patch.height, guest_rows, 8);
+    assert(tb_vk_scale_patch(display, native_display, patch, 0));
+    scale_pixel(scaled_display, 6, 3, 0, 0, 255);
+    scale_pixel(scaled_display, 7, 4, 0, 255, 0);
+    scale_pixel(scaled_display, 8, 4, 0, 0, 0);
+    scale_pixel(scaled_display, 2, 7, 0, 0, 0);
+
+    // The overlapping transfer reads a snapshot. The source's lower row
+    // must stay green even after its first row overwrites that destination.
+    assert(tb_vk_color_blit(scaled_display, patch, scaled_display, (tb_scale_rect){3, 2, 1, 2}, VK_FILTER_NEAREST));
+    scale_pixel(scaled_display, 6, 4, 0, 0, 255);
+    scale_pixel(scaled_display, 6, 6, 0, 255, 0);
+    assert(tb_vk_color_blit(scaled_display, (tb_scale_rect){3, 2, 1, 2},
+                           native_display, (tb_scale_rect){0, 0, 1, 2}, VK_FILTER_LINEAR));
+    scale_pixel(native_display, 0, 0, 0, 0, 255);
+    scale_pixel(native_display, 0, 1, 0, 255, 0);
+
+    tb_vk_scale_publish(display, 0);
+    assert(!tb_vk_scale_scanout(display));
+    vk_eng_clear_color(NULL, native_display, blue);
+    vk_eng_present(NULL, native_display);
+    assert(!tb_present_scaled.active && s_vk.last_center == 255);
+    unsetenv("TB_FRAME_HISTORY");
+    tb_present_image_shutdown();
+    vk_eng_color_target_release(NULL, native_display);
+
     // Preserve guest fragment coordinates, stencil reference and depth bounds.
     vk_eng_set_viewport(NULL, 1, 0, 10, 7);
     vk_eng_set_scissor(NULL, 1, 0, UINT32_MAX, 7);
@@ -287,6 +345,6 @@ int main(void)
     check_scaled_raster(&group);
     vk_eng_shutdown(NULL);
     assert(live_objects() == 0 && s_e2.fb_count == 0 && !tb_scaled.percent);
-    puts("PASS: preset extents, Native fallback, pre-resolve detail, viewport/scissor, WPOS, depth and stencil");
+    puts("PASS: presets, pre-resolve detail, viewport/scissor, WPOS, depth, stencil, partial transfers, aliases and scaled presentation");
     return 0;
 }

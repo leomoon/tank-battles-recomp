@@ -98,40 +98,47 @@ static void check_polygon_offset(void)
     vk_eng_pipeline_release(NULL, pipeline);
 }
 
-static void check_fxaa(void)
+static void check_fxaa(int scaled)
 {
-    const u32 pixels = s_vk.width * s_vk.height;
+    if (scaled) {
+        assert(tb_present_prepare_scaled(25, 19));
+        tb_present_scaled.active = 1;
+    }
+    const VkImage source = tb_present_image()->img;
+    const VkExtent2D extent = tb_present_extent();
+    const u32 pixels = extent.width * extent.height;
     const size_t bytes = pixels * 4;
     vk_buffer upload = {0}, readback = {0};
     assert(!vk_create_host_buffer(&upload, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT));
     assert(!vk_create_host_buffer(&readback, bytes * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT));
     assert(upload.coherent);
     u8* pattern = upload.ptr;
-    for (u32 y = 0; y < s_vk.height; ++y) {
-        for (u32 x = 0; x < s_vk.width; ++x) {
-            const size_t offset = (y * s_vk.width + x) * 4;
+    for (u32 y = 0; y < extent.height; ++y) {
+        for (u32 x = 0; x < extent.width; ++x) {
+            const size_t offset = (y * extent.width + x) * 4;
             memset(pattern + offset, x > y ? 255 : 0, 3);
             pattern[offset + 3] = 81;
         }
     }
     assert(!vk_begin());
-    vk_barrier_image(s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    vk_barrier_image(source, VK_IMAGE_ASPECT_COLOR_BIT, scaled ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL);
     VkBufferImageCopy region = {
         .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-        .imageExtent = { s_vk.width, s_vk.height, 1 }
+        .imageExtent = { extent.width, extent.height, 1 }
     };
-    pvkCmdCopyBufferToImage(s_vk.cmd, upload.buf, s_vk.color.img,
+    pvkCmdCopyBufferToImage(s_vk.cmd, upload.buf, source,
         VK_IMAGE_LAYOUT_GENERAL, 1, &region);
-    assert(tb_fxaa_window_source(s_vk.cmd) == s_vk.color.img);
-    assert(!tb_fxaa.state); /* Off allocates no FXAA resources. */
+    assert(tb_fxaa_window_source(s_vk.cmd) == source);
+    if (!scaled) assert(!tb_fxaa.state); /* Off allocates no FXAA resources. */
     setenv("TB_FXAA", "1", 1);
     tb_settings_note_antialiasing(1);
     const VkImage filtered = tb_fxaa_window_source(s_vk.cmd);
-    assert(filtered && filtered != s_vk.color.img);
+    assert(filtered && filtered != source);
+    assert(tb_fxaa.extent.width == extent.width && tb_fxaa.extent.height == extent.height);
     pvkCmdCopyImageToBuffer(s_vk.cmd, filtered, VK_IMAGE_LAYOUT_GENERAL,
         readback.buf, 1, &region);
     region.bufferOffset = bytes;
-    pvkCmdCopyImageToBuffer(s_vk.cmd, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
+    pvkCmdCopyImageToBuffer(s_vk.cmd, source, VK_IMAGE_LAYOUT_GENERAL,
         readback.buf, 1, &region);
     const VkBufferMemoryBarrier host = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -153,16 +160,16 @@ static void check_fxaa(void)
         assert(result[i * 4 + 3] == 81);
     }
     assert(smoothed > 0);
-    assert(result[(s_vk.width - 1) * 4] == 255);
-    assert(result[(pixels - s_vk.width) * 4] == 0);
+    assert(result[(extent.width - 1) * 4] == 255);
+    assert(result[(pixels - extent.width) * 4] == 0);
     unsetenv("TB_FXAA");
     tb_settings_note_antialiasing(0);
-    assert(tb_fxaa_window_source(VK_NULL_HANDLE) == s_vk.color.img);
-    tb_fxaa_shutdown();
-    assert(!tb_fxaa.state && !tb_fxaa.output.img);
+    assert(tb_fxaa_window_source(VK_NULL_HANDLE) == source);
+
     vk_destroy_buffer(&upload);
     vk_destroy_buffer(&readback);
-    puts("PASS: optional FXAA smooths diagonal edges, preserves alpha and source bytes, and switches off cleanly");
+    if (scaled) tb_present_image_shutdown();
+    puts("PASS: optional FXAA smooths edges and preserves alpha and source bytes at the actual frame size");
 }
 int main(void)
 {
@@ -256,7 +263,9 @@ int main(void)
     draw_color(1,0,0,0);vk_eng_color_target_release(NULL,a);
     assert(!tb_group_open && !s_eb_pending);
     check_polygon_offset();
-    check_fxaa();
+    check_fxaa(0);
+    check_fxaa(1);
+    tb_fxaa_shutdown();
     vk_eng_shutdown(NULL);vk_guest_shutdown();
     vk_destroy_image(&s_vk.color);vk_destroy_image(&s_vk.depth);
     vk_destroy_buffer(&s_vk.readback);
