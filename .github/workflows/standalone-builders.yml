@@ -22,7 +22,21 @@ jobs:
           python3 -m unittest discover -s scripts -p test_package_builder.py
           python3 -m unittest discover -s scripts -p test_audit_builder.py
       - name: Launcher and overlay test dependencies
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+        timeout-minutes: 15
+        run: |
+          # Use Ubuntu HTTPS archives in every runner that installs packages.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          if [ -f /etc/apt/apt-security-mirrors.txt ]; then
+            printf '%s\n' 'https://security.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-security-mirrors.txt > /dev/null
+          fi
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i -E 's|http://[^ /]*ec2.archive.ubuntu.com/ubuntu/?|https://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          APT_OPTIONS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60)
+          sudo apt-get "${APT_OPTIONS[@]}" update
+          sudo apt-get "${APT_OPTIONS[@]}" install -y --no-install-recommends libsdl2-dev
       - name: Friends overlay layout and notifications
         run: python3 scripts/test_fps_overlay.py
       - name: Display settings and launcher navigation
@@ -45,15 +59,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build-machine dependencies (never shipped)
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y perl make
+          # Use Ubuntu HTTPS archives in every runner that installs packages.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          if [ -f /etc/apt/apt-security-mirrors.txt ]; then
+            printf '%s\n' 'https://security.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-security-mirrors.txt > /dev/null
+          fi
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i -E 's|http://[^ /]*ec2.archive.ubuntu.com/ubuntu/?|https://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          APT_OPTIONS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60)
+          sudo apt-get "${APT_OPTIONS[@]}" update
+          sudo apt-get "${APT_OPTIONS[@]}" install -y --no-install-recommends perl make
           if [ '${{ matrix.target }}' = linux ]; then
-            sudo apt-get install -y squashfs-tools libx11-dev libxext-dev libxrandr-dev libxi-dev \
+            sudo apt-get "${APT_OPTIONS[@]}" install -y --no-install-recommends squashfs-tools libx11-dev libxext-dev libxrandr-dev libxi-dev \
               libxcursor-dev libxinerama-dev libxss-dev libxfixes-dev libxrender-dev libpulse-dev libasound2-dev libudev-dev \
               pkg-config libwayland-dev libwayland-bin libxkbcommon-dev libegl-dev libgl-dev libglx-dev
           else
-            sudo apt-get install -y zstd libglib2.0-bin
+            sudo apt-get "${APT_OPTIONS[@]}" install -y --no-install-recommends zstd libglib2.0-bin
           fi
       - uses: actions/cache@v6.1.0
         with:
