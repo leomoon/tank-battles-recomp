@@ -60,6 +60,20 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/generate_gpu.py"
     "${CMAKE_CURRENT_BINARY_DIR}/gpu-fixtures" "${EXECUTION_SDK}" COMMAND_ERROR_IS_FATAL ANY)
 find_package(SDL2 CONFIG REQUIRED)
+add_executable(runtime_display_window_check
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/player_window.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/player_settings.cpp")
+target_include_directories(runtime_display_window_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(runtime_display_window_check PRIVATE SDL2::SDL2 Threads::Threads)
+if(MSVC)
+    target_compile_options(runtime_display_window_check PRIVATE /UNDEBUG)
+else()
+    target_compile_options(runtime_display_window_check PRIVATE -UNDEBUG)
+endif()
+add_test(NAME runtime_display_window COMMAND runtime_display_window_check)
+set_tests_properties(runtime_display_window PROPERTIES
+    ENVIRONMENT "SDL_VIDEODRIVER=dummy;TB_SETTINGS_FILE=${CMAKE_CURRENT_BINARY_DIR}/display-window.ini;PS3RECOMP_FULLSCREEN=0;TB_RENDER_SCALE=200"
+    TIMEOUT 30)
 find_package(glslang CONFIG REQUIRED)
 foreach(fixture IN ITEMS draw_groups depth16 nv3089)
     add_executable(vulkan_${fixture} "${CMAKE_CURRENT_BINARY_DIR}/gpu-fixtures/${fixture}.c")

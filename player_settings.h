@@ -10,6 +10,7 @@ extern "C" {
 #endif
 void tb_settings_init(void);
 int tb_settings_window_size(int* width, int* height);
+int tb_settings_window_preset(int* width, int* height);
 void tb_settings_note_overlay(int on);
 void tb_settings_note_fullscreen(int on);
 void tb_settings_note_window(int width, int height);

@@ -168,6 +168,19 @@ extern "C" int tb_settings_window_size(int* width, int* height) {
     return 1;
 }
 
+extern "C" int tb_settings_window_preset(int* width, int* height) {
+    Settings& s = settings();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    for (const auto& preset : tb::display::window_presets) {
+        if (static_cast<int>(preset.choice) == s.window_preset && preset.width) {
+            *width = preset.width;
+            *height = preset.height;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 extern "C" void tb_settings_note_overlay(int on) {
     Settings& s = settings();
     std::lock_guard<std::mutex> lock(s.mutex);

@@ -67,6 +67,9 @@ int main(int argc,char** argv) {
   CHECK(load(file,p,error)); CHECK(p.render_scale==200 && p.mode==Mode::borderless);
   env("TB_RENDER_SCALE","200x"); tb_settings_init(); CHECK(tb_settings_render_scale()==100);
   clear("TB_RENDER_SCALE"); tb_settings_init(); CHECK(tb_settings_render_scale()==200);
+  int requested_w=0,requested_h=0;
+  CHECK(tb_settings_window_preset(&requested_w,&requested_h));
+  CHECK(requested_w==1920 && requested_h==1080);
   clear("TB_SETTINGS_FILE"); env("PS3_GAMEDATA_ROOT",utf8(root));
   tb_settings_init(); CHECK(tb_settings_render_scale()==200);
   env("TB_SETTINGS_FILE",utf8(file));

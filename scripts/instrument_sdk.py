@@ -236,10 +236,15 @@ def main():
    text=instrument(text)
    settings_edits=[
     ('static void vk_window_open(const char* title)', '#include "'+str(Path(__file__).resolve().parent.parent/'sdk_overrides/player_settings_hooks.inc')+'"\nstatic void vk_window_open(const char* title)'),
-    ('    s_vk.window = SDL_CreateWindow(title && title[0] ? title : "ps3recomp",', '    int tb_width=(int)s_vk.width, tb_height=(int)s_vk.height;\n    tb_settings_window_size(&tb_width,&tb_height);\n    s_vk.window = SDL_CreateWindow(title && title[0] ? title : "ps3recomp",'),
+    ('    s_vk.window = SDL_CreateWindow(title && title[0] ? title : "ps3recomp",', '    int tb_width=(int)s_vk.width, tb_height=(int)s_vk.height;\n    tb_window_initial_size(&tb_width,&tb_height);\n    s_vk.window = SDL_CreateWindow(title && title[0] ? title : "ps3recomp",'),
     ('                                   (int)s_vk.width, (int)s_vk.height, flags);', '                                   tb_width, tb_height, flags);'),
-    ('            if (SDL_SetWindowFullscreen(s_vk.window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP) == 0)\n                SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);', '            if (SDL_SetWindowFullscreen(s_vk.window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP) == 0) {\n                SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);\n                tb_settings_note_fullscreen(!full);\n            }'),
-    ('                    e.window.event == SDL_WINDOWEVENT_MAXIMIZED)) {\n            s_vk_resized = 1;', '                    e.window.event == SDL_WINDOWEVENT_MAXIMIZED)) {\n            if (!(SDL_GetWindowFlags(s_vk.window) & (SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED))) {\n                int w,h; SDL_GetWindowSize(s_vk.window,&w,&h); tb_settings_note_window(w,h);\n            }\n            s_vk_resized = 1;')]
+    ('    if (vk_env_on("PS3RECOMP_FULLSCREEN") || vk_env_on("PS3RECOMP_VK_FULLSCREEN")) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;',
+     '    if (getenv("PS3RECOMP_FULLSCREEN") ? vk_env_on("PS3RECOMP_FULLSCREEN") : vk_env_on("PS3RECOMP_VK_FULLSCREEN")) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;'),
+    ('            if (SDL_SetWindowFullscreen(s_vk.window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP) == 0)\n                SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);',
+     '            (void)full;\n            tb_window_toggle_fullscreen(s_vk.window);'),
+    ('                    e.window.event == SDL_WINDOWEVENT_MAXIMIZED)) {\n            s_vk_resized = 1;',
+     '                    e.window.event == SDL_WINDOWEVENT_MAXIMIZED || e.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED)) {\n            tb_window_changed();\n            s_vk_resized = 1;'),
+    ('    return quit ? -1 : 0;\n}', '    tb_window_save_size(s_vk.window);\n    return quit ? -1 : 0;\n}')]
    for before,after in settings_edits:
     if text.count(before)!=1:raise SystemExit('Player settings anchor mismatch')
     text=text.replace(before,after,1)
