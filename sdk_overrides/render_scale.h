@@ -137,7 +137,7 @@ int tb_vk_scale_uploaded(uint32_t native, tb_scale_rect rect);
 int tb_vk_scale_tracked(uint32_t native);
 int tb_vk_scale_depth_upload(uint32_t native, tb_scale_rect rect, const uint8_t* packed, uint32_t pitch);
 
-/* Read/mirror bindings use the guest identity, never an engine slot or a
+/* Selected attachment bindings use the guest identity, never an engine slot or a
  * Vulkan handle that might have been recycled for a different allocation. */
 typedef struct {
     uint32_t color, depth, percent;

@@ -39,7 +39,9 @@ COUNTER_NAMES = ('queue_submit', 'alloc_memory', 'create_image', 'create_buffer'
                  'scale_present_native', 'scale_present_scaled', 'scale_fallback_present',
                  'depth_materialize', 'depth_materialize_bytes', 'gpu_depth_convert', 'gpu_depth_convert_bytes',
                  'color_materialize', 'color_materialize_bytes', 'scale_skip_geometry', 'scale_empty_draw',
-                 'scale_materialize', 'scale_recovery')
+                 'scale_materialize', 'scale_recovery', 'present_readback_bytes',
+                 'present_copy_bytes', 'scale_resolve_bytes', 'scale_retired_bytes',
+                 'alloc_memory_bytes', 'fxaa_texels')
 
 
 def materializations(spans):
@@ -78,7 +80,7 @@ def render_scale_observations(spans):
 BUDGET_MS = 1000.0 / 60.0
 # vulkan_frame_counters.inc TB_TS_TIMED kinds, timed outside render passes.
 GPU_COMMAND_NAMES = {1: 'clear-color', 2: 'clear-depth', 3: 'copy-image-to-buffer', 4: 'copy-buffer-to-image',
-                     5: 'copy-image', 6: 'blit-image', 7: 'dispatch'}
+                     5: 'copy-image', 6: 'blit-image', 7: 'dispatch', 8: 'fxaa'}
 SYSCALL_NAMES = {43: 'thread_yield', 44: 'thread_join', 85: 'event_flag_wait', 92: 'semaphore_wait',
                  97: 'lwmutex_lock', 102: 'mutex_lock', 107: 'cond_wait', 113: 'lwcond_wait',
                  130: 'event_queue_receive', 141: 'usleep', 142: 'sleep'}

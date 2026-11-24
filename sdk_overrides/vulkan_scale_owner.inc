@@ -24,6 +24,54 @@ static tb_vk_scale_image* tb_scale_host_image(u32 handle)
     return NULL;
 }
 
+/* Keep the guest handle/identity, but allocate its Native representation only
+ * when an observer or a partial upload needs it. Contents become valid only
+ * after the materialization serial is published. */
+static int tb_scale_native_storage(u32 native)
+{
+    if (!native || native>=VK_ENG_MAX_OBJ) return 0;
+    vk_eng_obj* o=&s_eobj[native];
+    if (o->im.img) return 1;
+    const int color=o->kind==VK_ENG_COLOR;
+    if (!color && o->kind!=VK_ENG_DEPTH) return 0;
+    const VkImageAspectFlags aspect=color?VK_IMAGE_ASPECT_COLOR_BIT:s_vk.depth_aspect;
+    const VkImageUsageFlags usage=VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|
+        (color?(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT):VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+    if (vk_create_image(&o->im,o->fmt,o->w,o->h,usage,aspect)) {
+        vk_destroy_image(&o->im);
+        return 0;
+    }
+    if (vk_begin()) return 0;
+    vk_barrier_image(o->im.img,aspect,VK_IMAGE_LAYOUT_UNDEFINED);
+    if (vk_submit_and_wait()) return 0;
+    for (u32 i=1;color && i<VK_ENG_MAX_OBJ;++i) {
+        vk_eng_obj* view=&s_eobj[i];
+        if (view->kind==VK_ENG_VIEW && view->surface==native && !view->im.view &&
+            vk_eng_make_view(o->im.img,o->fmt,1,vk_remap(view->remap,view->rsx_fmt),0,&view->im.view)) return 0;
+    }
+    return 1;
+}
+
+static void tb_scale_retire_native(tb_vk_scale_image* image)
+{
+    if (tb_scale_internal || !image->native || !image->authoritative) return;
+    vk_eng_obj* o=&s_eobj[image->native];
+    if (!o->im.img) return;
+    tb_eng_complete(); /* Native views/framebuffers may belong to older batches. */
+    vk_eng_drop_framebuffers();
+    for (u32 i=1;i<VK_ENG_MAX_OBJ;++i)
+        if (s_eobj[i].kind==VK_ENG_VIEW && s_eobj[i].surface==image->native)
+            vk_destroy_image(&s_eobj[i].im);
+    VkMemoryRequirements requirements;
+    pvkGetImageMemoryRequirements(s_vk.device,o->im.img,&requirements);
+    tb_frame_budget_count(TB_FC_SCALE_RETIRED_BYTES,requirements.size);
+    vk_destroy_image(&o->im);
+    image->native_serial=0;
+    /* Initial imports and observers can grow these to Native dimensions. */
+    vk_destroy_buffer(&s_rb_stage);
+    vk_destroy_buffer(&s_up_stage);
+}
+
 /* D32 and stencil are reconstructed independently with center-point nearest
  * sampling. Transfer staging handles devices without depth/stencil blits.
  * This waited path is for initialization, observers and recovery, never the
@@ -34,7 +82,7 @@ static int tb_scale_copy(u32 source, u32 destination)
     const int color=vk_eng_get(source,VK_ENG_COLOR)!=NULL;
     const vk_eng_obj* src=vk_eng_get(source,color?VK_ENG_COLOR:VK_ENG_DEPTH);
     const vk_eng_obj* dst=vk_eng_get(destination,color?VK_ENG_COLOR:VK_ENG_DEPTH);
-    if (!src || !dst || src->fmt!=dst->fmt ||
+    if (!src || !dst || !tb_scale_native_storage(source) || !tb_scale_native_storage(destination) || src->fmt!=dst->fmt ||
         (color?src->fmt!=VK_FORMAT_R8G8B8A8_UNORM:
           (src->fmt!=VK_FORMAT_D32_SFLOAT && src->fmt!=VK_FORMAT_D32_SFLOAT_S8_UINT))) return 0;
     const VkImageAspectFlags aspects=color?VK_IMAGE_ASPECT_COLOR_BIT:s_vk.depth_aspect;
@@ -133,9 +181,14 @@ u32 tb_vk_scale_sample(u32 native)
 void tb_vk_scale_wrote(u32 scaled)
 {
     tb_vk_scale_image* image=tb_scale_host_image(scaled);
-    if (!image || !image->native) return;
-    image->authoritative=1;
+    if (!image) return;
+    if (image->native) image->authoritative=1;
+    /* A completed image may receive a real guest patch before scanout. */
+    for (u32 i=0;i<tb_scaled.layout.count;++i)
+        if (image==&tb_scaled.display[i] && tb_scaled.display_ready[i] && tb_scaled.display_ready[i]==image->serial)
+            ++tb_scaled.display_ready[i];
     ++image->serial;
+    tb_scale_retire_native(image);
 }
 
 void tb_vk_scale_fallback(const char* reason)
@@ -150,6 +203,7 @@ void tb_vk_scale_fallback(const char* reason)
     for (u32 i=0;i<tb_scaled.layout.count;++i) {
         tb_scaled.color[i].authoritative=tb_scaled.display[i].authoritative=0;
         tb_scaled.display_ready[i]=0;
+        tb_scaled.resolve_source[i]=0;
     }
     tb_vk_scale_skip_frame();
     tb_frame_budget_count(TB_FC_SCALE_RECOVERY,1);

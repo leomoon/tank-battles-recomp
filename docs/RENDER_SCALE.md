@@ -122,8 +122,9 @@ rollback. Fractional viewport tests assert exact submitted state and compare
 coverage with a Native attachment using that host viewport; this driver also
 omits the analytic edge column in the Native control. The full fixture still
 fails its previously recorded depth/stencil pixel check at `(6,3)`, and
-`vulkan_draw_groups` still fails its presented-center check. These remain open
-acceptance gates. Linux execution and gameplay validation are pending.
+`vulkan_draw_groups` failed its presented-center check at this stage. Step 5
+fixes that presentation check; the depth/stencil gate remains open. Linux
+execution and broader gameplay validation are pending.
 
 ## Authoritative ownership (lower-resolution Step 4)
 
@@ -160,9 +161,9 @@ does not promise the raster values an original-resolution draw would have made.
 
 Recognized resolves update selected-size display backing without a routine
 Native gather. Unhandled transfers and presentation fallback reconstruct a
-current Native image when needed. The presenter still copies completed output
-into its own storage before reuse. Downscale filtering, full tile publication,
-FXAA and presentation acceptance remain Step 5 work.
+current Native image when needed. The presenter copies completed output
+into its own storage before reuse. The following Step 5 work completes the
+focused resolve/presentation checks.
 
 `scale_materialize` counts completed Native reconstructions; `scale_recovery`
 counts transitions to Native continuation and logs their reason. Existing
@@ -192,6 +193,118 @@ they are not timing comparisons or 60 FPS acceptance. The 150% run also failed
 the overlay-consistency gate, so its timing report was rejected. The first 50%
 attempt timed out at map OCR and hit a shutdown access violation; it was rejected
 before live gameplay. Map recognition was corrected and its rerun completed.
-The full fixture's existing depth/stencil pixel and presented-center failures
-remain open. Local source/artifact hashes, original logs and captures are under
+The full fixture's existing depth/stencil pixel failure remains open; Step 5
+fixes the separate presented-center failure. Local source/artifact hashes, original logs and captures are under
 `analysis/performance/resolution-step4/`.
+
+## Resolve and presentation (lower-resolution Step 5)
+
+The six observed NV3089 tiles resolve directly from the selected scene image
+into the selected display image. At Native the exact second-texel point gather
+is unchanged. Every other preset uses linear filtering at the centre of each
+physical 2x2 footprint, averaging its four texels. The title's tile boundaries,
+including the clipped right and bottom tiles, remain integral at all six
+presets. They therefore use the same global sampling phase without gaps,
+overlap or independent edge clamping. This policy applies to the selected
+raster image; it does not downsample a Native raster pass.
+
+The engine requires six distinct tiles from one unchanged producer serial and
+the same surface generations. The backend also verifies its source serial
+through the resolve and publishes the completed destination serial. Incomplete
+or interrupted resolves cannot become selected scanout images. A legitimate
+guest display patch advances a published serial while retaining untouched
+pixels. Display-buffer rotation keeps independent images and publication state.
+
+Presentation copies the completed image into an owned image before the guest
+can reuse its display buffer. The window path fits that image to the drawable,
+preserving aspect ratio; reduced images are enlarged once on the GPU. Ordinary
+presentation performs no pixel readback and allocates no host readback buffer.
+An explicit centre-pixel diagnostic waits for the present copy and transfers
+four bytes on demand. Dumps and frame history still opt into full selected-size
+readback. RSX diagnostics save both `*-scaled.ppm` scene backing and the completed
+`*-scaled-resolve.ppm` image before window scaling or FXAA.
+
+Native handles retain their guest identities, dimensions and generations, but
+release their physical images after selected backing owns their contents.
+Native views are recreated if a later observer requires reconstruction. Partial
+uploads use temporary Native storage, update only the mapped selected region,
+then retire that storage. Initial-import staging is released too. The unused
+fixed-function framebuffer, color/depth images and full-size readback buffer
+are retired when the register-file engine establishes owned presentation.
+Native proof frames, initialization and explicit observers still have a
+temporary allocation cost; the steady selected path retains no duplicate
+Native scene attachments. Recovery reconstructs current contents before Native
+continuation.
+
+Equal-size transfer rectangles use exact GPU copies. Overlapping transfers
+snapshot their source first. On the Iris 580 Windows driver, barriers alone
+lost texels between the two snapshot copies; a completed snapshot submission
+fixes this rare overlap path. Ordinary tiled resolves remain batched.
+
+The full-size GPU fixture measures the following on the NUC. Attachment totals
+use Vulkan image memory requirements for the three scene/display pairs and
+shared depth, plus the fixture's pre-existing engine images. The Native control
+is 76,132,352 bytes. Peak figures track actual successful fixture-owned Vulkan
+allocations, including initialization, staging and presentation; they exclude
+pre-existing renderer allocations and are not whole-process memory usage.
+
+| Scale | Steady attachment bytes | Transient peak bytes | Resolve output / owned copy, bytes each per frame |
+| --- | ---: | ---: | ---: |
+| 50% | 19,591,168 | 99,917,824 | 921,600 |
+| 75% | 42,954,752 | 119,087,104 | 2,073,600 |
+| Native | 76,132,352 | Native proof/control | 3,686,400 |
+| 150% | 171,646,976 | 281,333,760 | 8,294,400 |
+| 200% | 302,796,800 | 446,038,016 | 14,745,600 |
+| 300% | 682,409,984 | 908,656,640 | 33,177,600 |
+
+Transfer columns count destination payload once per operation, rather than
+physical memory-bus traffic. `scale_resolve_bytes` and `present_copy_bytes`
+report these independently. `present_readback_bytes` is zero in ordinary
+presentation. `alloc_memory_bytes` records allocation request volume, including
+failed attempts; `scale_retired_bytes` records retired Native image requirements.
+These counters complement actual fixture peak measurements and raster counts.
+
+FXAA remains optional and off in initial scale diagnostics. Its shader derives
+texel size from the actual filtered image. The draw-group fixture tests off/on
+at 640x360, 960x540, 1280x720, 1920x1080, 2560x1440 and 3840x2160, preserving
+source bytes and alpha while smoothing the diagonal test edge. Its GPU work is
+reported separately as `fxaa` timestamp spans and `fxaa_texels`. Cold single
+dispatch measurements on this NUC were 0.181 ms at 50%, 0.348 ms at 75%,
+0.607 ms at Native, 1.320 ms at 150%, 2.361 ms at 200% and 5.952 ms at 300%.
+These are diagnostic costs, not sustained gameplay results.
+
+`vulkan_render_scale --resolve-only` checks every output pixel across all six
+tiles, three rotating display buffers, partial patches, source changes,
+incomplete publication, overlap snapshots, aspect-ratio fitting, present-source
+reuse, allocation retirement and explicit full captures at every preset.
+It passes with async and `TB_VK_ASYNC=0` submission on the NUC, as do ownership
+and draw-group fixtures. Geometry, depth16 and NV3089 fixtures also pass. Broad
+integration, Linux GPU execution and sustained 60 GAME FPS remain Steps 6-7.
+
+The fresh Step 5 Windows player captured genuine 640x360 and 960x540 resolve
+images in Battle, with corresponding 1280x720 and 1920x1080 scene backing.
+The 75% resource diagnostic passed strict execution, visibility and overlay
+checks and exited with code 0. Initial 50% resource attempts are retained as
+rejected for overlay/focus checks; their captures are visual evidence only.
+A separate 30-second 50% diagnostic without heavy image capture passed those
+checks and exited normally at 29.7 completed GAME FPS. It recorded about
+9.9 ms GPU work per frame and 22.3 ms on the main guest thread outside traced
+blocking (wall time, rather than OS CPU time). Its CPU samples identify guest
+execution and indirect dispatch as the remaining work. Lower pixel cost has
+not met the NUC's 60 FPS objective. A separate full title rebuild with
+`TB_TITLE_ARCH=x86-64-v3` and `TB_TITLE_RESTRICT_CONTEXT=ON` measured 29.83
+completed GAME FPS in a matching 30-second diagnostic, with main guest time
+about 21.79 ms/frame and GPU time about 10.15 ms/frame. Strict execution,
+visibility, overlay consistency and normal exit passed; boundary OCR required
+pending review. This single experiment establishes no sustained improvement,
+and the compiler flags remain off by default. The renderer result is not a
+performance acceptance claim. The active Windows Balanced policy allows 100%
+maximum processor state and aggressive boost; these read-only settings checks
+do not establish actual in-game clocks or thermal headroom.
+
+The current trace's `scene_candidate_extents` contains both logical guest
+candidate dimensions and selected backing dimensions. The requested/effective
+scale, present-source extent, physical draw counts and retained image headers
+establish the active path. The logical candidate entry alone is not a fallback
+event. Source hashes, the frozen CPU baseline, captures and original reports
+are retained locally under `analysis/performance/resolution-step5/`.

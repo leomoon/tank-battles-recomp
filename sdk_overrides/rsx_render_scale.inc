@@ -48,6 +48,7 @@ typedef struct {
     tb_scale_route route;
     tb_scale_surface depth;
     unsigned tiles, scaled_tiles;
+    u64 source_serial;
 } tb_scale_resolve;
 
 typedef struct {
@@ -198,11 +199,12 @@ static int tb_scale_note_resolve(u32 ss, u32 ds, u32 sx, u32 sy, u32 dx, u32 dy,
                          !tb_scale_same_surface(r->route.display, display) ||
                          !tb_scale_same_surface(r->depth, draw.depth)))
             tb_scale_forget_route(i);
-        if (p->tiles && ((p->tiles & tile) || !tb_scale_same_surface(p->route.color, draw.color) ||
+        if (p->tiles && ((p->tiles & tile) || p->source_serial!=g.surfaces[ss].color_serial || !tb_scale_same_surface(p->route.color, draw.color) ||
                          !tb_scale_same_surface(p->route.display, display) || !tb_scale_same_surface(p->depth, draw.depth)))
             tb_scale_forget_route(i);
         p->route = (tb_scale_route){draw.color, display};
         p->depth = draw.depth;
+        p->source_serial = g.surfaces[ss].color_serial;
         p->tiles |= tile;
         /* Native samples the second texel of each 2x2 footprint. Resolve
          * the entire matching footprint at the scaled display grid. */

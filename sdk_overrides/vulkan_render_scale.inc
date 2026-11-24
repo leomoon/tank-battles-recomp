@@ -25,7 +25,8 @@ typedef struct {
     tb_vk_scale_image depth;
     tb_vk_scale_image color[TB_SCALE_MAX_ROUTES];
     tb_vk_scale_image display[TB_SCALE_MAX_ROUTES];
-    unsigned display_ready[TB_SCALE_MAX_ROUTES];
+    u64 display_ready[TB_SCALE_MAX_ROUTES]; /* published destination serial */
+    u64 resolve_source[TB_SCALE_MAX_ROUTES];
 } tb_vk_scale_bank;
 
 static tb_vk_scale_bank tb_scaled;
@@ -51,7 +52,7 @@ void tb_vk_scale_measure_present(unsigned effective_percent, unsigned width, uns
      * unused scaled/depth path is distinguishable from an older trace schema.
      * Recording is armed later than startup; do not cache a one-time flag. */
     if (tb_frame_budget_on())
-        for (unsigned id=TB_FC_LOGICAL_DRAW; id<=TB_FC_SCALE_RECOVERY; ++id)
+        for (unsigned id=TB_FC_LOGICAL_DRAW; id<=TB_FC_FXAA_TEXELS; ++id)
             tb_frame_budget_count(id, 0);
     if (!tb_scale_initial_percent) tb_scale_initial_percent = (unsigned)tb_settings_render_scale();
     const int scaled = effective_percent != 100;
@@ -189,6 +190,7 @@ static u32 tb_vk_scale_color(tb_vk_scale_image* image, const tb_scale_surface* s
     image->handle = vk_eng_color_target_create(NULL, (rsx_be_format)surface->format,
                                                host.width, host.height, NULL, 0);
     if (image->handle) {
+        image->serial=1; /* the allocator initialized every pixel */
         s_eobj[image->handle].guest_size = image->extent.guest;
         s_eobj[image->handle].scale_percent = percent;
     }
@@ -201,6 +203,7 @@ static int tb_vk_scale_allocate(tb_vk_scale_bank* bank)
     bank->depth.handle = vk_eng_depth_target_create(NULL, depth.width, depth.height);
     vk_eng_obj* zeta = vk_eng_get(bank->depth.handle, VK_ENG_DEPTH);
     if (!zeta) return 0;
+    bank->depth.serial=1;
     zeta->guest_size = bank->depth.extent.guest;
     zeta->scale_percent = bank->percent;
     for (u32 i = 0; i < bank->layout.count; ++i) {
@@ -285,6 +288,12 @@ int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,
     const u32 handle = tb_vk_scale_find_color(color);
     if (tb_scale_rejected || !tb_scaled.rasterized || !handle || handle != tb_scaled.active_color ||
         handle != tb_scaled.color[route].handle) return 0;
+    const u64 serial=tb_scaled.color[route].serial;
+    if (tb_scaled.resolve_source[route] && tb_scaled.resolve_source[route]!=serial) {
+        tb_vk_scale_fallback("scene changed during tiled resolve");
+        return 0;
+    }
+    tb_scaled.resolve_source[route]=serial;
     tb_vk_scale_image* output=&tb_scaled.display[route];
     if (output->native && !output->authoritative) {
         if (!tb_scale_copy(output->native,output->handle)) {
@@ -293,8 +302,17 @@ int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,
         }
         output->authoritative=1;
     }
+    /* The proven title layout is exactly 2:1 at every preset, including all
+     * six clipped tile edges. Linear samples each physical 2x2 footprint at
+     * its centre (equal four-texel weights), without crossing tile boundaries.
+     * Native continues through the exact NV3089 second-texel gather. */
     const int ok = tb_vk_color_blit(handle, source, tb_scaled.display[route].handle, dest, VK_FILTER_LINEAR);
-    if (ok) tb_vk_scale_wrote(tb_scaled.display[route].handle);
+    if (ok) {
+        tb_vk_scale_wrote(tb_scaled.display[route].handle);
+        tb_scale_rect host;
+        if (tb_scale_rect_map(output->extent,dest,&host)==TB_SCALE_RECT_MAPPED)
+            tb_frame_budget_count(TB_FC_SCALE_RESOLVE_BYTES,host.width*host.height*4u);
+    }
     else tb_vk_scale_fallback("scaled resolve rejected");
     return ok;
 }
@@ -302,13 +320,19 @@ int tb_vk_scale_resolve(tb_scale_surface color, tb_scale_surface display,
 void tb_vk_scale_publish(tb_scale_surface display, int complete)
 {
     const u32 route = tb_vk_scale_display_index(display);
-    if (route != TB_SCALE_MAX_ROUTES) tb_scaled.display_ready[route] = !!complete;
+    if (route != TB_SCALE_MAX_ROUTES) {
+        tb_scaled.display_ready[route] = complete && !tb_scale_rejected &&
+            tb_scaled.resolve_source[route]==tb_scaled.color[route].serial
+            ? tb_scaled.display[route].serial : 0;
+        tb_scaled.resolve_source[route]=0;
+    }
 }
 
 u32 tb_vk_scale_scanout(tb_scale_surface display)
 {
     const u32 route = tb_vk_scale_display_index(display);
-    return route != TB_SCALE_MAX_ROUTES && tb_scaled.display_ready[route] ? tb_scaled.display[route].handle : 0;
+    return route != TB_SCALE_MAX_ROUTES && tb_scaled.display_ready[route] &&
+        tb_scaled.display_ready[route]==tb_scaled.display[route].serial ? tb_scaled.display[route].handle : 0;
 }
 
 int tb_vk_scale_patch(tb_scale_surface surface, u32 native, tb_scale_rect rect, int pending)
@@ -417,19 +441,16 @@ void tb_vk_scale_clear(tb_scale_surface color, tb_scale_surface depth, tb_scale_
     if (tb_scale_host_image(color_handle)->authoritative) tb_scaled.rasterized=1;
 }
 
-void tb_vk_scale_capture(tb_scale_surface color, const char* path)
+static void tb_scale_capture_image(u32 handle,const char* path)
 {
-    if (!tb_scaled.rasterized || tb_vk_scale_find_color(color) != tb_scaled.active_color ||
-        (tb_scaled.clear_mask & (TB_SCALE_CLEAR_COLOR | TB_SCALE_CLEAR_DEPTH)) !=
-            (TB_SCALE_CLEAR_COLOR | TB_SCALE_CLEAR_DEPTH)) return;
     FILE* existing = fopen(path, "rb");
     if (existing) { fclose(existing); return; }
-    const vk_eng_obj* image = vk_eng_get(tb_scaled.active_color, VK_ENG_COLOR);
+    const vk_eng_obj* image = vk_eng_get(handle, VK_ENG_COLOR);
     if (!image || image->bpp != 4) return;
     const size_t pitch = (size_t)image->w * 4;
     u8* pixels = calloc(image->h, pitch);
     if (!pixels) return;
-    vk_eng_readback(NULL, tb_scaled.active_color, 0, 0, image->w, image->h, pixels, (u32)pitch);
+    vk_eng_readback(NULL, handle, 0, 0, image->w, image->h, pixels, (u32)pitch);
     FILE* file = fopen(path, "wb");
     if (file) {
         const size_t count = (size_t)image->w * image->h;
@@ -439,4 +460,21 @@ void tb_vk_scale_capture(tb_scale_surface color, const char* path)
         if (fclose(file) || !written) remove(path);
     }
     free(pixels);
+}
+
+void tb_vk_scale_capture(tb_scale_surface color,const char* path)
+{
+    if (!tb_scaled.rasterized || tb_vk_scale_find_color(color)!=tb_scaled.active_color ||
+        (tb_scaled.clear_mask & (TB_SCALE_CLEAR_COLOR|TB_SCALE_CLEAR_DEPTH))!=
+            (TB_SCALE_CLEAR_COLOR|TB_SCALE_CLEAR_DEPTH)) return;
+    tb_scale_capture_image(tb_scaled.active_color,path);
+    for (u32 i=0;i<tb_scaled.layout.count;++i) if (tb_scaled.color[i].handle==tb_scaled.active_color) {
+        const u32 display=tb_vk_scale_scanout(tb_scaled.layout.routes[i].display);
+        char output[4096];
+        const size_t length=strlen(path);
+        if (display && length>4 && length<sizeof output-13) {
+            snprintf(output,sizeof output,"%.*s-resolve.ppm",(int)(length-4),path);
+            tb_scale_capture_image(display,output);
+        }
+    }
 }

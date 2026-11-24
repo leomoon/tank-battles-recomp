@@ -13,7 +13,7 @@
 
 #define TB_FC(id, n, call) (tb_frame_budget_count((id), (uint32_t)(n)), (call))
 #define pvkQueueSubmit(q, n, s, f)           TB_FC(TB_FC_QUEUE_SUBMIT, 1, (pvkQueueSubmit)(q, n, s, f))
-#define pvkAllocateMemory(d, i, a, m)        TB_FC(TB_FC_ALLOC_MEMORY, 1, (pvkAllocateMemory)(d, i, a, m))
+#define pvkAllocateMemory(d, i, a, m)        TB_FC(TB_FC_ALLOC_MEMORY_BYTES, (i)->allocationSize, TB_FC(TB_FC_ALLOC_MEMORY, 1, (pvkAllocateMemory)(d, i, a, m)))
 #define pvkCreateImage(d, i, a, m)           TB_FC(TB_FC_CREATE_IMAGE, 1, (pvkCreateImage)(d, i, a, m))
 #define pvkCreateBuffer(d, i, a, m)          TB_FC(TB_FC_CREATE_BUFFER, 1, (pvkCreateBuffer)(d, i, a, m))
 #define pvkCmdPipelineBarrier(...)           TB_FC(TB_FC_BARRIER, 1, (pvkCmdPipelineBarrier)(__VA_ARGS__))

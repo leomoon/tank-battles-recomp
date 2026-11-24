@@ -436,7 +436,9 @@ def main():
     ('''    vk_invalidate(&s_vk.readback);
     const unsigned char* px = (const unsigned char*)s_vk.readback.ptr;
     size_t c = ((size_t)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4;''',
-     '''    const VkExtent2D extent = tb_present_extent();
+     '''    s_vk.presented++;
+    if (tb_present_full_capture()) {
+    const VkExtent2D extent = tb_present_extent();
     vk_buffer* const readback = tb_present_readback();
     vk_invalidate(readback);
     const unsigned char* px = readback->ptr;
@@ -444,8 +446,12 @@ def main():
     const size_t c = full ? ((size_t)(extent.height / 2) * extent.width + extent.width / 2) * 4 : 0;'''),
     ('    tb_frame_history(px,s_vk.width,s_vk.height,s_vk.presented);',
      '    if (full) tb_frame_history(px, extent.width, extent.height, s_vk.presented);'),
+    ('    vk_present_window();\n}', '    }\n    vk_present_window();\n}'),
+    ('    s_vk.last_center = ((u32)px[c] << 16) | ((u32)px[c + 1] << 8) | (u32)px[c + 2];\n    s_vk.presented++;',
+     '    s_vk.last_center = ((u32)px[c] << 16) | ((u32)px[c + 1] << 8) | (u32)px[c + 2];'),
     ('static void vk_present_record_end(VkCommandBuffer cb)\n{', '''static void vk_present_record_end(VkCommandBuffer cb)
 {
+    if (tb_present_full_capture()) {
     const VkExtent2D extent = tb_present_extent();
     const VkImage image = tb_present_image()->img;
     const VkBuffer readback = tb_present_readback()->buf;'''),
@@ -475,6 +481,22 @@ def main():
     pvkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, readback, 1, &region);'''),
     ('        .buffer = s_vk.readback.buf, .offset = 0, .size = VK_WHOLE_SIZE,',
      '        .buffer = readback, .offset = 0, .size = VK_WHOLE_SIZE,'),
+    ('    if (pvkEndCommandBuffer(cb) != VK_SUCCESS) { VK_LOG("vkEndCommandBuffer (present) failed\\n"); return; }',
+     '    tb_frame_budget_count(TB_FC_PRESENT_READBACK_BYTES, extent.width * extent.height * 4u);\n    }\n    if (pvkEndCommandBuffer(cb) != VK_SUCCESS) { VK_LOG("vkEndCommandBuffer (present) failed\\n"); return; }'),
+    ('u32 rsx_vulkan_backend_presented_center(void)\n{\n    return s_vk.presented ? (0xFF000000u | s_vk.last_center) : 0u;\n}',
+     '''u32 rsx_vulkan_backend_presented_center(void)
+{
+    if (!s_vk.device) return 0;
+    pthread_mutex_lock(&s_vk.present_mu);
+    vk_present_complete_locked();
+    const u32 pixel = tb_present_probe_center();
+    pthread_mutex_unlock(&s_vk.present_mu);
+    return pixel;
+}'''),
+    ('    if (s_vk.eng_active) return rsx_draw_engine_readback_center();\n    return s_vk.presented ? (0xFF000000u | s_vk.last_center) : 0u;',
+     '    if (s_vk.eng_active) return rsx_draw_engine_readback_center();\n    return rsx_vulkan_backend_presented_center();'),
+    ('    if (vk_create_host_buffer(&s_vk.readback, (VkDeviceSize)s_vk.width * s_vk.height * 4u,',
+     '    if (tb_present_full_capture() && vk_create_host_buffer(&s_vk.readback, (VkDeviceSize)s_vk.width * s_vk.height * 4u,'),
     ('    if (cb) vk_present_record_end(cb);',
      '    if (cb) { tb_present_scaled.active = 0; vk_present_record_end(cb); }'),
     ('static void vk_eng_present(void* user, u32 surface)',
@@ -486,13 +508,22 @@ def main():
             vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);''',
      '''    if (cb) {
         const vk_eng_obj* hi = vk_eng_get(scaled, VK_ENG_COLOR);
-        tb_present_scaled.active = hi && hi->scale_percent && tb_present_prepare_scaled(hi->w, hi->h);
-        const unsigned tb_effective_percent = tb_present_scaled.active ? hi->scale_percent : 100;
-        if (tb_present_scaled.active) o = &s_eobj[scaled];
+        const vk_eng_obj* chosen = hi ? hi : o;
+        tb_present_scaled.active = chosen && (hi || s_vk.eng_active) && tb_present_prepare_scaled(chosen->w, chosen->h);
+        const unsigned tb_effective_percent = tb_present_scaled.active && hi ? hi->scale_percent : 100;
+        if (hi && tb_present_scaled.active) o = &s_eobj[scaled];
+        if (s_vk.eng_active && tb_present_scaled.active) tb_present_retire_base();
+        if (!tb_present_image()->img) {
+            VK_LOG("presentation allocation failed; skipping frame\\n");
+            pvkEndCommandBuffer(cb);
+            pthread_mutex_unlock(&s_vk.present_mu);
+            return;
+        }
         if (o) {
             tb_vk_scale_measure_present(tb_effective_percent, o->w, o->h);
             const VkExtent2D extent = tb_present_extent();
             const VkImage output = tb_present_image()->img;
+            tb_frame_budget_count(TB_FC_PRESENT_COPY_BYTES, extent.width * extent.height * 4u);
             tb_vulkan_event(6,surface,o->w,o->h);
             vk_barrier_image_on(cb, o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
             const int first = tb_present_scaled.active && !tb_present_scaled.written;
@@ -520,6 +551,7 @@ int tb_vk_scale_present(u32 native, u32 scaled)
     const vk_eng_obj* image=vk_eng_get(scaled,VK_ENG_COLOR);
     if (!image) return 0;
     pthread_mutex_lock(&s_vk.present_mu);
+    vk_present_complete_locked();
     const int ready=tb_present_prepare_scaled(image->w,image->h);
     pthread_mutex_unlock(&s_vk.present_mu);
     if (!ready) return 0;
@@ -540,6 +572,8 @@ int tb_vk_scale_present(u32 native, u32 scaled)
     ('    o->kind = VK_ENG_COLOR; o->snapshot = 1;\n    o->fmt = t->fmt;',
      '    o->kind = VK_ENG_COLOR; o->snapshot = 1;\n    o->guest_size = t->guest_size; o->scale_percent = t->scale_percent;\n    o->fmt = t->fmt;'),
     ('static int vk_eng_init(void* user, u32 width, u32 height)', 'static void tb_vk_scale_reset(void);\nstatic int vk_eng_init(void* user, u32 width, u32 height)'),
+    ('static void vk_eng_snapshot_recycle(vk_eng_obj* o);',
+     'static int tb_scale_native_storage(u32 native);\nstatic void vk_eng_snapshot_recycle(vk_eng_obj* o);'),
     ('    memset(s_eobj, 0, sizeof s_eobj);', '    tb_vk_scale_reset();\n    memset(s_eobj, 0, sizeof s_eobj);'),
     ('    if (s_eobj[handle].kind == VK_ENG_COLOR)\n        for',
      '    tb_vk_scale_releasing(handle);\n    if (s_eobj[handle].kind == VK_ENG_COLOR)\n        for'),
@@ -566,7 +600,8 @@ int tb_vk_scale_present(u32 native, u32 scaled)
     ('    vk_eng_obj* o = vk_eng_get(depth, VK_ENG_DEPTH);\n    VkImageAspectFlags aspect',
      '    tb_vk_scale_native_mutation(depth,"Native depth/stencil clear");\n    vk_eng_obj* o = vk_eng_get(depth, VK_ENG_DEPTH);\n    VkImageAspectFlags aspect'),
     ('    vk_eng_upload_region(o->im.img, 0, 0, x, y, w, h, (size_t)w * o->bpp, h, rows, row_bytes);',
-     '''    vk_eng_upload_region(o->im.img, 0, 0, x, y, w, h, (size_t)w * o->bpp, h, rows, row_bytes);
+     '''    if (!tb_scale_native_storage(surface)) abort();
+    vk_eng_upload_region(o->im.img, 0, 0, x, y, w, h, (size_t)w * o->bpp, h, rows, row_bytes);
     if (!tb_vk_scale_uploaded(surface,(tb_scale_rect){x,y,w,h}))
         vk_eng_upload_region(o->im.img, 0, 0, x, y, w, h, (size_t)w * o->bpp, h, rows, row_bytes);'''),
     ('    vk_eng2_shutdown(user);', '    tb_vk_scale_reset();\n    vk_eng2_shutdown(user);'),

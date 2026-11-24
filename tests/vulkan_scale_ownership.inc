@@ -77,8 +77,11 @@ static void check_ownership(tb_scale_layout group, unsigned percent)
     } else {
         tb_vk_scale_image* owned=tb_scale_native_image(color);
         assert(owned && owned->authoritative && owned->serial>owned->native_serial);
+        assert(!s_eobj[color].im.img); /* stable guest handle, no Native allocation */
         ++tb_scale_internal;
-        scale_pixel(color,0,0,255,0,0); /* Native was never rasterized. */
+        assert(tb_scale_native_storage(color));
+        vk_eng_clear_color(NULL,color,red); /* poison a diagnostic Native representation */
+        scale_pixel(color,0,0,255,0,0);
         --tb_scale_internal;
         const u32 view=vk_eng_surface_view(NULL,color,0xaae4,0x85);
         const u32 snapshot=vk_eng_color_snapshot(NULL,color);
@@ -128,9 +131,7 @@ static void check_ownership(tb_scale_layout group, unsigned percent)
         const u8 blue[3*3*4]={0,0,255,255,0,0,255,255,0,0,255,255,
             0,0,255,255,0,0,255,255,0,0,255,255,0,0,255,255,0,0,255,255,0,0,255,255};
         vk_eng_color_target_write(NULL,color,2,2,3,3,blue,12);
-        ++tb_scale_internal;
-        scale_pixel(color,3,3,0,0,255);
-        --tb_scale_internal;
+        assert(!s_eobj[color].im.img); /* temporary upload representation retired */
         tb_scale_rect patch;
         assert(tb_scale_rect_map(owned->extent,(tb_scale_rect){2,2,3,3},&patch)==TB_SCALE_RECT_MAPPED);
         scale_pixel(target,patch.x,patch.y,0,0,255);

@@ -98,10 +98,11 @@ static void check_polygon_offset(void)
     vk_eng_pipeline_release(NULL, pipeline);
 }
 
-static void check_fxaa(int scaled)
+static void check_fxaa(unsigned percent)
 {
+    const int scaled=1; /* Native uses owned 1280x720 storage too. */
     if (scaled) {
-        assert(tb_present_prepare_scaled(25, 19));
+        assert(tb_present_prepare_scaled(1280*percent/100, 720*percent/100));
         tb_present_scaled.active = 1;
     }
     const VkImage source = tb_present_image()->img;
@@ -129,10 +130,17 @@ static void check_fxaa(int scaled)
     pvkCmdCopyBufferToImage(s_vk.cmd, upload.buf, source,
         VK_IMAGE_LAYOUT_GENERAL, 1, &region);
     assert(tb_fxaa_window_source(s_vk.cmd) == source);
-    if (!scaled) assert(!tb_fxaa.state); /* Off allocates no FXAA resources. */
+    if (percent==100) assert(!tb_fxaa.state); /* Off allocates no FXAA resources. */
+    VkQueryPool timings;
+    const VkQueryPoolCreateInfo qc={.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+        .queryType=VK_QUERY_TYPE_TIMESTAMP,.queryCount=2};
+    assert(!pvkCreateQueryPool(s_vk.device,&qc,NULL,&timings));
+    pvkCmdResetQueryPool(s_vk.cmd,timings,0,2);
+    pvkCmdWriteTimestamp(s_vk.cmd,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timings,0);
     setenv("TB_FXAA", "1", 1);
     tb_settings_note_antialiasing(1);
     const VkImage filtered = tb_fxaa_window_source(s_vk.cmd);
+    pvkCmdWriteTimestamp(s_vk.cmd,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timings,1);
     assert(filtered && filtered != source);
     assert(tb_fxaa.extent.width == extent.width && tb_fxaa.extent.height == extent.height);
     pvkCmdCopyImageToBuffer(s_vk.cmd, filtered, VK_IMAGE_LAYOUT_GENERAL,
@@ -151,6 +159,13 @@ static void check_fxaa(int scaled)
     pvkCmdPipelineBarrier(s_vk.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &host, 0, NULL);
     assert(!vk_submit_and_wait());
+    u64 time[2];
+    assert(!pvkGetQueryPoolResults(s_vk.device,timings,0,2,sizeof time,time,sizeof time[0],VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT));
+    VkPhysicalDeviceProperties properties;
+    pvkGetPhysicalDeviceProperties(s_vk.phys,&properties);
+    printf("FXAA %u%% %ux%u: %.3f ms (single cold dispatch diagnostic)\n",percent,extent.width,extent.height,
+        (double)(time[1]-time[0])*properties.limits.timestampPeriod/1e6);
+    pvkDestroyQueryPool(s_vk.device,timings,NULL);
     vk_invalidate(&readback);
     const u8* result = readback.ptr;
     assert(!memcmp(result + bytes, pattern, bytes));
@@ -266,8 +281,11 @@ int main(void)
     draw_color(1,0,0,0);vk_eng_color_target_release(NULL,a);
     assert(!tb_group_open && !s_eb_pending);
     check_polygon_offset();
-    check_fxaa(0);
-    check_fxaa(1);
+    /* The earlier engine presentation retired the unused fixed framebuffer. */
+    assert(!s_vk.color.img && !s_vk.depth.img && !s_vk.framebuffer);
+    tb_present_scaled.active=0;
+    const unsigned presets[]={100,50,75,150,200,300};
+    for (unsigned i=0;i<6;++i) check_fxaa(presets[i]);
     tb_fxaa_shutdown();
     vk_eng_shutdown(NULL);vk_guest_shutdown();
     vk_destroy_image(&s_vk.color);vk_destroy_image(&s_vk.depth);

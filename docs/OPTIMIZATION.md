@@ -265,3 +265,22 @@ Three Linux comparison pairs reduced median Battle channel-strip CPU from 0.0972
 Nine alternating original/combined/RPCS3 runs supplied three accepted intervals per build and scene. Median Battle process CPU was 1.963, 0.873 and 1.378 logical cores respectively. The combined player uses 55.53% less CPU than the frozen original and 36.67% less than RPCS3. Main-menu CPU fell from 1.286 to 0.263 core, a 79.52% reduction. Median Battle CPU temperature readings fell from about 78 to 58 °C and CPU auxiliary fan readings from 1,010 to 826 RPM. Whole-GPU power varied across runs, with total-system power unresolved. RPCS3 frame rates come from its window title.
 
 The final normal Release rebuild matches the executable used for five accepted Battle minutes, first Campaign timing and physical input/save/reload checks. Successful GitHub host-service CI covers 17 Linux and 18 Windows fixtures. Windows FMA dispatch uses a cached CPUID/XCR0 check to avoid the Microsoft runtime’s missing `__cpu_model` symbol. The portable fixture suite also covers generated PPU loads and vertex remapping. The broad bundle attempts are recorded separately from these CPU/host fixture results. [Combined evidence and limitations](../analysis/performance/cpu-combined/REPORT.md)
+
+## NUC reduced-resolution CPU limit
+
+The current Windows Iris Pro 580 player resolves genuine 640x360 and 960x540
+internal images with one eligible scene pass and no normal presentation pixel
+readback. This has not achieved 60 completed GAME FPS. A 30-second 50% Battle
+diagnostic without heavy image captures measured 29.7 FPS, about 22.34 ms/frame
+on the main guest thread outside traced blocking, and 9.91 ms/frame of GPU
+work. The 60 Hz vblank clock was correct. These figures locate the remaining
+deadline problem on the guest CPU path; the main-thread figure includes
+untraced waiting/preemption and is not OS CPU accounting.
+
+A separate full title build using AVX2/FMA (`x86-64-v3`) and restrict-qualified
+contexts measured 29.83 FPS, about 21.79 ms main-thread time and 10.15 ms GPU
+time in a matching short diagnostic. This is not a validated performance win;
+the default compiler settings are unchanged. The existing build is frozen,
+and both diagnostic runs, function samples and compiler identities remain
+local under `analysis/performance/resolution-step5/`. Sustained CPU optimization
+and 60 FPS acceptance remain open. [Resolve checks and limitations](RENDER_SCALE.md)

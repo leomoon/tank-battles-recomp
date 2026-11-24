@@ -6,8 +6,10 @@
  *
  * Only the cases the CPU path below treats as a plain 4-byte copy qualify, at
  * an integer scale with whole-texel origins; the GPU gather picks exactly
- * the texels the CPU loop would (checked on the device once,
- * vulkan_surface_blit.inc). Anything else -- other formats, the NV309E
+ * the texels the CPU loop would at Native (checked on the device once,
+ * vulkan_surface_blit.inc). Proven non-Native scene resolves instead filter
+ * authoritative selected backing, with no intermediate Native gather.
+ * Anything else -- other formats, the NV309E
  * swizzled pyramid, fractional steps, clipped-away blits, sources or
  * destinations that are not engine surfaces -- takes the original path.
  * TB_GPU_RESOLVE=0 restores it everywhere. */

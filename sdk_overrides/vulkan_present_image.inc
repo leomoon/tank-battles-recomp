@@ -18,11 +18,34 @@ static void tb_present_destroy_image(vk_image* image)
     memset(image, 0, sizeof *image);
 }
 
+static void tb_present_destroy_buffer(vk_buffer* buffer)
+{
+    if (buffer->ptr) pvkUnmapMemory(s_vk.device,buffer->mem);
+    if (buffer->buf) pvkDestroyBuffer(s_vk.device,buffer->buf,NULL);
+    if (buffer->mem) pvkFreeMemory(s_vk.device,buffer->mem,NULL);
+    memset(buffer,0,sizeof *buffer);
+}
+
 static void tb_present_image_shutdown(void)
 {
     tb_present_destroy_image(&tb_present_scaled.image);
-    vk_destroy_buffer(&tb_present_scaled.readback);
+    tb_present_destroy_buffer(&tb_present_scaled.readback);
     memset(&tb_present_scaled, 0, sizeof tb_present_scaled);
+}
+
+/* The register-file engine draws into its own attachments. Once its first
+ * owned presentation target exists, the fixed-function framebuffer and its
+ * full-size attachments have no consumers. Native engine presents use the
+ * same owned-image path if the scale subsequently falls back. */
+static void tb_present_retire_base(void)
+{
+    if (s_vk.framebuffer) {
+        pvkDestroyFramebuffer(s_vk.device,s_vk.framebuffer,NULL);
+        s_vk.framebuffer=VK_NULL_HANDLE;
+    }
+    tb_present_destroy_image(&s_vk.depth);
+    tb_present_destroy_image(&s_vk.color);
+    tb_present_destroy_buffer(&s_vk.readback);
 }
 
 static VkExtent2D tb_present_extent(void)
@@ -43,8 +66,45 @@ static int tb_present_full_capture(void)
 
 static vk_buffer* tb_present_readback(void)
 {
-    return tb_present_scaled.active && tb_present_full_capture()
+    return tb_present_scaled.active
         ? &tb_present_scaled.readback : &s_vk.readback;
+}
+
+/* Diagnostics opt in to a host transfer. Ordinary presentation never reads
+ * pixels back. This runs with present_mu held, after its fence completed. */
+static u32 tb_present_probe_center(void)
+{
+    const VkExtent2D extent = tb_present_extent();
+    vk_buffer* readback = tb_present_readback();
+    if (!s_vk.presented) return 0;
+    if (!tb_present_full_capture()) {
+        if (!readback->ptr && vk_create_host_buffer(readback, 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT)) return 0;
+        VkCommandBuffer cb = s_vk.present_cmd;
+        if (pvkResetCommandBuffer(cb, 0)) return 0;
+        const VkCommandBufferBeginInfo begin = {.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+        if (pvkBeginCommandBuffer(cb, &begin)) return 0;
+        vk_cmd_after_everything(cb);
+        vk_barrier_image_on(cb, tb_present_image()->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+        const VkBufferImageCopy copy = {.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},
+            .imageOffset={(int32_t)(extent.width/2),(int32_t)(extent.height/2),0},.imageExtent={1,1,1}};
+        pvkCmdCopyImageToBuffer(cb, tb_present_image()->img, VK_IMAGE_LAYOUT_GENERAL, readback->buf, 1, &copy);
+        const VkBufferMemoryBarrier host={.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_HOST_READ_BIT,
+            .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+            .buffer=readback->buf,.size=VK_WHOLE_SIZE};
+        pvkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,NULL,1,&host,0,NULL);
+        if (pvkEndCommandBuffer(cb)) return 0;
+        const VkSubmitInfo submit={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&cb};
+        pvkResetFences(s_vk.device,1,&s_vk.present_fence);
+        if (vk_queue_submit(&submit,s_vk.present_fence)) return 0;
+        pvkWaitForFences(s_vk.device,1,&s_vk.present_fence,VK_TRUE,UINT64_MAX);
+        tb_frame_budget_count(TB_FC_PRESENT_READBACK_BYTES,4);
+    }
+    vk_invalidate(readback);
+    const u8* pixels=readback->ptr;
+    const size_t c=tb_present_full_capture()?((size_t)(extent.height/2)*extent.width+extent.width/2)*4:0;
+    return 0xff000000u | ((u32)pixels[c]<<16) | ((u32)pixels[c+1]<<8) | pixels[c+2];
 }
 
 /* Runs with present_mu held after completion of the previous frame. */
@@ -61,10 +121,10 @@ static int tb_present_prepare_scaled(u32 w, u32 h)
         }
         tb_present_scaled.extent = (VkExtent2D){w, h};
     }
-    if (tb_present_full_capture() && !tb_present_scaled.readback.ptr &&
-        vk_create_host_buffer(&tb_present_scaled.readback, (VkDeviceSize)w * h * 4,
-                              VK_BUFFER_USAGE_TRANSFER_DST_BIT)) {
-        goto fail;
+    const VkDeviceSize bytes=(VkDeviceSize)w*h*4;
+    if (tb_present_full_capture() && tb_present_scaled.readback.size<bytes) {
+        tb_present_destroy_buffer(&tb_present_scaled.readback);
+        if (vk_create_host_buffer(&tb_present_scaled.readback,bytes,VK_BUFFER_USAGE_TRANSFER_DST_BIT)) goto fail;
     }
     return 1;
 fail:

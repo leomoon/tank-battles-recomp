@@ -152,9 +152,11 @@ static VkImage tb_fxaa_window_source(VkCommandBuffer cb)
     vk_barrier_image_on(cb, tb_fxaa.output.img, VK_IMAGE_ASPECT_COLOR_BIT,
         tb_fxaa.written ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED);
     pvkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tb_fxaa.pipeline);
+    tb_frame_budget_count(TB_FC_FXAA_TEXELS, extent.width * extent.height);
     pvkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tb_fxaa.layout,
         0, 1, &tb_fxaa.set, 0, NULL);
-    pvkCmdDispatch(cb, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+    TB_TS_TIMED(cb, 8, TB_FC(TB_FC_DISPATCH, 1,
+        (pvkCmdDispatch)(cb, (extent.width + 7) / 8, (extent.height + 7) / 8, 1)));
     vk_barrier_image_on(cb, tb_fxaa.output.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
     tb_fxaa.written = 1;
     return tb_fxaa.output.img;

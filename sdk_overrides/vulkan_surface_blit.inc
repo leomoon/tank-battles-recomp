@@ -331,6 +331,13 @@ static void tb_vk_record_color_blit(VkCommandBuffer cb, VkImage src, tb_scale_re
 {
     vk_barrier_image_on(cb, src, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
     vk_barrier_image_on(cb, dst, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    if (s.width==d.width && s.height==d.height) {
+        const VkImageCopy copy={.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},
+            .srcOffset={(int32_t)s.x,(int32_t)s.y,0},.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},
+            .dstOffset={(int32_t)d.x,(int32_t)d.y,0},.extent={s.width,s.height,1}};
+        pvkCmdCopyImage(cb,src,VK_IMAGE_LAYOUT_GENERAL,dst,VK_IMAGE_LAYOUT_GENERAL,1,&copy);
+        return;
+    }
     const VkImageBlit blit = {
         .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
         .srcOffsets = {{(int32_t)s.x, (int32_t)s.y, 0},
@@ -357,6 +364,9 @@ static int tb_vk_color_blit(u32 source, tb_scale_rect source_rect, u32 dest,
 
     vk_image snapshot = {0};
     const int alias = src->im.img == dst->im.img;
+    /* A seeded/uploaded source can still be in the async batch. The alias
+     * snapshot uses a synchronous command buffer and must follow that batch. */
+    if (alias) tb_eng_complete();
     if (alias && vk_create_image(&snapshot, src->fmt, s.width, s.height,
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT)) {
@@ -372,6 +382,10 @@ static int tb_vk_color_blit(u32 source, tb_scale_rect source_rect, u32 dest,
         const tb_scale_rect whole = {0, 0, s.width, s.height};
         vk_barrier_image(snapshot.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
         tb_vk_record_color_blit(s_vk.cmd, from, s, snapshot.img, whole, VK_FILTER_NEAREST);
+        /* Iris 580's Windows driver loses snapshot texels when both copies
+         * share a command buffer despite the image barrier. Complete this
+         * rare overlapping-copy snapshot; ordinary resolves stay batched. */
+        if (vk_submit_and_wait() || vk_begin()) goto done;
         from = snapshot.img;
         s = whole;
     }

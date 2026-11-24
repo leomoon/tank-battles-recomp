@@ -508,17 +508,25 @@ static void check_scaled_raster(const tb_scale_layout* group)
 }
 
 #include "vulkan_scale_ownership.inc"
+#include "vulkan_scale_resolve.inc"
 
 int main(int argc, char** argv)
 {
     const int geometry_only = argc==2 && !strcmp(argv[1],"--geometry-only");
     const int ownership_only = argc==2 && !strcmp(argv[1],"--ownership-only");
-    assert(argc==1 || geometry_only || ownership_only);
+    const int resolve_only = argc==2 && !strcmp(argv[1],"--resolve-only");
+    assert(argc==1 || geometry_only || ownership_only || resolve_only);
     check_scale_geometry();
     const unsigned presets[] = {50, 75, 100, 150, 200, 300};
     setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 1);
     assert(!vk_init_all(16, 16, "render scale fixture"));
     assert(!vk_eng_init(NULL, 16, 16));
+    if (resolve_only) {
+        for (unsigned i=0;i<6;++i) check_resolve(presets[i]);
+        vk_eng_shutdown(NULL);
+        puts("PASS: all six tiles, exact Native and filtered scaled phase, rotation, patches, serials, present ownership and lazy Native storage at all six presets");
+        return 0;
+    }
     // The largest guest constant block must leave room for alpha, optional
     // depth bounds and the new independent X/Y scale vector.
     const u32 maximum_constants = (RSX_FP_MAX_INLINE_CONSTANTS + 3u) * 16u;
