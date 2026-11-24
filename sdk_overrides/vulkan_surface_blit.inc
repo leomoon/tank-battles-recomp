@@ -346,8 +346,12 @@ static int tb_vk_color_blit(u32 source, tb_scale_rect source_rect, u32 dest,
     const vk_eng_obj* src = vk_eng_get(source, VK_ENG_COLOR);
     const vk_eng_obj* dst = vk_eng_get(dest, VK_ENG_COLOR);
     tb_scale_rect s, d;
-    if (!src || !dst || src->fmt != VK_FORMAT_R8G8B8A8_UNORM || dst->fmt != src->fmt ||
-        !tb_vk_color_rect(src, source_rect, &s) || !tb_vk_color_rect(dst, dest_rect, &d)) return 0;
+    if (!src || !dst || src->fmt != VK_FORMAT_R8G8B8A8_UNORM || dst->fmt != src->fmt) return 0;
+    const int source_mapping = tb_vk_color_rect(src, source_rect, &s);
+    const int dest_mapping = tb_vk_color_rect(dst, dest_rect, &d);
+    if (source_mapping == TB_SCALE_RECT_INVALID || dest_mapping == TB_SCALE_RECT_INVALID) return 0;
+    if (dest_mapping == TB_SCALE_RECT_EMPTY) return 1; /* valid no-op; no GPU command */
+    if (source_mapping == TB_SCALE_RECT_EMPTY) return 0; /* reconstruction requires a nonempty source */
 
     vk_image snapshot = {0};
     const int alias = src->im.img == dst->im.img;

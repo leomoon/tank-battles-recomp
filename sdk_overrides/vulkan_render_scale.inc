@@ -17,6 +17,8 @@ typedef struct {
     unsigned clear_mask;
     int stencil_known;
     int rasterized;
+    tb_scale_size viewport_limit;
+    float viewport_min, viewport_max;
     tb_vk_scale_image depth;
     tb_vk_scale_image color[TB_SCALE_MAX_ROUTES];
     tb_vk_scale_image display[TB_SCALE_MAX_ROUTES];
@@ -43,7 +45,7 @@ void tb_vk_scale_measure_present(unsigned effective_percent, unsigned width, uns
      * unused scaled/depth path is distinguishable from an older trace schema.
      * Recording is armed later than startup; do not cache a one-time flag. */
     if (tb_frame_budget_on())
-        for (unsigned id=TB_FC_LOGICAL_DRAW; id<=TB_FC_COLOR_MATERIALIZE_BYTES; ++id)
+        for (unsigned id=TB_FC_LOGICAL_DRAW; id<=TB_FC_SCALE_EMPTY_DRAW; ++id)
             tb_frame_budget_count(id, 0);
     if (!tb_scale_initial_percent) tb_scale_initial_percent = (unsigned)tb_settings_render_scale();
     const int scaled = effective_percent != 100;
@@ -89,7 +91,7 @@ static void tb_vk_scale_fail(unsigned percent, const char* reason)
 void tb_vk_scale_unavailable(void)
 {
     const int percent = tb_vk_scale_requested();
-    if (percent > 100) tb_vk_scale_fail((unsigned)percent, "scene layout not recognized");
+    if (tb_scale_non_native((unsigned)percent)) tb_vk_scale_fail((unsigned)percent, "scene layout not recognized");
 }
 
 static int tb_vk_scale_same_size(tb_scale_size a, tb_scale_size b)
@@ -97,11 +99,14 @@ static int tb_vk_scale_same_size(tb_scale_size a, tb_scale_size b)
     return a.width == b.width && a.height == b.height;
 }
 
-static tb_scale_size tb_vk_scale_limit(void)
+static tb_scale_size tb_vk_scale_limit(tb_vk_scale_bank* bank)
 {
     VkPhysicalDeviceProperties properties;
     pvkGetPhysicalDeviceProperties(s_vk.phys, &properties);
     const VkPhysicalDeviceLimits* limits = &properties.limits;
+    bank->viewport_limit = (tb_scale_size){limits->maxViewportDimensions[0], limits->maxViewportDimensions[1]};
+    bank->viewport_min = limits->viewportBoundsRange[0];
+    bank->viewport_max = limits->viewportBoundsRange[1];
     const u32 dimension = limits->maxImageDimension2D;
     tb_scale_size limit = {
         limits->maxFramebufferWidth < dimension ? limits->maxFramebufferWidth : dimension,
@@ -192,7 +197,7 @@ static int tb_vk_scale_allocate(tb_vk_scale_bank* bank)
         const u32 color = bank->color[i].handle;
         const tb_scale_extent extent = bank->color[i].extent;
         tb_scale_rect area;
-        if (!tb_scale_rect_map(extent, (tb_scale_rect){0, 0, extent.guest.width, extent.guest.height}, &area))
+        if (tb_scale_rect_map(extent, (tb_scale_rect){0, 0, extent.guest.width, extent.guest.height}, &area) != TB_SCALE_RECT_MAPPED)
             return 0;
         VkRenderPass pass = vk_eng_render_pass(s_eobj[color].fmt, 1);
         if (!pass || !vk_eng_framebuffer(pass, &color, 1, zeta->im.view, bank->depth.handle,
@@ -212,7 +217,7 @@ void tb_vk_scale_prepare(const tb_scale_layout* layout, unsigned percent)
     tb_vk_scale_bank candidate = {0};
     candidate.layout = *layout;
     candidate.percent = percent;
-    if (!tb_vk_scale_plan(&candidate, tb_vk_scale_limit())) {
+    if (!tb_vk_scale_plan(&candidate, tb_vk_scale_limit(&candidate))) {
         tb_vk_scale_fail(percent, "incompatible attachments or Vulkan dimension limits");
         return;
     }
@@ -229,19 +234,16 @@ void tb_vk_scale_prepare(const tb_scale_layout* layout, unsigned percent)
 
 static tb_scale_extent tb_vk_scale_extent(const vk_eng_obj* image)
 {
-    return (tb_scale_extent){image->guest_size, {image->w, image->h}};
+    const tb_scale_size host = {image->w, image->h};
+    return (tb_scale_extent){image->scale_percent ? image->guest_size : host, host};
 }
 
 static VkRect2D tb_vk_scale_scissor(const vk_eng_obj* image, const u32 scissor[4])
 {
-    const tb_scale_size guest = image->guest_size;
-    const u32 x = scissor[0], y = scissor[1];
-    if (x >= guest.width || y >= guest.height) return (VkRect2D){0};
-    const u32 room_w = guest.width - x, room_h = guest.height - y;
-    const tb_scale_rect clip = {x, y,
-        scissor[2] < room_w ? scissor[2] : room_w, scissor[3] < room_h ? scissor[3] : room_h};
     tb_scale_rect host;
-    if (!tb_scale_rect_map(tb_vk_scale_extent(image), clip, &host)) return (VkRect2D){0};
+    const tb_scale_rect clip = {scissor[0], scissor[1], scissor[2], scissor[3]};
+    if (tb_scale_rect_clip_map(tb_vk_scale_extent(image), clip, &host) == TB_SCALE_RECT_INVALID)
+        return (VkRect2D){0};
     return (VkRect2D){{(int32_t)host.x, (int32_t)host.y}, {host.width, host.height}};
 }
 
@@ -316,7 +318,9 @@ int tb_vk_scale_bindings(tb_scale_surface color, tb_scale_surface depth, int ste
         tb_vk_scale_skip_frame();
         return 0;
     }
-    *binding = (tb_scale_binding){tb_scaled.active_color, tb_scaled.depth.handle, tb_scaled.percent};
+    const tb_scale_extent extent = tb_scaled.depth.extent;
+    *binding = (tb_scale_binding){tb_scaled.active_color, tb_scaled.depth.handle, tb_scaled.percent,
+        (float)extent.guest.width / extent.host.width, (float)extent.guest.height / extent.host.height};
     return 1;
 }
 
@@ -331,7 +335,7 @@ void tb_vk_scale_clear(tb_scale_surface color, tb_scale_surface depth, tb_scale_
     if (!image || !depth_image) return;
     const tb_scale_extent extent = tb_vk_scale_extent(image);
     tb_scale_rect host;
-    if (!tb_scale_rect_map(extent, rect, &host)) return;
+    if (tb_scale_rect_map(extent, rect, &host) != TB_SCALE_RECT_MAPPED) return;
 
     if (color_handle != tb_scaled.active_color) {
         tb_scaled.active_color = color_handle;

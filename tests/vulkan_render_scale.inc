@@ -4,6 +4,20 @@
 
 static PFN_vkAllocateMemory real_allocate_memory;
 static unsigned allocations_before_failure;
+static PFN_vkCmdSetViewport real_set_viewport;
+static VkViewport observed_viewport;
+static PFN_vkCmdSetScissor real_set_scissor;
+static VkRect2D observed_scissor;
+static VKAPI_ATTR void VKAPI_CALL observe_scissor(VkCommandBuffer cmd, uint32_t first, uint32_t count, const VkRect2D* sc)
+{
+    observed_scissor=sc[0];
+    real_set_scissor(cmd,first,count,sc);
+}
+static VKAPI_ATTR void VKAPI_CALL observe_viewport(VkCommandBuffer cmd, uint32_t first, uint32_t count, const VkViewport* vp)
+{
+    observed_viewport=vp[0];
+    real_set_viewport(cmd,first,count,vp);
+}
 
 static VKAPI_ATTR VkResult VKAPI_CALL fail_allocation(VkDevice device, const VkMemoryAllocateInfo* info,
                                                      const VkAllocationCallbacks* callbacks, VkDeviceMemory* memory)
@@ -36,9 +50,170 @@ static const float scale_triangle[][4] = {
 
 static void scale_draw(const float vertices[][4], u32 count, float r, float g, float b, float ratio)
 {
-    const float alpha[] = {r, g, b, ratio};
+    const vk_eng_obj* target = vk_eng_get(s_eng_bound.rt[0], VK_ENG_COLOR);
+    const float alpha[] = {r, g, b, 0,
+        ratio && target->scale_percent ? (float)target->guest_size.width / target->w : 0,
+        ratio && target->scale_percent ? (float)target->guest_size.height / target->h : 0, 0, 0};
     vk_eng_bind_ps_constants(NULL, alpha, sizeof alpha);
     vk_eng_draw(NULL, RSX_TOPOLOGY_TRIANGLES, vertices, count, 16, NULL, 0);
+}
+
+/* Step 3 checks without the later ownership/resolve/stencil acceptance tests.
+ * Odd extents force distinct X/Y ratios at 50%, 75% and 150%. */
+static void scale_pixel(u32 target, u32 x, u32 y, unsigned r, unsigned g, unsigned b);
+static void check_raster_geometry(const tb_scale_layout* group)
+{
+    const u32 color = tb_scaled.color[0].handle, depth = tb_scaled.depth.handle;
+    const vk_eng_obj* image = vk_eng_get(color, VK_ENG_COLOR);
+    const u32 w = image->w, h = image->h;
+    assert(w <= 33 && h <= 21);
+    const float red[] = {1,0,0,1}, green[] = {0,1,0,1}, blue[] = {0,0,1,1};
+    const tb_scale_surface guest = group->routes[0].color;
+    vk_eng_clear_color(NULL, color, red);
+    if (tb_scaled.percent < 100) {
+        const unsigned mask = tb_scaled.clear_mask;
+        tb_vk_scale_clear(guest, group->depth, (tb_scale_rect){0,0,1,1}, TB_SCALE_CLEAR_COLOR, scale_black, 1, 0);
+        assert(tb_scaled.clear_mask == mask && !tb_scaled.active_color);
+        scale_pixel(color, 0, 0, 255, 0, 0);
+        const u32 pending = s_eb_pending;
+        assert(tb_vk_color_blit(color, (tb_scale_rect){0,0,1,1}, color, (tb_scale_rect){0,0,1,1}, VK_FILTER_NEAREST));
+        assert(s_eb_pending == pending);
+        scale_pixel(color, 0, 0, 255, 0, 0);
+    }
+    tb_vk_scale_clear(guest, group->depth, (tb_scale_rect){0,0,7,7}, TB_SCALE_CLEAR_COLOR, blue, 1, 0);
+    tb_vk_scale_clear(guest, group->depth, (tb_scale_rect){7,0,4,7}, TB_SCALE_CLEAR_COLOR, green, 1, 0);
+    u8 pixels[33*21*4];
+    vk_eng_readback(NULL, color, 0, 0, w, h, pixels, w*4);
+    const u32 boundary = 7*w/11;
+    for (u32 y=0;y<h;++y) for (u32 x=0;x<w;++x) {
+        const u8* p=pixels+(y*w+x)*4;
+        assert(p[0]==0 && p[1]==(x>=boundary?255:0) && p[2]==(x<boundary?255:0));
+    }
+    static const char vs[] = "struct I { float4 p : POSITION; }; float4 main(I v) : SV_Position { return v.p; }";
+    char ps[1024] =
+        "cbuffer F : register(b1) { float4 fp_alpha; };"
+        "struct I { float4 position : SV_Position; };"
+        "float4 _rsx_wpos(float4 p) { return float4(p.x+fp_alpha.z,"
+        " (fp_alpha.y!=0 ? fp_alpha.y-p.y : p.y)+fp_alpha.z,p.z,p.w); }"
+        "float4 main(I input) : SV_Target0 {"
+        " input.position.xy = floor(input.position.xy / float2(2, 2)) + 0.5;"
+        " float4 p=_rsx_wpos(input.position); return float4(p.x>=2.5,p.y>=1.5,1,1); }";
+    assert(tb_scale_wpos(ps,sizeof ps)==1);
+    const rsx_vertex_layout_plan layout = {.count=1,.stride=16};
+    const rsx_be_render_state state = {.color_mask=0xffffffff,.depth_func=0x207};
+    const u32 pipeline=vk_eng_pipeline_create(NULL,vs,ps,&state,&layout,16,RSX_BE_FMT_R8G8B8A8,1);
+    assert(pipeline);
+    vk_eng_bind_targets(NULL,&color,1,depth);
+    vk_eng_bind_pipeline(NULL,pipeline);
+    vk_eng_set_viewport(NULL,0,0,11,7);
+    vk_eng_set_scissor(NULL,0,0,11,7);
+    tb_vk_set_depth_bias(NULL,0,0,24);
+    for (unsigned bottom=0;bottom<2;++bottom) for (unsigned integer=0;integer<2;++integer) {
+        const float uniform[] = {0,bottom?4.0f:0,integer?-.5f:0,0,11.0f/w,7.0f/h,0,0};
+        vk_eng_bind_ps_constants(NULL,uniform,sizeof uniform);
+        vk_eng_draw(NULL,RSX_TOPOLOGY_TRIANGLES,scale_triangle,3,16,NULL,0);
+        vk_eng_readback(NULL,color,0,0,w,h,pixels,w*4);
+        for (u32 y=0;y<h;++y) for (u32 x=0;x<w;++x) {
+            const float px=floorf((x+.5f)*(11.0f/w)/2)+.5f-(integer?.5f:0);
+            const float py0=floorf((y+.5f)*(7.0f/h)/2)+.5f;
+            const float py=(bottom?4-py0:py0)-(integer?.5f:0);
+            const u8* p=pixels+(y*w+x)*4;
+            assert(p[0]==(px>=2.5f?255:0) && p[1]==(py>=1.5f?255:0) && p[2]==255);
+        }
+    }
+    const float fractional_viewports[][4] = {{-1.125f,.625f,8.25f,5}, {1.125f,.625f,8.25f,5}};
+    static const float viewport_quad[][4] = {
+        {-1,-1,.5f,1}, {1,-1,.5f,1}, {1,1,.5f,1},
+        {-1,-1,.5f,1}, {1,1,.5f,1}, {-1,1,.5f,1}
+    };
+    const float scaled_coordinates[] = {0,0,0,0,11.0f/w,7.0f/h,0,0};
+    const u32 viewport_control=vk_eng_color_target_create(NULL,RSX_BE_FMT_R8G8B8A8,w,h,NULL,0);
+    const u32 viewport_control_depth=vk_eng_depth_target_create(NULL,w,h);
+    assert(viewport_control && viewport_control_depth);
+    u8 reference_pixels[33*21*4];
+    vk_eng_bind_ps_constants(NULL,scaled_coordinates,sizeof scaled_coordinates);
+    for (unsigned v=0;v<2;++v) {
+        const float* viewport=fractional_viewports[v];
+        float mapped[4];
+        assert(tb_scale_viewport_map(tb_vk_scale_extent(image),viewport,mapped));
+        vk_eng_clear_color(NULL,color,red);
+        vk_eng_set_viewport(NULL,viewport[0],viewport[1],viewport[2],viewport[3]);
+        real_set_viewport=pvkCmdSetViewport; pvkCmdSetViewport=observe_viewport;
+        real_set_scissor=pvkCmdSetScissor; pvkCmdSetScissor=observe_scissor;
+        vk_eng_draw(NULL,RSX_TOPOLOGY_TRIANGLES,viewport_quad,6,16,NULL,0);
+        vk_eng_readback(NULL,color,0,0,w,h,pixels,w*4);
+        pvkCmdSetViewport=real_set_viewport;
+        pvkCmdSetScissor=real_set_scissor;
+        assert(observed_viewport.x==mapped[0] && observed_viewport.y==mapped[1] &&
+               observed_viewport.width==mapped[2] && observed_viewport.height==mapped[3]);
+        assert(observed_scissor.offset.x==0 && observed_scissor.offset.y==0 &&
+               observed_scissor.extent.width==w && observed_scissor.extent.height==h);
+        vk_eng_bind_targets(NULL,&viewport_control,1,viewport_control_depth);
+        vk_eng_clear_color(NULL,viewport_control,red);
+        vk_eng_set_viewport(NULL,mapped[0],mapped[1],mapped[2],mapped[3]);
+        vk_eng_set_scissor(NULL,0,0,w,h);
+        vk_eng_draw(NULL,RSX_TOPOLOGY_TRIANGLES,viewport_quad,6,16,NULL,0);
+        vk_eng_readback(NULL,viewport_control,0,0,w,h,reference_pixels,w*4);
+        vk_eng_bind_targets(NULL,&color,1,depth);
+        vk_eng_set_scissor(NULL,0,0,11,7);
+        for (u32 y=0;y<h;++y) for (u32 x=0;x<w;++x) {
+            /* Compare with the driver's Native rasterization of the same
+             * exact host viewport. Fractional coverage on this Intel driver
+             * differs from a pixel-center-only analytic rectangle. */
+            if (pixels[(y*w+x)*4+2]!=reference_pixels[(y*w+x)*4+2]) {
+                fprintf(stderr,"viewport %u%% case %u pixel %u,%u blue %u Native reference %u\n",
+                    tb_scaled.percent,v,x,y,pixels[(y*w+x)*4+2],reference_pixels[(y*w+x)*4+2]);
+                abort();
+            }
+        }
+    }
+    vk_eng_color_target_release(NULL,viewport_control);
+    vk_eng_depth_target_release(NULL,viewport_control_depth);
+    // Native uses the shader's identity default and the same overflow-safe
+    // clipping, with a separate Native color/depth pair of equal host size.
+    const u32 native_color=vk_eng_color_target_create(NULL,RSX_BE_FMT_R8G8B8A8,w,h,NULL,0);
+    const u32 native_depth=vk_eng_depth_target_create(NULL,w,h);
+    assert(native_color && native_depth);
+    vk_eng_bind_targets(NULL,&native_color,1,native_depth);
+    vk_eng_clear_color(NULL,native_color,red);
+    vk_eng_set_viewport(NULL,0,0,(float)w,(float)h);
+    vk_eng_set_scissor(NULL,w-2,0,UINT32_MAX,UINT32_MAX);
+    const float identity[8]={0};
+    vk_eng_bind_ps_constants(NULL,identity,sizeof identity);
+    vk_eng_draw(NULL,RSX_TOPOLOGY_TRIANGLES,scale_triangle,3,16,NULL,0);
+    vk_eng_readback(NULL,native_color,0,0,w,h,pixels,w*4);
+    for (u32 y=0;y<h;++y) for (u32 x=0;x<w;++x) {
+        const u8* p=pixels+(y*w+x)*4;
+        assert(p[2]==(x>=w-2?255:0));
+        if (x<w-2) assert(p[0]==255 && p[1]==0);
+        else assert(p[0]==(floorf((x+.5f)/2)+.5f>=2.5f?255:0) &&
+                    p[1]==(floorf((y+.5f)/2)+.5f>=1.5f?255:0));
+    }
+    vk_eng_bind_targets(NULL,&color,1,depth);
+    vk_eng_set_viewport(NULL,0,0,11,7);
+    vk_eng_color_target_release(NULL,native_color);
+    vk_eng_depth_target_release(NULL,native_depth);
+    // A collapsed scissor must not consume a descriptor or a draw/batch slot.
+    if (tb_scaled.percent < 100) {
+        vk_eng_clear_color(NULL,color,red);
+        vk_eng_set_scissor(NULL,0,0,1,1);
+        tb_vk_set_depth_bias(NULL,1,0,24); // An empty draw needs no depth-bias fallback.
+        const u32 pending=s_eb_pending, sets=s_eb.sets, mirrors=tb_group_mirror_count;
+        const VkDeviceSize vertex_head=s_eb.vb_head;
+        vk_eng_draw(NULL,RSX_TOPOLOGY_TRIANGLES,scale_triangle,3,16,NULL,0);
+        assert(s_eb_pending==pending && s_eb.sets==sets && tb_group_mirror_count==mirrors && s_eb.vb_head==vertex_head);
+        assert(tb_scaled.active_color==color && tb_scaled.rasterized);
+        scale_pixel(color,0,0,255,0,0);
+    }
+    if (tb_scaled.percent==50 || tb_scaled.percent==75 || tb_scaled.percent==150) {
+        vk_eng_set_scissor(NULL,0,0,11,7);
+        tb_vk_set_depth_bias(NULL,1,0,24);
+        vk_eng_draw(NULL,RSX_TOPOLOGY_TRIANGLES,scale_triangle,3,16,NULL,0);
+        assert(!tb_scaled.active_color && !tb_scaled.rasterized);
+    }
+    tb_vk_set_depth_bias(NULL,0,0,24);
+    vk_eng_bind_targets(NULL,NULL,0,0);
+    vk_eng_pipeline_release(NULL,pipeline);
 }
 
 static void scale_pixel(u32 target, u32 x, u32 y, unsigned r, unsigned g, unsigned b)
@@ -333,13 +508,26 @@ static void check_scaled_raster(const tb_scale_layout* group)
     vk_eng_color_target_release(NULL, native);
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
+    const int geometry_only = argc==2 && !strcmp(argv[1],"--geometry-only");
+    assert(argc==1 || geometry_only);
     check_scale_geometry();
-    const unsigned presets[] = {100, 150, 200, 300};
+    const unsigned presets[] = {50, 75, 100, 150, 200, 300};
     setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 1);
     assert(!vk_init_all(16, 16, "render scale fixture"));
     assert(!vk_eng_init(NULL, 16, 16));
+    // The largest guest constant block must leave room for alpha, optional
+    // depth bounds and the new independent X/Y scale vector.
+    const u32 maximum_constants = (RSX_FP_MAX_INLINE_CONSTANTS + 3u) * 16u;
+    u32* constants = calloc(1, maximum_constants);
+    assert(constants && s_g.ubo.size - s_g.ps_off >= maximum_constants);
+    constants[maximum_constants/4-2] = 0x3f000000u;
+    constants[maximum_constants/4-1] = 0x3f400000u;
+    vk_eng_bind_ps_constants(NULL, constants, maximum_constants);
+    assert(s_e2.ps_bytes == maximum_constants);
+    assert(!memcmp(s_e2.ucpu+s_g.ps_off, constants, maximum_constants));
+    free(constants);
     const u32 native = vk_eng_color_target_create(NULL, RSX_BE_FMT_R8G8B8A8, 33, 21, NULL, 0);
     const u32 native_depth = vk_eng_depth_target_create(NULL, 33, 21);
     assert(native && native_depth);
@@ -353,8 +541,11 @@ int main(void)
     }
     tb_vk_scale_prepare(&group, 100);
     assert(!tb_scaled.percent && live_objects() == baseline);
-    for (unsigned i = 1; i < 4; ++i) {
+    for (unsigned i = 0; i < 6; ++i) {
+        if (presets[i] == 100) continue;
+        const tb_scale_layout original = group;
         tb_vk_scale_prepare(&group, presets[i]);
+        assert(!memcmp(&group, &original, sizeof group) && !memcmp(&tb_scaled.layout, &original, sizeof group));
         assert(tb_scaled.percent == presets[i] && live_objects() == baseline + 7);
         const u32 color = tb_scaled.color[0].handle;
         const u32 depth = tb_scaled.depth.handle;
@@ -374,8 +565,17 @@ int main(void)
         assert(!vk_eng_framebuffer(pass, &color, 1, s_eobj[depth].im.view, depth, w - 1, h));
         assert(!vk_eng_framebuffer(pass, &color, 1, s_eobj[native_depth].im.view, native_depth, w, h));
         assert(!vk_eng_framebuffer(pass, &native, 1, s_eobj[depth].im.view, depth, w, h));
+        const u32 same_size_color = vk_eng_color_target_create(NULL, RSX_BE_FMT_R8G8B8A8, w, h, NULL, 0);
+        const u32 same_size_depth = vk_eng_depth_target_create(NULL, w, h);
+        assert(same_size_color && same_size_depth);
+        assert(!vk_eng_framebuffer(pass, &same_size_color, 1, s_eobj[depth].im.view, depth, w, h));
+        assert(!vk_eng_framebuffer(pass, &color, 1, s_eobj[same_size_depth].im.view, same_size_depth, w, h));
+        vk_eng_color_target_release(NULL, same_size_color);
+        vk_eng_depth_target_release(NULL, same_size_depth);
         check_scaled_clear(color, tb_scaled.color[0].extent);
+        check_raster_geometry(&group);
         if (presets[i] == 150) {
+            check_scaled_clear(color, tb_scaled.color[0].extent);
             const VkRect2D clipped = tb_vk_scale_scissor(&s_eobj[color], (u32[]){7, 1, UINT32_MAX, 3});
             assert(clipped.offset.x == 10 && clipped.offset.y == 1 &&
                    clipped.extent.width == 7 && clipped.extent.height == 5);
@@ -420,6 +620,12 @@ int main(void)
     assert(vk_eng_get(native, VK_ENG_COLOR) && vk_eng_get(native_depth, VK_ENG_DEPTH));
     check_scaled_clear(native, (tb_scale_extent){{33, 21}, {33, 21}});
     tb_vk_scale_reset();
+    if (geometry_only) {
+        vk_eng_shutdown(NULL);
+        assert(live_objects()==0 && s_e2.fb_count==0 && !tb_scaled.percent);
+        puts("PASS: Step 3 geometry, odd allocation extents, empty no-ops, per-axis WPOS/window conventions, depth-bias fallback and mixed-attachment rejection");
+        return 0;
+    }
     tb_vk_scale_prepare(&group, 200);
     assert(tb_scaled.percent == 200);
     check_scaled_raster(&group);

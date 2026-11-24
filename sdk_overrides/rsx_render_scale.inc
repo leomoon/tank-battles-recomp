@@ -96,7 +96,7 @@ static void tb_scale_forget_route(u32 buffer)
 static void tb_scale_native_write(u32 location, u32 offset, u32 pitch, u32 w, u32 h,
                                  const tb_scale_update* update)
 {
-    if (tb_scale_scene.percent <= 100 || !pitch || !w || !h) return;
+    if (!tb_scale_non_native(tb_scale_scene.percent) || !pitch || !w || !h) return;
     const u64 size = (u64)(h - 1) * pitch + (u64)w * 4;
     for (u32 i = 0; i < TB_SCALE_MAX_ROUTES; ++i) {
         const tb_scale_resolve* p = &tb_scale_scene.pending[i];
@@ -120,7 +120,7 @@ static void tb_scale_native_write(u32 location, u32 offset, u32 pitch, u32 w, u3
 
 static void tb_scale_clear_scanout(const eng_surface* surface, tb_scale_rect rect)
 {
-    if (tb_scale_scene.percent <= 100) return;
+    if (!tb_scale_non_native(tb_scale_scene.percent) || !rect.width || !rect.height) return;
     const tb_scale_surface id = tb_scale_color_id(surface);
     const u64 address = (u64)id.offset + (u64)rect.y * id.pitch + (u64)rect.x * 4;
     const u64 end = address + (u64)(rect.height - 1) * id.pitch + (u64)rect.width * 4;
@@ -147,7 +147,7 @@ static int tb_scale_scene_pair(const rsx_dsp_surface* sf, tb_scale_surface color
 
 static void tb_scale_note_draw(const rsx_dsp_surface* sf, u32 slot, u32 zslot)
 {
-    if (tb_scale_scene.percent <= 100) return;
+    if (!tb_scale_non_native(tb_scale_scene.percent)) return;
     const tb_scale_surface color = tb_scale_color_id(&g.surfaces[slot]);
     const tb_scale_surface depth = zslot == ENG_INVALID
         ? (tb_scale_surface){0} : tb_scale_depth_id(&g.zdepths[zslot]);
@@ -166,7 +166,7 @@ static void tb_scale_note_draw(const rsx_dsp_surface* sf, u32 slot, u32 zslot)
 static int tb_scale_note_resolve(u32 ss, u32 ds, u32 sx, u32 sy, u32 dx, u32 dy,
                                   u32 kx, u32 ky, u32 width, u32 height)
 {
-    if (tb_scale_scene.percent <= 100) return 0;
+    if (!tb_scale_non_native(tb_scale_scene.percent)) return 0;
     const tb_scale_surface display = tb_scale_color_id(&g.surfaces[ds]);
     for (u32 i = 0; i < TB_SCALE_MAX_ROUTES; ++i) {
         if (!tb_scale_display_matches(&g.display_buffers[i], display)) continue;
@@ -217,7 +217,7 @@ static int tb_scale_live_depth(tb_scale_surface surface)
 
 static int tb_scale_present(u32 buffer, u32 target)
 {
-    if (tb_scale_scene.percent <= 100 || buffer >= TB_SCALE_MAX_ROUTES) return 0;
+    if (!tb_scale_non_native(tb_scale_scene.percent) || buffer >= TB_SCALE_MAX_ROUTES) return 0;
     int resolved = 0;
     tb_scale_resolve* pending = &tb_scale_scene.pending[buffer];
     if (pending->tiles) {

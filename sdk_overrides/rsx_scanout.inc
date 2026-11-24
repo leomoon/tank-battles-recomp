@@ -26,7 +26,7 @@ static u32 tb_scanout_surface(const eng_display_buffer* d)
 static void tb_scanout_present(u32 buffer, u32 target)
 {
     const eng_surface* surface = &g.surfaces[target];
-    if (tb_scale_scene.percent > 100 && buffer < TB_SCALE_MAX_ROUTES) {
+    if (tb_scale_non_native(tb_scale_scene.percent) && buffer < TB_SCALE_MAX_ROUTES) {
         const tb_scale_surface id = tb_scale_color_id(surface);
         if (tb_scale_display_matches(&g.display_buffers[buffer], id)) {
             const u32 scaled = tb_vk_scale_scanout(id);

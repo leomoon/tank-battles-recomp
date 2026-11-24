@@ -41,15 +41,18 @@ The local evidence is under `analysis/rendering/display-step3-x-zone/`. The save
 
 ## Expected host extents
 
-Settings and measurement tools accept 50% and 75%, with intended resolved
-images of 640x360 and 960x540. Their reduced-resolution geometry and rendering
-path are still pending; current requests use Native rendering. Saving or
-logging a lower preset is not evidence of a smaller GPU scene image.
+Settings, measurement tools and renderer geometry accept all six presets.
+The 50% and 75% paths can now allocate and map reduced scene attachments.
+Single-pass scene ownership and downscale resolve validation remain pending;
+no gameplay performance improvement is established by these geometry changes.
+Saving or logging a lower preset is not evidence of a smaller GPU scene image.
 
 Percentages scale both axes. The host allocations preserve the observed guest sample grid. The guest continues to register a 1280×720 display at every setting.
 
 | Preset | Resolved scene output | Main color and zeta backing | Shadow |
 | --- | --- | --- | --- |
+| 50% | 640x360 | 1280x720 | 2048x2048 |
+| 75% | 960x540 | 1920x1080 | 2048x2048 |
 | Native (100%) | 1280×720 | 2560×1440 | 2048×2048 |
 | 150% | 1920×1080 | 3840×2160 | 2048×2048 |
 | 200% | 2560×1440 | 5120×2880 | 2048×2048 |
@@ -61,7 +64,7 @@ The allocation step reserves a complete Vulkan set once the render thread observ
 
 A full color and depth clear arms the scaled scene attachments for a frame. The renderer reuses the guest geometry, textures, and pipeline state for eligible scene and HUD draws, then maps the viewport, scissor, and clear rectangles to the bound Vulkan attachment. Scissors use shared half-open edges, with clipping applied before conversion. Native shadow and utility surfaces retain their own dimensions. A frame that needs scene texture feedback or an unsupported depth or stencil pass uses the Native path.
 
-The fragment shader maps WPOS back to the guest sample grid before applying the guest origin and pixel-center rules. Ordinary texture operations retain their normalized UVs and implicit LOD, and unnormalized samplers retain the dimensions from their guest texture descriptors. The generated shadow taps use the dimensions of the Native shadow image. The sampled depth-bounds fallback reads framebuffer pixel coordinates directly, so a frame that uses it cannot use the scaled draw. Dynamic depth bounds, stencil, and the depth range use the original state. Polygon offset retains its constant depth term and scales the slope to compensate for measuring depth change over smaller raster pixels.
+The fragment shader maps WPOS back to the guest sample grid before applying the guest origin and pixel-center rules. Ordinary texture operations retain their normalized UVs and implicit LOD, and unnormalized samplers retain the dimensions from their guest texture descriptors. The generated shadow taps use the dimensions of the Native shadow image. The sampled depth-bounds fallback reads framebuffer pixel coordinates directly, so a frame that uses it cannot use the scaled draw. Dynamic depth bounds, stencil, and the depth range use the original state. Polygon offset retains its constant depth term. For equal X/Y host-to-guest ratios, its slope factor is multiplied by that actual ratio; a nonzero slope with unequal rounded ratios rejects the scaled frame.
 
 The renderer draws eligible geometry twice to keep exact Native color and depth available to guest reads and texture aliases. The Native NV3089 gather still selects the title's exact point samples. The scaled resolve uses linear filtering over each tile's matching 2×2 sample footprints. Source and destination edges map independently to their image extents, so adjacent tiles share a boundary. Aligned guest uploads and copies into a tracked image replay the affected rectangle from the Native backing with nearest filtering. Overlapping scaled copies snapshot the source region first. Transfers with an unrecognized layout retire the affected route.
 
@@ -70,3 +73,54 @@ Mirrored draws retain the batch's immutable vertex, index, constant and descript
 The registered display route publishes scaled scanout after all six tiles complete. While the route is unavailable, the presenter uses its Native scanout. The scaled presentation image has its own lifetime and effective dimensions, and capture reports those dimensions before optional FXAA. Ordinary presentation reads only one diagnostic pixel back to the CPU. Friends, invitations, and FPS are composed in swapchain coordinates after the window blit.
 
 Use `scripts/capture_rendering.py --build-dir build --output analysis/rendering/<run> --capture --rsx-trace --render-scale 150` to capture the resolved output. Traced frames also produce a pre-resolve `*-scaled.ppm` in the local RSX trace directory. The Vulkan fixtures compare Native and scaled raster detail through scanout, exercise fractional clear boundaries, WPOS, depth and stencil, check pitched partial copies and overlapping aliases, and verify FXAA at both output sizes.
+
+## Bidirectional geometry (lower-resolution Step 3)
+
+Guest surface identity retains location, address, pitch, format, dimensions,
+sample grid and generation. Host color, depth and display extents are stored
+separately and use `ceil(guest * percent / 100)` on each axis. Framebuffer reuse
+checks the scale and matching guest/host extents, including when a Native image
+happens to have the same host dimensions. Views and snapshots carry the source
+extent metadata; a generation change replaces the resource group.
+
+Integer rectangles map both half-open edges with `floor(edge * host / guest)`.
+Scissors clip in guest space before mapping, using subtraction to avoid
+overflow. Adjacent partial clears and all six clipped NV3089 tile rectangles
+share edges. A valid rectangle may collapse below 100%: empty clears and
+destination blits do nothing, and an empty scissor returns before reserving
+descriptors, vertex slices or draw slots. A nonempty destination with an empty
+source requires reconstruction and is rejected by the current blit path.
+Floating viewport positions and sizes retain their fractions and signed
+origins, using the actual ratios and cached Vulkan viewport limits.
+
+`fp_scale.xy` stores independent guest/host ratios, with zero selecting identity
+for the Native draw. It precedes the SDK's sample-grid division in WPOS and
+leaves Z/W, window origin and pixel-center bias intact. The constant layout is
+guest constants, `fp_alpha`, optional `fp_dbounds`, then `fp_scale`; CPU and GPU
+buffers reserve all three extra vectors. Shader cache identity distinguishes
+this layout. Native draws keep identity conversion, including when sharing a
+shader with a scaled mirror.
+
+Normalized UVs, explicit texture offsets and gradient expressions remain in
+the texture's coordinates. Implicit derivatives/LOD follow the selected host
+raster density; they are not multiplied by a second nominal scale. Unnormalized
+sampling still divides by guest texture dimensions. Shadow images and their
+texel offsets stay Native. Scene feedback and sampled depth-bounds aliases
+continue to reject the scaled frame; ownership/materialization is later work.
+Dynamic depth bounds, stencil references/operations and constant depth bias do
+not depend on image extent. Vulkan has one slope factor, so unequal rounded
+axis ratios cannot preserve every primitive's maximum depth derivative with a
+nonzero slope. That case uses the existing coherent Native result and increments
+`scale_skip_geometry`; valid empty draws increment `scale_empty_draw` instead.
+
+Windows validation on the Iris Pro 580 passes the CPU geometry, production
+shader translation, CPU smoke and frame-budget CTest checks. The focused
+`vulkan_render_scale --geometry-only` fixture passes all presets, covering odd
+extents, partial clears, empty transfers/draws, WPOS/window conventions, signed
+fractional viewports, slope fallback, incompatible attachments and allocation
+rollback. Fractional viewport tests assert exact submitted state and compare
+coverage with a Native attachment using that host viewport; this driver also
+omits the analytic edge column in the Native control. The full fixture still
+fails its previously recorded depth/stencil pixel check at `(6,3)`, and
+`vulkan_draw_groups` still fails its presented-center check. These remain open
+acceptance gates. Linux execution and gameplay validation are pending.

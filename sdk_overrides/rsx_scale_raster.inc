@@ -35,7 +35,7 @@ static int tb_scale_samples_native(u32 fragment_mask, u32 vertex_mask)
 static int tb_scale_mirror_binding(u32 target, u32 zslot, u32 n_targets, const rsx_be_render_state* rs,
                                     u32 tex_mask, u32 vtex_mask, tb_scale_binding* binding)
 {
-    if (tb_scale_scene.percent <= 100 || n_targets != 1 || zslot == ENG_INVALID ||
+    if (!tb_scale_non_native(tb_scale_scene.percent) || n_targets != 1 || zslot == ENG_INVALID ||
         !tb_scale_scene.draws[target].color.generation) return 0;
     if (!tb_vk_scale_bindings(tb_scale_color_id(&g.surfaces[target]),
                                tb_scale_depth_id(&g.zdepths[zslot]), rs->stencil_enable, binding)) return 0;
@@ -49,7 +49,7 @@ static int tb_scale_mirror_binding(u32 target, u32 zslot, u32 n_targets, const r
 
 static void tb_scale_mirror_clear(const rsx_dsp_surface* sf, u32 target, u32 n_targets, u32 mask)
 {
-    if (tb_scale_scene.percent <= 100 || n_targets != 1 ||
+    if (!tb_scale_non_native(tb_scale_scene.percent) || n_targets != 1 ||
         sf->color_target != CELL_GCM_SURFACE_TARGET_1 || sf->aa_sx != 2 || sf->aa_sy != 2) return;
     u32 zslot = 0;
     for (; zslot < g.n_zdepths; ++zslot) {

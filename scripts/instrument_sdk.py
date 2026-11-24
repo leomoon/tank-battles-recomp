@@ -392,6 +392,8 @@ def main():
    scale_header = Path(__file__).resolve().parent.parent/'sdk_overrides/render_scale.h'
    present_image = scale_header.with_name('vulkan_present_image.inc')
    install_scale = [
+    ('s_g.ps_off + (RSX_FP_MAX_INLINE_CONSTANTS + 1u) * 16u,',
+     's_g.ps_off + (RSX_FP_MAX_INLINE_CONSTANTS + 3u) * 16u, /* alpha, optional depth bounds, scale XY */'),
     ('static vk_rect vk_window_fit(void)', '#include "'+str(present_image)+'"\n\nstatic vk_rect vk_window_fit(void)'),
     ('''    if (!s_vk.width || !s_vk.height) return r;
     if ((u64)dw * s_vk.height > (u64)dh * s_vk.width) {
@@ -552,22 +554,52 @@ int tb_vk_scale_present(u32 native, u32 scaled)
      '        if (s_e2.fb[i].width == w && s_e2.fb[i].height == h && s_e2.fb[i].pass == rp &&\n            s_e2.fb[i].depth == dview && !memcmp(s_e2.fb[i].key, key, sizeof key)) return s_e2.fb[i].fb;'),
     ('    s_e2.fb[s_e2.fb_count++].fb = fb;',
      '    s_e2.fb[s_e2.fb_count].width = w;\n    s_e2.fb[s_e2.fb_count].height = h;\n    s_e2.fb[s_e2.fb_count].pass = rp;\n    s_e2.fb[s_e2.fb_count].depth = dview;\n    s_e2.fb[s_e2.fb_count++].fb = fb;'),
-    ('    VkRect2D sc = { { 0, 0 }, { w, h } };\n    if (s_e2.have_sc)',
-     '''    const float raster_x = rt0->scale_percent ? (float)w / rt0->guest_size.width : 1.0f;
-    const float raster_y = rt0->scale_percent ? (float)h / rt0->guest_size.height : 1.0f;
-    if (rt0->scale_percent && s_e2.have_vp && s_e2.vp[2] > 0.0f && s_e2.vp[3] > 0.0f) {
-        vp.x *= raster_x;
-        vp.y *= raster_y;
-        vp.width *= raster_x;
-        vp.height *= raster_y;
+    ('    const u32 w = rt0->w, h = rt0->h;', '''    const u32 w = rt0->w, h = rt0->h;
+    float tb_scaled_vp[4] = {0}, tb_scaled_slope = s_e2.depth_slope;
+    VkRect2D tb_scaled_sc = {{0, 0}, {w, h}};
+    if (rt0->scale_percent) {
+        const tb_scale_extent extent = tb_vk_scale_extent(rt0);
+        if (!extent.guest.width || !extent.guest.height || !extent.host.width || !extent.host.height) {
+            tb_frame_budget_count(TB_FC_SCALE_SKIP_GEOMETRY, 1);
+            tb_vk_scale_skip_frame();
+            return;
+        }
+        const float whole[] = {0, 0, (float)extent.guest.width, (float)extent.guest.height};
+        const float* guest_vp = s_e2.have_vp && s_e2.vp[2] > 0 && s_e2.vp[3] > 0 ? s_e2.vp : whole;
+        if (s_e2.have_sc) tb_scaled_sc = tb_vk_scale_scissor(rt0, s_e2.sc);
+        if (!tb_scaled_sc.extent.width || !tb_scaled_sc.extent.height) {
+            tb_frame_budget_count(TB_FC_SCALE_EMPTY_DRAW, 1);
+            if (s_eng_bound.rt[0] == tb_scaled.active_color) tb_scaled.rasterized = 1;
+            return; /* before descriptors, batch reservations or render passes */
+        }
+        if (!tb_scale_viewport_map(extent, guest_vp, tb_scaled_vp) ||
+            !tb_scale_viewport_fits(tb_scaled_vp, tb_scaled.viewport_limit, tb_scaled.viewport_min, tb_scaled.viewport_max) ||
+            !tb_scale_depth_slope(extent, s_e2.depth_slope, &tb_scaled_slope)) {
+            tb_frame_budget_count(TB_FC_SCALE_SKIP_GEOMETRY, 1);
+            tb_vk_scale_skip_frame();
+            return;
+        }
+    }'''),
+    ('''    VkRect2D sc = { { 0, 0 }, { w, h } };
+    if (s_e2.have_sc) {                       /* clamped: Vulkan rejects negative or over-size */
+        u32 x0 = s_e2.sc[0] < w ? s_e2.sc[0] : w, y0 = s_e2.sc[1] < h ? s_e2.sc[1] : h;
+        u32 x1 = s_e2.sc[0] + s_e2.sc[2], y1 = s_e2.sc[1] + s_e2.sc[3];
+        if (x1 > w) x1 = w;
+        if (y1 > h) y1 = h;
+        sc.offset.x = (int32_t)x0; sc.offset.y = (int32_t)y0;
+        sc.extent.width = x1 > x0 ? x1 - x0 : 0; sc.extent.height = y1 > y0 ? y1 - y0 : 0;
+    }''',
+     '''    if (rt0->scale_percent) {
+        vp.x = tb_scaled_vp[0]; vp.y = tb_scaled_vp[1];
+        vp.width = tb_scaled_vp[2]; vp.height = tb_scaled_vp[3];
     }
     VkRect2D sc = { { 0, 0 }, { w, h } };
-    if (rt0->scale_percent && s_e2.have_sc) sc = tb_vk_scale_scissor(rt0, s_e2.sc);
-    else if (s_e2.have_sc)'''),
+    if (rt0->scale_percent) sc = tb_scaled_sc;
+    else if (s_e2.have_sc) sc = tb_vk_scale_scissor(rt0, s_e2.sc);'''),
     ('.depth_bias=s_e2.depth_bias,.depth_slope=s_e2.depth_slope,',
      '''.depth_bias=s_e2.depth_bias,
         .depth_slope=rt0->scale_percent
-            ? s_e2.depth_slope * (raster_x > raster_y ? raster_x : raster_y) : s_e2.depth_slope,'''),
+            ? tb_scaled_slope : s_e2.depth_slope,'''),
     ('    else tb_group_emit(&draw);', '    else tb_group_emit(&draw);\n'
      '    if (rt0->scale_percent && s_eng_bound.rt[0] == tb_scaled.active_color) tb_scaled.rasterized = 1;'),
    ]
@@ -583,11 +615,14 @@ int tb_vk_scale_present(u32 native, u32 scaled)
     ('static u32 eng_surface_get(u32 location', '#include "'+str(scale_path)+'"\nstatic u32 eng_surface_get(u32 location'),
     ('    s->handle = handle;\n    s->color_serial', '    s->handle = handle;\n    s->scale_generation = ++tb_scale_scene.generation;\n    s->color_serial'),
     ('    z->handle = handle;', '    z->handle = handle;\n    z->scale_generation = ++tb_scale_scene.generation;'),
-    ('        if (fi > 0 && rsx_fp_apply_unnorm_scale', '        if (fi > 0 && wpos_scaled && tb_scale_scene.percent > 100 &&\n            tb_scale_wpos(s_ps_hlsl, sizeof s_ps_hlsl) < 0) fi = -1;\n        if (fi > 0 && rsx_fp_apply_unnorm_scale'),
+    ('        if (fi > 0 && rsx_fp_apply_unnorm_scale', '        if (fi > 0 && wpos_scaled && tb_scale_non_native(tb_scale_scene.percent) &&\n            tb_scale_wpos(s_ps_hlsl, sizeof s_ps_hlsl) < 0) fi = -1;\n        if (fi > 0 && rsx_fp_apply_unnorm_scale'),
     ('        if (wpos_scaled) key = eng_fnv1a(wpos_grid, sizeof wpos_grid, key);', '''        if (wpos_scaled) {
             key = eng_fnv1a(wpos_grid, sizeof wpos_grid, key);
-            if (tb_scale_scene.percent > 100) key = eng_fnv1a("scale", 5, key);
+            if (tb_scale_non_native(tb_scale_scene.percent)) key = eng_fnv1a("scale-xy", 8, key);
         }'''),
+    ('    const u32 fp_bytes = (nslots + (s_dbz.unit ? 2u : 1u)) * 16u;',
+     '''    const u32 tb_scale_slot = nslots + (s_dbz.unit ? 2u : 1u);
+    const u32 fp_bytes = (tb_scale_slot + (tb_scale_non_native(tb_scale_scene.percent) ? 1u : 0u)) * 16u;'''),
     ('static void sink_end(void* user', '#include "'+str(scale_raster)+'"\n\nstatic void sink_end(void* user'),
     ('    const u32 uploaded = indexed', '    tb_scale_note_draw(&sf, target, zslot);\n    const u32 uploaded = indexed'),
     ('    /* Counted only when the draw ran', '''    if (tb_frame_budget_on()) {
@@ -606,13 +641,14 @@ int tb_vk_scale_present(u32 native, u32 scaled)
     }
     tb_scale_binding mirror;
     if (tb_scale_mirror_binding(target, zslot, n_targets, &rs, tex_mask, vtex_mask, &mirror)) {
-        float* alpha = (float*)(g.fp_cb + nslots * 16u);
-        alpha[3] = 100.0f / (float)mirror.percent;
+        float* scale = (float*)(g.fp_cb + tb_scale_slot * 16u);
+        scale[0] = mirror.guest_per_host_x;
+        scale[1] = mirror.guest_per_host_y;
         g.be->bind_targets(g.be->user, &mirror.color, 1, mirror.depth);
         g.be->bind_ps_constants(g.be->user, g.fp_cb, fp_bytes);
         g.be->draw(g.be->user, topology, dc.verts, uploaded, layout.stride,
                    indexed ? g.indices : NULL, indexed ? n_draw : 0);
-        alpha[3] = 0.0f;
+        scale[0] = scale[1] = 0.0f;
         g.be->bind_ps_constants(g.be->user, g.fp_cb, fp_bytes);
         g.be->bind_targets(g.be->user, handles, n_targets, depth_handle);
     }

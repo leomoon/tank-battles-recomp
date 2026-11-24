@@ -4,6 +4,6 @@
 int main(void)
 {
     check_scale_geometry();
-    puts("PASS: render-scale presets, limits, shared rectangle edges and shader coordinate conversion");
+    puts("PASS: six render scales, odd extents, clipped resolve tiles, empty regions, viewport/depth bias and per-axis WPOS");
     return 0;
 }
