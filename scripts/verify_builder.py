@@ -97,11 +97,11 @@ def launch(launcher: Path, window_driver: str = "dummy") -> None:
     window = subprocess.run([str(launcher)], capture_output=True, encoding="utf-8", errors="replace", timeout=60,
                             env=dict(environment, SDL_VIDEODRIVER=window_driver, TB_LAUNCHER_UI_SMOKE=str(shots)))
     drawn = len(list(shots.glob("screen-*.bmp")))
-    if window.returncode or drawn != 6:
-        raise SystemExit(f"Launcher captured {drawn}/6 screens (exit {window.returncode}): {window.stdout}{window.stderr}")
+    if window.returncode or drawn != 7:
+        raise SystemExit(f"Launcher captured {drawn}/7 screens (exit {window.returncode}): {window.stdout}{window.stderr}")
     if f"[launcher] SDL video driver: {window_driver}" not in window.stderr:
         raise SystemExit(f"Launcher did not use the requested {window_driver} backend: {window.stderr}")
-    print(f"[verify] launcher rendered all six screens using {window_driver}")
+    print(f"[verify] launcher rendered all seven screens using {window_driver}")
     started = time.monotonic()
     offline = subprocess.run([str(launcher), "--offline"], capture_output=True,
                              encoding="utf-8", errors="replace", timeout=120, env=environment)

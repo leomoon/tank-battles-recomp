@@ -16,7 +16,7 @@ void tb_settings_note_fullscreen(int on);
 void tb_settings_note_window(int width, int height);
 int tb_settings_antialiasing(void);
 void tb_settings_note_antialiasing(int on);
-/* Validated percentage: 100 (Native), 150, 200 or 300. Renderer use follows later. */
+/* Validated percentage: 100 (Native), 150, 200 or 300. */
 int tb_settings_render_scale(void);
 #ifdef __cplusplus
 }
@@ -34,7 +34,7 @@ struct WindowPreset { WindowSize choice; int width, height; };
 inline constexpr std::array<WindowPreset, 4> window_presets{{
     {WindowSize::remember, 0, 0}, {WindowSize::hd, 1280, 720},
     {WindowSize::full_hd, 1920, 1080}, {WindowSize::qhd, 2560, 1440}}};
-// Percentages deliberately avoid resolution labels until scene dimensions are verified.
+// Scale relative to the 1280 x 720 guest display.
 inline constexpr std::array<int, 4> render_presets{100, 150, 200, 300};
 struct Preferences {
     Mode mode = Mode::windowed;

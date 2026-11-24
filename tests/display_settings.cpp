@@ -21,6 +21,14 @@ static void env(const char* name, const std::string& value) {
     setenv(name,value.c_str(),1);
 #endif
 }
+static void env_path(const char* name, const fs::path& value) {
+#ifdef _WIN32
+    const auto wide_name = fs::path(name).wstring();
+    CHECK(_wputenv_s(wide_name.c_str(), value.c_str()) == 0);
+#else
+    env(name, utf8(value));
+#endif
+}
 static void clear(const char* name) {
 #ifdef _WIN32
     _putenv_s(name,"");
@@ -57,7 +65,7 @@ int main(int argc,char** argv) {
   p={Mode::windowed,static_cast<WindowSize>(900),100}; CHECK(!save(file,p,error)); CHECK(read(file)==good);
   { std::ofstream f(file); f<<"render_scale = 200junk\nwindow_preset = 9999999999999999999999\nfullscreen = -1\nwindow_width = 1000\nwindow_height = -1\n"; }
   CHECK(load(file,p,error)); CHECK(p.render_scale==100 && p.mode==Mode::windowed && p.window_size==WindowSize::remember);
-  env("TB_SETTINGS_FILE",utf8(file)); clear("TB_RENDER_SCALE"); clear("TB_FXAA"); clear("PS3RECOMP_FULLSCREEN"); clear("PS3RECOMP_VK_FULLSCREEN"); clear("TB_FPS_OVERLAY");
+  env_path("TB_SETTINGS_FILE",file); clear("TB_RENDER_SCALE"); clear("TB_FXAA"); clear("PS3RECOMP_FULLSCREEN"); clear("PS3RECOMP_VK_FULLSCREEN"); clear("TB_FPS_OVERLAY");
   tb_settings_init(); int w=0,h=0; CHECK(!tb_settings_window_size(&w,&h)); CHECK(tb_settings_render_scale()==100);
   p={Mode::borderless,WindowSize::full_hd,200}; CHECK(save(file,p,error));
   const auto saved=read(file);
@@ -70,9 +78,9 @@ int main(int argc,char** argv) {
   int requested_w=0,requested_h=0;
   CHECK(tb_settings_window_preset(&requested_w,&requested_h));
   CHECK(requested_w==1920 && requested_h==1080);
-  clear("TB_SETTINGS_FILE"); env("PS3_GAMEDATA_ROOT",utf8(root));
+  clear("TB_SETTINGS_FILE"); env_path("PS3_GAMEDATA_ROOT",root);
   tb_settings_init(); CHECK(tb_settings_render_scale()==200);
-  env("TB_SETTINGS_FILE",utf8(file));
+  env_path("TB_SETTINGS_FILE",file);
   tb_settings_note_overlay(1); tb_settings_note_fullscreen(0); tb_settings_note_window(1600,900); tb_settings_note_antialiasing(0);
   CHECK(load(file,p,error)); CHECK(p.mode==Mode::windowed && p.window_size==WindowSize::full_hd && p.render_scale==200);
   CHECK(read(file).find("window_width = 1600")!=std::string::npos);

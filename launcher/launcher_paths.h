@@ -70,7 +70,7 @@ struct Folder {
                 {"PS3_GAMEDATA_ROOT", game()}, {"PS3_DEV_FLASH", game() / "dev_flash"},
                 {"PS3_PARAM_SFO", title() / "PARAM.SFO"}, {"PS3_TITLE", "Tank Battles Recomp"},
                 {"TB_EXPECTED_TITLE_ID", title_id}, {"PS3_STDIO_UNBUFFERED", "1"}, {"PS3_VERBOSE", "0"},
-                {"TB_LOG_DIR", logs()}};
+                {"TB_LOG_DIR", logs()}, {"TB_SETTINGS_FILE", settings()}};
     }
 };
 

@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #ifdef _WIN32
 #include <process.h>
@@ -47,6 +48,16 @@ bool number(std::string_view text, int& value) {
     return result.ec == std::errc{} && result.ptr == text.data() + text.size();
 }
 std::filesystem::path native_path(const std::string& value) { return std::filesystem::path(std::u8string(value.begin(), value.end())); }
+std::optional<std::filesystem::path> path_from_env(const char* name) {
+#ifdef _WIN32
+    const std::wstring wide_name(name, name + std::strlen(name));
+    const wchar_t* value = _wgetenv(wide_name.c_str());
+#else
+    const char* value = getenv(name);
+#endif
+    if (!value) return std::nullopt;
+    return std::filesystem::path(value);
+}
 FILE* open_file(const std::string& path, bool writing) {
 #ifdef _WIN32
     return _wfopen(native_path(path).c_str(), writing ? L"w" : L"r");
@@ -130,17 +141,15 @@ extern "C" void tb_settings_init(void) {
         if (!number(value, initial_scale) || !valid_scale(initial_scale)) initial_scale = 100;
     s.effective_scale.store(initial_scale);
     s.antialiasing.store(aa && atoi(aa) != 0);
-    const char* path = getenv("TB_SETTINGS_FILE");
-    std::string fallback;
+    auto path = path_from_env("TB_SETTINGS_FILE");
     if (!path) {
-        const char* root = getenv("PS3_GAMEDATA_ROOT");
-        if (!root || !*root) return;
-        const auto text = (native_path(root) / "settings.ini").u8string();
-        fallback.assign(text.begin(), text.end());
-        path = fallback.c_str();
+        const auto root = path_from_env("PS3_GAMEDATA_ROOT");
+        if (!root || root->empty()) return;
+        path = *root / "settings.ini";
     }
-    if (!*path) return;
-    s.path = path;
+    if (path->empty()) return;
+    const auto utf8 = path->u8string();
+    s.path.assign(utf8.begin(), utf8.end());
     load(s);
     if (aa) s.antialiasing.store(atoi(aa) != 0);
     int scale = s.render_scale;

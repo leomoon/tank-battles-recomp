@@ -123,6 +123,11 @@ if args and args[0] in ("--rpcn-check", "--rpcn-create-account", "--rpcn-request
         print("[rpcn-result] signed_in")
     sys.exit(0)
 seen = {"argv": args, "cwd": os.getcwd(), "env": {k: v for k, v in os.environ.items() if k.startswith(("PS3_", "TB_"))}}
+settings = os.environ.get("TB_SETTINGS_FILE")
+if settings and os.path.isfile(settings):
+    with open(settings) as stream:
+        seen["settings"] = {key.strip(): int(value) for line in stream if "=" in line
+                            for key, value in [line.split("=", 1)]}
 if "--rpcn-profile" in args:
     path = args[args.index("--rpcn-profile") + 1]
     seen["profile"] = dict(line.split("=", 1) for line in open(path).read().splitlines())
@@ -142,13 +147,18 @@ def sdl_flags():
 class LauncherTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temporary = Path(tempfile.mkdtemp(prefix="tb launcher "))
+        # ld.so splits LD_PRELOAD on spaces. Player folders can still contain them.
+        cls.temporary = Path(tempfile.mkdtemp(prefix="tb-launcher-", dir="/tmp"))
         cls.launcher = cls.temporary / "Play Tank Battles"
         cls.secret_library = cls.temporary / "secret-library"
+        cls.input_mock = cls.temporary / "launcher-input.so"
         cls.secret_library.mkdir()
         subprocess.run(["cc", "-shared", "-fPIC", str(ROOT / "scripts/launcher_secret_mock.c"),
                         "-o", str(cls.secret_library / "libsecret-1.so.0")], check=True)
+        subprocess.run(["cc", "-shared", "-fPIC", str(ROOT / "scripts/launcher_input_mock.c"),
+                        "-o", str(cls.input_mock), *sdl_flags(), "-ldl"], check=True)
         sources = [str(ROOT / "launcher" / name) for name in ("play_tank_battles.cpp", "accounts.cpp", "platform.cpp", "ui.cpp")]
+        sources.append(str(ROOT / "player_settings.cpp"))
         subprocess.run(["c++", "-std=c++20", "-O1", "-I", str(ROOT / "launcher"), *sources, "-o", str(cls.launcher),
                         *sdl_flags(), "-pthread", "-ldl"], check=True)
 
@@ -172,7 +182,7 @@ class LauncherTests(unittest.TestCase):
         self.runtime.mkdir(mode=0o700)
         return root
 
-    def run_launcher(self, root, *arguments, stdin=None, check=True, runtime_dir=True):
+    def run_launcher(self, root, *arguments, stdin=None, check=True, runtime_dir=True, window_input=None):
         secret_dir = root / "test-keyring"
         secret_dir.mkdir(exist_ok=True)
         temp_dir = root / "system-temp"
@@ -184,8 +194,11 @@ class LauncherTests(unittest.TestCase):
             environment["XDG_RUNTIME_DIR"] = str(self.runtime)
         if self.secret_store_fails:
             environment["TB_TEST_SECRET_FAIL"] = "1"
+        if window_input:
+            environment.update(LD_PRELOAD=str(self.input_mock), SDL_VIDEODRIVER="dummy",
+                               TB_TEST_LAUNCHER_INPUT="idle " + window_input)
         result = subprocess.run([str(root / "Play Tank Battles"), *arguments], capture_output=True, text=True,
-                                input=stdin, cwd="/", env=environment)
+                                input=stdin, cwd="/", env=environment, timeout=25)
         if check:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
@@ -207,6 +220,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(seen["env"]["PS3_VFS_ROOT"], str(title))
         self.assertEqual(seen["env"]["PS3_GAMEDATA_ROOT"], str(root / "game"))
         self.assertEqual(seen["env"]["TB_LOG_DIR"], str(root / "logs"))
+        self.assertEqual(seen["env"]["TB_SETTINGS_FILE"], str(root / "game/settings.ini"))
         self.assertTrue((root / "game/dev_hdd1").is_dir())
         # --play with no account starts offline too.
         self.assertEqual(json.loads(self.run_launcher(root, "--play").stdout)["argv"], [str(title / "USRDIR/EBOOT.elf")])
@@ -349,8 +363,8 @@ class LauncherTests(unittest.TestCase):
         result = subprocess.run([str(root / "Play Tank Battles")], capture_output=True, text=True,
                                 env={"PATH": "/nonexistent", "SDL_VIDEODRIVER": "dummy", "TB_LAUNCHER_UI_SMOKE": str(shots)})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(list(shots.glob("screen-*.bmp"))), 6)
-        expected_sizes = [(640, 360), (1440, 900), (800, 900), (1440, 540), (640, 360), (640, 360)]
+        self.assertEqual(len(list(shots.glob("screen-*.bmp"))), 7)
+        expected_sizes = [(640, 360), (1440, 900), (800, 900), (1440, 540), (640, 360), (1024, 768), (1024, 768)]
         for index, size in enumerate(expected_sizes):
             bitmap = (shots / f"screen-{index}.bmp").read_bytes()
             width, height = struct.unpack_from("<ii", bitmap, 18)
@@ -365,6 +379,47 @@ class LauncherTests(unittest.TestCase):
             pixel = offset + (row * width + x) * 4
             b, g, r = bitmap[pixel:pixel + 3]
             self.assertEqual((r, g, b), (255, 199, 102), f"screen {index} lost its centered panel")
+
+    def test_display_settings_work_across_input_methods_accounts_and_launches(self):
+        root = self.folder("display")
+        settings = root / "game/settings.ini"
+        # Keyboard navigation works on a fresh, signed-out launcher.
+        self.run_launcher(root, window_input="shift-tab Return Right Down Right Escape Escape")
+        self.assertFalse(settings.exists(), "Cancel wrote default or edited preferences")
+        offline = self.run_launcher(root, window_input="shift-tab Return Down Right Down Right Down Return Down Return")
+        offline = json.loads(offline.stdout)
+        self.assertEqual(offline["settings"], {"fullscreen": 0, "antialiasing": 0,
+                                               "render_scale": 150, "window_preset": 720})
+
+        # A signed-in user can skip the disabled window size on the pad.
+        self.assertEqual(self.account(root, "sign-in", "--server", "one.example:31313",
+                                      "--user", "Player1", "--remember")["result"], "signed_in")
+        write(settings, "fullscreen=0\nwindow_preset=1080\nrender_scale=150\nantialiasing=1\n"
+                        "overlay=1\nwindow_width=1100\nwindow_height=700\n")
+        online = json.loads(self.run_launcher(root, window_input="pad pu pa pa pd pa @295,60 pd pa pd pa").stdout)
+        status = self.run_launcher(root, "--account", "status").stdout
+        self.assertIn("active=Player1@one.example_31313", status)
+        self.assertEqual(online["profile"]["npid"], "Player1")
+        self.assertEqual(online["settings"], {
+            "fullscreen": 1, "window_preset": 1080, "render_scale": 200, "antialiasing": 1,
+            "overlay": 1, "window_width": 1100, "window_height": 700,
+        })
+        self.run_launcher(root, window_input="pad pu pa pa pb Escape")
+        saved = settings.read_bytes()
+
+        # Settings are shared when switching accounts. Restore defaults
+        # changes the draft, followed by Cancel or an explicit Save.
+        self.assertEqual(self.account(root, "sign-in", "--server", "two.example:31313",
+                                      "--user", "Player2", "--remember")["result"], "signed_in")
+        self.run_launcher(root, window_input="@150,132 @226,145 @132,145 Escape")
+        self.assertEqual(settings.read_bytes(), saved)
+        self.run_launcher(root, window_input="@150,132 @226,145 @52,145 Escape")
+        online = json.loads(self.run_launcher(root, "--play").stdout)
+        self.assertEqual(online["profile"]["npid"], "Player2")
+        self.assertEqual(online["settings"], {
+            "fullscreen": 0, "window_preset": 0, "render_scale": 100, "antialiasing": 1,
+            "overlay": 1, "window_width": 1100, "window_height": 700,
+        })
 
     def test_a_missing_player_is_explained(self):
         root = self.folder("broken")

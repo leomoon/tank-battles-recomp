@@ -4,6 +4,7 @@
 #include "ui.h"
 
 #include "font5x7.h"
+#include "../player_settings.h"
 
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -16,6 +17,7 @@
 #include <functional>
 #include <iterator>
 #include <mutex>
+#include <span>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -220,6 +222,31 @@ public:
         return enabled && ((hover && in_.clicked) || (focused && (in_.enter || in_.space || in_.pad_confirm)));
     }
 
+    size_t selector(int x, int y, int w, std::span<const std::string> values, size_t selected,
+                    bool enabled = true) {
+        const int id = next();
+        constexpr int height = 16;
+        const bool hover = enabled && inside(x, y, w, height);
+        const bool clicked = hover && in_.clicked;
+        if (clicked) focus_ = id;
+        const bool focused = enabled && focus_ == id;
+        if (focused) {
+            if (in_.left || (clicked && in_.mouse_x < x + 20))
+                selected = (selected + values.size() - 1) % values.size();
+            else if (clicked || in_.right || in_.enter || in_.space || in_.pad_confirm)
+                selected = (selected + 1) % values.size();
+        }
+        p_.fill(x, y, w, height, panel);
+        p_.frame(x, y, w, height, focused ? focus_ring : hover ? white : border);
+        const std::string value = enabled ? values[selected] : "Desktop size";
+        p_.text(x + (w - Painter::width(value)) / 2, y + 5, value, enabled ? white : muted);
+        if (enabled) {
+            p_.text(x + 7, y + 5, "<", focused ? accent : muted);
+            p_.text(x + w - 12, y + 5, ">", focused ? accent : muted);
+        }
+        return selected;
+    }
+
     // Returns true when Enter is pressed in this field.
     bool field(int x, int y, int w, const std::string& label, std::string& value, bool masked = false,
                size_t limit = 64, bool enabled = true) {
@@ -339,7 +366,9 @@ void draw_keyboard(Painter& painter, Input& input, TextEntry& editor) {
     painter.text(margin, 167, "Start done   PS O / Xbox B cancel", muted);
 }
 
-enum class Screen { home, sign_in, create, request_reset, reset_password };
+enum class Screen { home, sign_in, create, request_reset, reset_password, display_settings };
+constexpr int window_size_focus = 1;
+constexpr int display_focus_count = 6;
 
 struct State {
     Screen screen = Screen::home;
@@ -349,7 +378,71 @@ struct State {
     std::string message;
     bool message_good = false;
     std::optional<std::pair<Account, std::string>> session;   // Password known for this run.
+    display::Preferences display_draft;
 };
+
+bool draw_display_settings(Painter& painter, Form& form, const Input& input, State& state, const fs::path& path) {
+    static const std::array<std::string, 2> modes{"Windowed", "Borderless fullscreen"};
+    static const auto window_sizes = [] {
+        std::array<std::string, display::window_presets.size()> names;
+        for (size_t i = 0; i < names.size(); ++i) {
+            const auto preset = display::window_presets[i];
+            names[i] = preset.width ? std::to_string(preset.width) + " x " + std::to_string(preset.height)
+                                    : "Remember last";
+        }
+        return names;
+    }();
+    static const auto scales = [] {
+        std::array<std::string, display::render_presets.size()> names;
+        constexpr std::array resolutions{"720p", "1080p", "1440p", "4K"};
+        static_assert(names.size() == resolutions.size());
+        for (size_t i = 0; i < names.size(); ++i) {
+            const int percent = display::render_presets[i];
+            const std::string label = percent == 100 ? "Native" : std::to_string(percent) + "%";
+            names[i] = label + " (" + resolutions[i] + ")";
+        }
+        return names;
+    }();
+    const std::string heading = "Display settings";
+    painter.text(logical_width - margin - Painter::width(heading), 12, heading, accent);
+    constexpr int select_x = margin + 120, select_w = content_width - 120;
+    auto& draft = state.display_draft;
+    painter.text(margin, 34, "Window mode", muted);
+    draft.mode = form.selector(select_x, 29, select_w, modes, draft.mode == display::Mode::borderless)
+        ? display::Mode::borderless : display::Mode::windowed;
+    const bool windowed = draft.mode == display::Mode::windowed;
+    painter.text(margin, 57, "Window size", muted);
+    const auto size = std::find_if(display::window_presets.begin(), display::window_presets.end(),
+        [&](const auto& preset) { return preset.choice == draft.window_size; });
+    draft.window_size = display::window_presets[
+        form.selector(select_x, 52, select_w, window_sizes, size - display::window_presets.begin(), windowed)].choice;
+    painter.text(margin, 80, "Internal resolution", muted);
+    const auto scale = std::find(display::render_presets.begin(), display::render_presets.end(), draft.render_scale);
+    draft.render_scale = display::render_presets[
+        form.selector(select_x, 75, select_w, scales, scale - display::render_presets.begin())];
+
+    if (!windowed) painter.text(margin, 99, "Borderless fills the desktop.", muted);
+    constexpr int button_y = 139, gap = 6, narrow = 78;
+    const bool save = form.button(margin, button_y, narrow, "Save", true);
+    const bool cancel = form.button(margin + narrow + gap, button_y, narrow, "Cancel");
+    const bool reset = form.button(margin + 2 * (narrow + gap), button_y,
+                                   content_width - 2 * (narrow + gap), "Restore defaults");
+    if (cancel || input.escape) return true;
+    if (save && display::save(path, draft, state.message)) return true;
+    if (reset) {
+        draft = {};
+        state.message.clear();
+    }
+    if (state.message.empty()) {
+        painter.text(margin, 111, "Higher resolutions are sharper and use more GPU.", muted);
+        painter.text(margin, 122, "Applies when the game starts.", muted);
+    } else {
+        painter.paragraph(margin, 111, content_width, state.message, bad, 2);
+    }
+    painter.text(margin, 159, "Up/Down or Tab move   Left/Right change", muted);
+    painter.text(margin, 170, "PS X / Xbox A select   Esc / PS O / Xbox B back", muted);
+    return false;
+}
 
 struct Worker {
     std::thread thread;
@@ -528,6 +621,8 @@ std::optional<Choice> run_ui(Accounts& accounts) {
         Gamepad pad;
         TextEntry editor;
         int focus = 0, focus_count = 1;
+        int home_display_focus = 0, home_focus_count = 1;
+        const auto settings_path = accounts.folder().settings();
         if (auto active = accounts.active()) {
             if (auto password = accounts.remembered_password(*active)) state.session = std::make_pair(*active, *password);
             fill_from(state, *active);
@@ -536,6 +631,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
             state.screen = screen;
             state.message.clear();
             focus = 0;
+            if (screen == Screen::display_settings) focus_count = display_focus_count;
             editor = {};
         };
         Screen recovery_back = Screen::sign_in;
@@ -550,7 +646,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
         };
         // Smoke mode for tests: draw each screen once and leave.
         const auto smoke = smoke_output_directory();
-        constexpr SDL_Point smoke_sizes[] = {{640, 360}, {1440, 900}, {800, 900}, {1440, 540}, {640, 360}};
+        constexpr SDL_Point smoke_sizes[] = {{640, 360}, {1440, 900}, {800, 900}, {1440, 540}, {640, 360}, {1024, 768}};
         if (smoke) SDL_SetWindowSize(window, smoke_sizes[0].x, smoke_sizes[0].y);
         int smoke_frames = 0;
 
@@ -590,7 +686,8 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                     break;
                 case SDL_TEXTINPUT: input.typed += event.text.text; break;
                 case SDL_DROPFILE:
-                    if (state.screen != Screen::home && !worker.running && !editor.editing()) {
+                    if (state.screen != Screen::home && state.screen != Screen::display_settings &&
+                        !worker.running && !editor.editing()) {
                         state.advanced = true;
                         state.ca_path = event.drop.file;
                     }
@@ -627,8 +724,15 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                 SDL_RenderPresent(renderer);
                 continue;
             }
-            if (input.tab || input.down || input.right) focus = (focus + 1) % std::max(1, focus_count);
-            if (input.backtab || input.up || input.left) focus = (focus + focus_count - 1) % std::max(1, focus_count);
+            const bool display_open = state.screen == Screen::display_settings;
+            auto move_focus = [&](int direction) {
+                const int count = std::max(1, focus_count);
+                focus = (focus + count + direction) % count;
+                if (display_open && focus == window_size_focus && state.display_draft.mode == display::Mode::borderless)
+                    focus = (focus + count + direction) % count;
+            };
+            if (input.tab || input.down || (!display_open && input.right)) move_focus(1);
+            if (input.backtab || input.up || (!display_open && input.left)) move_focus(-1);
             // Space types in text fields; it only presses buttons and boxes.
             const bool busy = worker.running;
             if (busy) input = Input{input.mouse_x, input.mouse_y};
@@ -682,6 +786,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
             const int column = content_width;
             int y = 29;
             const auto active = accounts.active();
+            const Screen drawn = state.screen;
 
             if (state.screen == Screen::home) {
                 if (input.escape) {
@@ -694,7 +799,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                 else if (active)
                     status = active->npid + " on " + active->endpoint + ": sign in to play online.";
                 painter.paragraph(margin, y, column, status, muted, 2);
-                y += 22;
+                y += 20;
                 const bool online_ready = active && state.session && state.session->first.id() == active->id();
                 if (online_ready) {
                     if (form.button(margin, y, column, busy ? "Checking account..." : "Play online as " + active->npid,
@@ -705,16 +810,16 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                         worker.start([&accounts, session] {
                             return accounts.verify_saved(session.first, session.second); }, wake);
                     }
-                    y += 20;
+                    y += 19;
                     if (form.button(margin, y, column, "Play offline")) choice = Choice{Choice::offline};
                 } else {
                     if (form.button(margin, y, column, "Play offline", true)) choice = Choice{Choice::offline};
                     if (active) {
-                        y += 20;
+                        y += 19;
                         if (form.button(margin, y, column, "Sign in as " + active->npid)) { fill_from(state, *active); go(Screen::sign_in); }
                     }
                 }
-                y += 22;
+                y += 19;
                 const int half = (column - 8) / 2;
                 if (form.button(margin, y, half, "Sign in")) {
                     if (active) fill_from(state, *active);
@@ -726,7 +831,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                     go(Screen::create);
                 }
                 if (active) {
-                    y += 20;
+                    y += 19;
                     if (form.button(margin, y, half, "Sign out")) {
                         accounts.sign_out();
                         state.session.reset();
@@ -738,10 +843,25 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                         start_recovery(Screen::home);
                     }
                 }
-                y += 22;
+                y += 19;
+                const int display_id = form.count();
+                if (form.button(margin, y, column, "Display settings", false, !busy)) {
+                    home_display_focus = display_id;
+                    home_focus_count = form.count();
+                    go(Screen::display_settings);
+                    state.display_draft = {};
+                    display::load(settings_path, state.display_draft, state.message);
+                }
+                y += 20;
                 if (!state.message.empty())
                     painter.paragraph(margin, y, column, state.message, state.message_good ? good : bad);
-                painter.text(margin, 168, "D-pad / Tab move   PS X / Xbox A select", muted);
+                painter.text(margin, 170, "D-pad / Tab move   PS X / Xbox A select", muted);
+            } else if (state.screen == Screen::display_settings) {
+                if (draw_display_settings(painter, form, input, state, settings_path)) {
+                    go(Screen::home);
+                    focus = home_display_focus;
+                    focus_count = home_focus_count;
+                }
             } else {
                 const bool signing_in = state.screen == Screen::sign_in;
                 const bool creating = state.screen == Screen::create;
@@ -852,13 +972,16 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                 else if (!busy)
                     painter.text(margin, y + 1, "Type or press PS X / Xbox A to open KB", muted);
             }
-            focus_count = form.count();
-            if (focus >= focus_count) focus = 0;
+            if (drawn == state.screen) {
+                focus_count = form.count();
+                if (focus >= focus_count) focus = 0;
+            }
             presentation.compose(renderer, canvas);
             if (smoke) save_smoke_frame(renderer, *smoke, smoke_frames);
             SDL_RenderPresent(renderer);
             if (smoke) {
-                static const Screen order[] = {Screen::home, Screen::sign_in, Screen::create, Screen::request_reset, Screen::reset_password};
+                static const Screen order[] = {Screen::home, Screen::sign_in, Screen::create, Screen::request_reset,
+                                               Screen::reset_password, Screen::display_settings};
                 static_assert(std::size(order) == std::size(smoke_sizes));
                 if (++smoke_frames >= static_cast<int>(std::size(order))) {
                     SDL_SetRenderTarget(renderer, canvas);
@@ -869,7 +992,7 @@ std::optional<Choice> run_ui(Accounts& accounts) {
                     else std::fprintf(stderr, "The launcher keyboard smoke check failed\n");
                     choice = Choice{};
                 } else {
-                    state.screen = order[smoke_frames];
+                    go(order[smoke_frames]);
                     SDL_SetWindowSize(window, smoke_sizes[smoke_frames].x, smoke_sizes[smoke_frames].y);
                 }
             }
