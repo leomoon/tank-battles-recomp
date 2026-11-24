@@ -17,6 +17,8 @@ To play again, open **Play Tank Battles** (`Play Tank Battles.exe` on Windows) i
 
 Open **Display settings** in the launcher to choose Windowed or Borderless fullscreen, which fills your desktop. Window size controls the window on your desktop. Internal resolution controls detail, from Native (720p, the default) through 1080p, 1440p, and 4K. Higher resolutions use more GPU power. Save your changes before starting the game. If a higher setting is unavailable, the game uses Native and shows a notification. You can also select Native again in Display settings.
 
+During play, **F11** or **Alt+Enter** switches between Windowed and Borderless fullscreen and saves your choice. **F2** opens Friends, **F3** toggles the FPS counter, and **F4** toggles FXAA antialiasing.
+
 ## Source build and credits
 
 Built with ps3recomp, SDL2, and Vulkan. The developer setup, full credits, and third-party licenses are in the [source-build guide](docs/BUILD_FROM_SOURCE.md).

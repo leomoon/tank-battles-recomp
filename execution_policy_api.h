@@ -24,6 +24,7 @@ typedef struct tb_overlay_region { uint32_t x, y, width, height; } tb_overlay_re
 int tb_draw_overlay(void* pixels,uint32_t width,uint32_t height,int bgra,tb_overlay_region* region);
 // Writes a top-left notification into TB_NOTIFICATION_BUFFER_SIZE bytes.
 int tb_draw_notification_toast(void* pixels,uint32_t width,uint32_t height,int bgra,tb_overlay_region* region);
+void tb_antialiasing_toast(int on);
 void tb_keyboard_down(uint32_t scancode);
 uint32_t tb_keyboard_take(void);
 uint32_t tb_keyboard_peek(void);

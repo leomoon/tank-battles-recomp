@@ -443,6 +443,21 @@ void tb_show_network_toast(const char* heading,const char* detail) {
 extern "C" void tb_render_scale_fallback() {
     tb_show_network_toast("RENDER SCALE UNAVAILABLE", "USING NATIVE RESOLUTION");
 }
+extern "C" void tb_antialiasing_toast(int on) {
+    std::lock_guard guard(overlay_mutex);
+    constexpr const char* heading = "ANTIALIASING";
+    std::erase_if(queued_toasts, [](const auto& value) {
+        return std::strcmp(value.heading.data(), "ANTIALIASING") == 0;
+    });
+    Toast value;
+    value.invitation = false;
+    std::snprintf(value.heading.data(), value.heading.size(), "%s", heading);
+    std::snprintf(value.detail.data(), value.detail.size(), "FXAA %s", on ? "ON" : "OFF");
+    if (std::strcmp(toast.heading.data(), heading) == 0) {
+        toast = value;
+        toast_until = Clock::now() + toast_duration;
+    } else queue_toast(value);
+}
 void tb_show_friend_request_toast(const char* sender) {
     std::lock_guard guard(overlay_mutex);
     Toast value;value.invitation=false;value.friend_request=true;

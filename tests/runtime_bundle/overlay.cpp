@@ -119,6 +119,16 @@ int main(){
  assert(tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region)); // Connection error stays visible.
  std::this_thread::sleep_for(std::chrono::seconds(4));
  assert(!tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
+ tb_antialiasing_toast(1);
+ assert(tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
+ assert(toast_region.x==20 && toast_region.y==20 && toast_region.width==448 && toast_region.height==86);
+ const auto fxaa_on=toast;
+ tb_antialiasing_toast(0);
+ tb_clear_invite_toast(); // FXAA notices survive invitation cleanup.
+ assert(tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
+ assert(toast!=fxaa_on); // Rapid toggles immediately show the current state.
+ std::this_thread::sleep_for(std::chrono::seconds(4));
+ assert(!tb_draw_notification_toast(toast.data(),1280,720,0,&toast_region));
  tb_show_friend_request_toast("RequestA");
  tb_show_friend_request_toast("RequestA"); // Duplicate notices must not restart or queue the same toast.
  assert(tb_friend_request_toast_visible());
