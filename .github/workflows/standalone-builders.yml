@@ -161,9 +161,12 @@ jobs:
           name: standalone-builder-linux-${{ github.sha }}
           path: download
       - name: Checksums and window prerequisites
+        timeout-minutes: 10
         run: |
           cd download && sha256sum -c --ignore-missing SHA256SUMS
-          sudo apt-get update && sudo apt-get install -y xvfb weston libgtk-4-1
+          APT_OPTIONS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60)
+          sudo apt-get "${APT_OPTIONS[@]}" update
+          sudo apt-get "${APT_OPTIONS[@]}" install -y --no-install-recommends xvfb xauth weston libgtk-4-1
       - name: Relocate into a path with spaces and extract
         run: |
           DIR="$RUNNER_TEMP/down load ü"
