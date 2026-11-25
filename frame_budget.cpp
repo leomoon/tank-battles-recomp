@@ -101,6 +101,10 @@ extern "C" void tb_frame_budget_init(void) {
 #endif
     g_enabled.store(1, std::memory_order_release);
     ps3_ft_on();
+    // Text ftrace timestamps subtract this base. Keep the exact mapping so
+    // title pacing and gameplay telemetry can be aligned without guessing.
+    fprintf(stderr, "[frame-budget] base_monotonic_ns=%llu\n",
+            (unsigned long long)g_ps3_ft.base);
     g_watcher=std::thread(watcher);
     atexit(stop_watcher);
 }

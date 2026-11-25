@@ -1,6 +1,7 @@
 """Attach RPCN compatibility hooks to the locally lifted Tank Battles title."""
 import argparse
 from pathlib import Path
+from patch_online_pacing import patch_pacing
 
 
 SIGNATURE = "void func_001530E0(ppu_context* ctx) {\n    PPU_MM_SNAP\n"
@@ -32,6 +33,7 @@ def patch_score_menu(path, source):
 
 
 def patch(directory):
+    patch_pacing(directory)
     matches = []
     score_matches = []
     for path in Path(directory).glob("ppu_recomp_*.cpp"):

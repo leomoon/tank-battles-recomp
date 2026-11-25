@@ -15,6 +15,7 @@ endforeach()
 
 include("${TB_RUNTIME_ROOT}/cmake/RuntimeConsumer.cmake")
 find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${TB_PORT_ROOT}/scripts/patch_online_pacing.py")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${TB_PORT_ROOT}/scripts/patch_network_events.py")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${TB_PORT_ROOT}/scripts/patch_network_events.py"
     "${RECOMP_DIR}" COMMAND_ERROR_IS_FATAL ANY)
@@ -28,7 +29,7 @@ endif()
 include("${TB_PORT_ROOT}/cmake/TitleCompileFlags.cmake")
 tb_title_sources(RECOMP_SOURCES ${RECOMP_SOURCES})
 add_executable(TankBattlesRecomp
-    "${TB_PORT_ROOT}/runtime_entry.cpp" ${RECOMP_SOURCES} ${SPU_GENERATED_SOURCES})
+    "${TB_PORT_ROOT}/runtime_entry.cpp" "${TB_PORT_ROOT}/online_pacing.cpp" ${RECOMP_SOURCES} ${SPU_GENERATED_SOURCES})
 target_include_directories(TankBattlesRecomp BEFORE PRIVATE
     "${RECOMP_DIR}" "${TB_PORT_ROOT}" "${PS3RECOMP_DIR}/runtime/ppu")
 target_link_libraries(TankBattlesRecomp PRIVATE TankBattlesRuntime)

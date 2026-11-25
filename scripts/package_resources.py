@@ -30,7 +30,7 @@ SCRIPT_ENTRIES = ("port.py", "runtime_abi.py", "patch_network_events.py", "toolc
                   "package_resources.py", "setup_engine.py", "player_folder.py", "builder_app.py",
                   "verify_builder.py")
 SCRIPT_DATA = ("rap_format.json",)
-TOP_FILES = ("config.toml", "LICENSE", "runtime_entry.cpp", "player_settings.cpp", "ci/toolchain/manifest.json")
+TOP_FILES = ("online_pacing.cpp", "host_services.h", "config.toml", "LICENSE", "runtime_entry.cpp", "player_settings.cpp", "ci/toolchain/manifest.json")
 CMAKE_FILES = ("cmake/TitleCompileFlags.cmake", "cmake/PlayerLauncher.cmake", "cmake/player-consumer/CMakeLists.txt")
 SDK = "external/ps3recomp"
 SDK_DIRS = ("tools", "cmake", "include", "runtime", "libs")

@@ -208,6 +208,7 @@ elseif(PORT_ENABLE_SPU)
 endif()
 
 # Generate instrumented copies of selected SDK sources; the pinned checkout stays clean.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_online_pacing.py")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_network_events.py")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_network_events.py"
@@ -360,7 +361,7 @@ set(TB_HOST_SOURCES
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeTargets.cmake")
 find_package(CURL 7.77 REQUIRED)
 target_link_libraries(tank_battles_host PUBLIC CURL::libcurl)
-add_executable(${PROJECT_NAME} runtime_entry.cpp ${RECOMP_SOURCES} ${SPU_SOURCES})
+add_executable(${PROJECT_NAME} online_pacing.cpp runtime_entry.cpp ${RECOMP_SOURCES} ${SPU_SOURCES})
 target_link_libraries(${PROJECT_NAME} PRIVATE tank_battles_host tank_battles_boot)
 
 set_source_files_properties(texture_decode.cpp texture_decode_fast.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/video")
