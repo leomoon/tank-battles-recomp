@@ -444,6 +444,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Compiler-specific flags
 # ---------------------------------------------------------------------------
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TitleCompileFlags.cmake")
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     # Player Release keeps the accepted -O2 optimization, without debug data.
     foreach(player_target ${PROJECT_NAME} ps3recomp_runtime)
@@ -468,7 +469,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         $<$<NOT:$<CONFIG:Debug,Release,RelWithDebInfo,MinSizeRel>>:-O1>
     )
     # The same title-code semantics and ISA option as the Windows consumer.
-    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TitleCompileFlags.cmake")
     tb_title_compile_flags(${PROJECT_NAME})
 elseif(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE
@@ -495,12 +495,13 @@ endif()
 #     default; a PPC fmadd is spelt as one where the lifter means one.
 #   - /bigobj on MSVC. A single lifted file routinely passes the 65,536-section
 #     limit of the default object format.
+tb_title_warning_flags(tb_title_warnings)
 if(MSVC)
     set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
-        COMPILE_OPTIONS "/w;/bigobj")
+        COMPILE_OPTIONS "${tb_title_warnings};/bigobj")
 else()
     set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
-        COMPILE_OPTIONS "-w;-ffp-contract=off")
+        COMPILE_OPTIONS "${tb_title_warnings};-ffp-contract=off")
 endif()
 
 # Host code sees only the title-independent lifter ABI, never a game's declarations.

@@ -51,6 +51,7 @@ def measurement_build(build, configuration='Release'):
     import re
     compiler=' '.join(re.findall(r'set\(CMAKE_CXX_COMPILER_(?:ID|VERSION) "([^"]+)"',compiler_text))
     return dict(executable=executable(build,configuration),effective_flags=flags,
+                title_pgo=cache.get('TB_TITLE_PGO') or '',
                 build_type=cache.get('CMAKE_BUILD_TYPE') or configuration,
                 compiler=compiler or (bundle['build']['compiler_id']+' '+bundle['build']['compiler_version'] if bundle else 'unavailable'),
                 sdk_manifest_sha256=sha(manifest),runtime_source_commit=bundle.get('source_commit') if bundle else None,

@@ -16,6 +16,14 @@ if(WIN32)
     target_compile_definitions(runtime_cpu_smoke PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
 endif()
 enable_testing()
+add_executable(runtime_ppu_dispatch_check "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/ppu_dispatch.cpp")
+target_include_directories(runtime_ppu_dispatch_check PRIVATE "${TB_ABI_DIR}" "${PS3RECOMP_DIR}/include")
+target_link_libraries(runtime_ppu_dispatch_check PRIVATE tank_battles_host_archive
+    $<TARGET_PROPERTY:tank_battles_host,INTERFACE_LINK_LIBRARIES>)
+target_compile_options(runtime_ppu_dispatch_check PRIVATE $<IF:$<BOOL:${MSVC}>,/UNDEBUG,-UNDEBUG>)
+add_test(NAME runtime_ppu_dispatch COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_ppu_dispatch.py"
+    --runner "$<TARGET_FILE:runtime_ppu_dispatch_check>")
 add_executable(runtime_shader_check "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/shader_translation.c")
 target_include_directories(runtime_shader_check PRIVATE "${PS3RECOMP_DIR}/include" "${PS3RECOMP_DIR}/libs/video")
 # Link the production archive: compiling a second translator in this fixture

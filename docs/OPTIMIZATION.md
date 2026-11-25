@@ -345,8 +345,109 @@ The final 30-second 75% Campaign diagnostic passed strict execution, visibility,
 renderer/overlay checks and normal exit at 44.6 completed GAME FPS. An earlier
 Campaign attempt failed the visibility gate and remains excluded. Four native
 CTest checks passed, and 75 Python tests completed with two platform/tool skips.
-Step 7 remains open: the main thread still exceeds 16.67 ms even with polling,
-and no safe FPS improvement has been established. Further dispatch/translated
+At that stage, the main thread still exceeded 16.67 ms even with polling,
+and no safe FPS improvement had been established. Further dispatch/translated
 code optimization, the matching Native/75%/50% scene matrix and clean sustained
 acceptance remain pending. Neither the clock, simulation speed nor acceptance
 thresholds were changed.
+
+### Dispatch cold-path experiment
+
+A fresh 30-second Battle profile at 50% used a symbol map whose executable
+text bytes matched the measured player. Of main-thread samples, 3.5% landed
+in `ps3_indirect_call_impl` and 1.1% in `tb_execution_event`; 33.3% were outside
+the executable and remain unattributed. Sampling suspends threads briefly,
+so this run is diagnostic evidence rather than clean performance acceptance.
+
+The dispatch miss path's large backtrace buffers reserved 3,192 stack bytes
+on every resolved call on Windows. Moving that block verbatim into a
+non-inlined helper reduced the reservation to 1,144 bytes. Seven alternating
+microbenchmark pairs using the production archives measured median resolved
+dispatch cost of 25.72 ns before and 22.90 ns after, about 11% lower. This is
+a function-level result, not an 11% game speedup.
+
+One full-minute 50% Battle interval per build, with read-only OS CPU
+accounting, measured 29.82 completed GAME FPS for both. Main CPU was
+21.13 ms/frame before and 21.20 ms/frame after. Both passed strict execution,
+visibility, renderer, overlay and normal-exit checks. This pair demonstrates
+no gameplay FPS or main-thread CPU improvement; it is not a repeated
+acceptance cohort. The normal player was restored to the baseline runtime,
+and the cold-path transformation was removed from the production overlay.
+Its source and measurements remain local alongside the rejected experiments.
+
+`runtime_ppu_dispatch` tests the production archive's resolved calls, cache
+replacement/invalidation, deliberate cache collisions, explicit targets
+without CTR modification, nested calls, trampolines, and null/invalid/depth
+strict stops. Diagnostic-mode invalid/depth behavior is also retained. Local
+profiles, assembly and results are under
+`analysis/performance/resolution-step7-dispatch/`.
+
+The next experiment used profile-guided title optimization. A fresh
+instrumented build completed separate 30-second Battle and Campaign training
+intervals with verified live boundaries, strict execution and normal exits.
+Their startup/menu navigation is included in the training counters. The two
+final cumulative snapshots contain 22,455 functions; source/header hashes,
+the exact training executable and runtime manifest are recorded locally.
+The periodic LLVM writer appends cumulative snapshots, so only the final
+complete snapshot of each process is merged, after validation with
+`llvm-profdata`. Whole-process entry counts are matched to the sampled
+function leaders in `training-function-counts.json`; they are not per-frame
+or phase-matched call rates. Independent, uninstrumented comparisons are
+recorded below. Keep profiles local; normal builder flags remain unchanged.
+The compiler check confirmed that `/w` suppresses even an explicit
+`-Werror=profile-instr-out-of-date`. PGO use builds therefore silence ordinary
+generated-code warnings with `-Wno-everything` and then enable that specific
+error. A changed-function fixture now fails as required. Training builds are
+labelled `diagnostics.pgo_training` and cannot qualify as clean baselines.
+
+### PGO validation on the NUC
+
+The uninstrumented PGO candidate uses the same verified runtime bundle,
+Clang 22.1.3, SSE4.1 baseline, wrapping arithmetic, aliasing rules and separate
+floating-point rounding as the control. No simulation, vblank, rendering or
+strict-execution behavior was changed. Its executable SHA-256 is
+`c2487d8a8689b9510fc42585e8aac1394c46c96b6cf3111d27670451a1dcdb63`.
+The executable code section shrank from 153,095,318 to 115,374,310 bytes
+(24.6%). This candidate and its purchased-game profiles stay local; PGO is
+not enabled in the ordinary builder defaults.
+
+Three valid 60-second Battle intervals per build used 50% resolution,
+overlay on, FXAA off, real host audio and read-only OS CPU accounting. Run
+order was PGO/control, control/PGO, PGO/control. The last control reached
+debriefing before its ending capture and was rejected, then replaced with a
+fresh control. No compilation ran during the gameplay intervals. All eight
+accepted Battle/Campaign intervals passed strict execution, live/visible
+boundaries, renderer/overlay checks and normal exit. These are CPU-accounting
+diagnostics, not clean sustained-FPS acceptance.
+
+| Battle, median of three intervals | Control | PGO |
+| --- | ---: | ---: |
+| Main-thread CPU, ms/completed frame | 21.30 | 18.40 |
+| Completed GAME FPS | 29.72 | 30.05 |
+| Process CPU, logical cores | 2.229 | 2.118 |
+| Completed frame p99, ms | 49.87 | 35.07 |
+
+PGO reduced measured main-thread CPU cost by 13.6%; all three PGO CPU results
+(18.26–18.63 ms/frame) were below all three controls (21.07–21.75). The small
+FPS increase leaves Battle in the 30 FPS range, and main CPU still exceeds
+the 16.67 ms budget. This is useful CPU headroom, not a 60 FPS fix.
+
+A separate full-minute first-mission Campaign pair at 50% measured 50.28
+completed GAME FPS and 12.66 ms main CPU/frame for the control, versus 54.00
+FPS and 10.55 ms for PGO. Both were independent of training. This is one
+diagnostic pair, not a repeated Campaign cohort; OCR fallback required
+image-bound countdown reviews and the warm-up lengths differed. Clocks,
+temperatures and scheduler ready time were not collected. Further CPU and
+pipeline profiling, the other scales/platforms and clean sustained acceptance
+remain open; Step 7 is not complete.
+
+Local evidence is in `pgo-comparison.json`, `pgo-campaign-comparison.json`,
+`pgo-artifacts.json` and `pgo-profile-identity.json` under
+`analysis/performance/resolution-step7-dispatch/`. The rejected
+`pgo-control-3` is retained and excluded. Production dispatch/boot CTests,
+Windows measurement/build-identity checks, strict-stop probes and the
+changed-function profile-rejection fixture passed. The normal player remains
+on its established runtime; the PGO candidate is a separate test build.
+Its display-settings launcher is staged at
+`out/Tank Battles Recomp PGO Step7/Play Tank Battles.exe`, with the measured
+player hash verified after assembly. The launcher CLI smoke check passed.

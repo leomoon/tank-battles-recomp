@@ -297,7 +297,7 @@ def main():
  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--sdk',required=True);parser.add_argument('--output',required=True);args=parser.parse_args()
  root=Path(args.sdk).resolve();out=Path(args.output);out.mkdir(parents=True,exist_ok=True);records=[]
  for relative,edits in EDITS.items():
-  original=root/relative;text=original.read_text();digest=hashlib.sha256(text.encode()).hexdigest()
+  original=root/relative;text=original.read_text();digest=hashlib.sha256(original.read_bytes()).hexdigest()
   if relative in ('runtime/syscalls/sys_semaphore.c','libs/video/cellGcmSys.c'):
    text='#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n#include "ps3emu/ps3_ftrace.h"\n'+text
   for function,kind in PROFILE_FUNCTIONS.get(relative,{}).items():

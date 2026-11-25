@@ -25,6 +25,9 @@ function(tb_title_compile_flags target)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         message(FATAL_ERROR "The lifted title code requires clang or GCC semantics (-fwrapv)")
     endif()
+    if(TB_TITLE_PGO AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "TB_TITLE_PGO requires Clang instrumentation profiles")
+    endif()
     if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
         set(prefix "/clang:")
     else()
@@ -60,12 +63,32 @@ function(tb_title_compile_flags target)
         if(NOT EXISTS "${TB_TITLE_PGO}")
             message(FATAL_ERROR "TB_TITLE_PGO profile not found: ${TB_TITLE_PGO}")
         endif()
+        # Unexecuted functions are expected in representative training; a
+        # changed function's counters are not. Never silently use stale data.
         list(APPEND flags "${prefix}-fprofile-instr-use=${TB_TITLE_PGO}" "${prefix}-Wno-profile-instr-unprofiled"
-             "${prefix}-Wno-profile-instr-out-of-date")
+             "${prefix}-Werror=profile-instr-out-of-date")
     endif()
     target_compile_options(${target} PRIVATE ${flags})
     set_property(TARGET ${target} PROPERTY TB_TITLE_COMPILE_FLAGS "${flags}")
     message(STATUS "Title code flags: ${flags}")
+endfunction()
+
+# -w and /w suppress even -Werror=profile-instr-out-of-date. For profile use,
+# disable ordinary generated-code warnings first, then enable that error.
+function(tb_title_warning_flags out_var)
+    if(TB_TITLE_PGO AND NOT TB_TITLE_PGO STREQUAL "generate")
+        if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+            set(prefix "/clang:")
+        else()
+            set(prefix "")
+        endif()
+        set(flags "${prefix}-Wno-everything" "${prefix}-Werror=profile-instr-out-of-date")
+    elseif(MSVC)
+        set(flags /w)
+    else()
+        set(flags -w)
+    endif()
+    set(${out_var} ${flags} PARENT_SCOPE)
 endfunction()
 
 # Build-time refinements of the lifted sources (scripts/title_codegen.py). The

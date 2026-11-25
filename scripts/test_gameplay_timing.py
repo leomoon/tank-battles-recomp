@@ -4,6 +4,13 @@ from gameplay_report import summarize,compare,COMPAT,renderer_failures
 from port import ROOT
 
 class GameplayTimingTests(unittest.TestCase):
+ def test_pgo_training_cannot_be_a_clean_baseline(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);m=self.fixture(p);m['diagnostics']['pgo_training']=True
+   (p/'measurement.json').write_text(json.dumps(m))
+   report=summarize(p)
+   self.assertFalse(report['baseline_eligible'])
+   with self.assertRaisesRegex(ValueError,'clean baselines'):compare([report,report])
  def test_progress_watch_rejects_a_stopped_stream_only_during_timing(self):
   from gameplay_report import FrameProgress
   progress=FrameProgress()

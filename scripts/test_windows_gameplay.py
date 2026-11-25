@@ -121,6 +121,10 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(info['compiler'],'Clang fixture')
             self.assertEqual(info['runtime_source_commit'],'fixture-source')
             self.assertEqual(info['executable'].name,'TankBattlesRecomp.exe')
+            self.assertEqual(info['title_pgo'],'')
+            with (build/'CMakeCache.txt').open('a') as stream:
+                stream.write('TB_TITLE_PGO:STRING=generate\n')
+            self.assertEqual(measurement_build(build)['title_pgo'],'generate')
 
 
 @unittest.skipUnless(os.name=='nt','Windows window API contracts')
