@@ -16,10 +16,11 @@ def patch_pacing(directory):
     # Validate all present functions before writing any file. Small game-free
     # fixtures contain none; a partially present title is rejected.
     signatures=[PACING,CORRECTION,'void func_0093BD84(ppu_context* ctx) {\n    PPU_MM_SNAP\n','void func_0093BE84(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
+    signatures+=['void func_0016DD64(ppu_context* ctx) {\n    PPU_MM_SNAP\n', 'void func_0015B0BC(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
     present=[sum(s.count(sig) for s in sources.values()) for sig in signatures]
-    names=('void func_001A33CC(', 'void func_0016EEBC(', 'void func_0093BD84(', 'void func_0093BE84(')
+    names=tuple(sig.split('ppu_context*')[0] for sig in signatures)
     if not any(present) and not any(name in s for name in names for s in sources.values()):return
-    if present != [1]*4:raise ValueError('Missing or ambiguous title pacing diagnostic function')
+    if present != [1]*len(signatures):raise ValueError('Missing or ambiguous title pacing diagnostic function')
     for sig in signatures:
         p=next(p for p,s in sources.items() if sig in s)
         s=edits.get(p,sources[p]);start=s.index(sig);end=s.index('\n}\n',start)+3
@@ -29,12 +30,27 @@ def patch_pacing(directory):
         replacements=[]
         if sig==PACING:
             replacements=[(PACING,PACING+'    tb_pacing_hook(ctx, 0);\n'),(POLL,POLL.replace('        if (','        tb_pacing_hook(ctx, 1);\n        if (',1))]
-        elif sig==CORRECTION:replacements=[(STORE,STORE+'        tb_pacing_hook(ctx, 2);\n')]
+        elif sig==CORRECTION:
+            peak='loc_0016F014:\n        ctx->gpr[30] = (int64_t)(int32_t)(0);\n'
+            replacements=[(STORE,STORE+'        tb_pacing_hook(ctx, 2);\n'),(peak,peak+'        tb_pacing_hook(ctx, 8);\n')]
+        elif '0016DD64' in sig:
+            anchor='        ctx->gpr[5] = ctx->gpr[26] - ctx->gpr[4];\n'
+            replacements=[(anchor,anchor+'        tb_pacing_hook(ctx, 7);\n')]
+        elif '0015B0BC' in sig:
+            anchor='        vm_write32(ctx->gpr[28] + 0x8, ctx->gpr[4]);\n'
+            replacements=[(anchor,anchor+'        tb_pacing_hook(ctx, 9);\n')]
         else:
             nid,op=('1F953B9F',5) if '0093BD84' in sig else ('9647570B',3)
             old=f'        ps3_hle_call(0x{nid}u, ctx); return;  /* import stub */\n'
             new=f'        tb_pacing_hook(ctx, {op});\n        ps3_hle_call(0x{nid}u, ctx);\n        tb_pacing_hook(ctx, {op+1});\n        return;  /* import stub */\n'
             replacements=[(old,new)]
+        if sig==PACING:
+            reset='        vm_write32(ctx->gpr[31] + 0x124, ctx->gpr[0]);\n'
+            hooked=reset+'        tb_pacing_hook(ctx, 10);\n'
+            if body.count(reset)!=3:raise ValueError('Unexpected pacing reset layout')
+            if body.count(hooked)!=3:
+                if 'tb_pacing_hook(ctx, 10)' in body:raise ValueError('Unexpected pacing reset layout')
+                body=body.replace(reset,hooked)
         for old,new in replacements:
             if body.count(new)==1:continue
             if body.count(old)!=1:raise ValueError('Unexpected title pacing diagnostic instruction layout')

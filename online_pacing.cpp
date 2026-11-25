@@ -98,7 +98,9 @@ bool valid(uint64_t p) {return vm_base && p>=0x10000 && p<=0xfffffe00ull;}
 }
 
 // op 0: pacing function entry; 1: original floating comparison, 2: correction
-// store completed; 3/4: sendto entry/exit; 5/6: recvfrom entry/exit.
+// store completed; 3/4: sendto entry/exit; 5/6: recvfrom entry/exit;
+// 7: received frame snapshot subtraction; 8: peak selection;
+// 9: constructed numeric frame header; 10: completed pacing-field reset.
 extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
     auto& t=trace();
     if(!t.active.load(std::memory_order_acquire))return;
@@ -125,6 +127,27 @@ extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
         }
         e=io[direction];e.kind=direction?5:4;e.result=uint32_t(c->gpr[3]);
         e.sequence=direction?++t.rx:++t.tx;
+    } else if(op==7) {
+        if(!valid(c->gpr[6]))return;
+        e.kind=6;e.object=uint32_t(c->gpr[30]);
+        e.sequence=vm_read32(c->gpr[6]+0xc);
+        e.previous_us=uint32_t(c->gpr[4]);e.guest_us=uint32_t(c->gpr[26]);
+        e.correction=uint32_t(c->gpr[5]);
+    } else if(op==8) {
+        if(!valid(c->gpr[28]))return;
+        e.kind=7;e.object=uint32_t(c->gpr[28]);
+        e.previous_us=vm_read32(e.object+0x24);e.guest_us=vm_read32(e.object+0x20);
+        e.correction=uint32_t(c->gpr[0]);
+    } else if(op==9) {
+        if(!valid(c->gpr[28]))return;
+        e.kind=8;e.object=uint32_t(c->gpr[28]);
+        e.sequence=vm_read32(e.object);e.guest_us=vm_read32(e.object+4);
+        e.previous_us=vm_read32(e.object+8);
+    } else if(op==10) {
+        if(!valid(c->gpr[31]))return;
+        e.kind=9;e.object=uint32_t(c->gpr[31]);e.correction=vm_read32(e.object+0x124);
+        e.previous_us=vm_read64(e.object+0x110);
+        e.flags=uint32_t(vm_read8(e.object+0x122))<<16 | uint32_t(vm_read8(e.object+0x12c))<<8 | vm_read8(e.object+0x12d);
     } else return;
     t.push(e);
 }

@@ -7,9 +7,12 @@ from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POL
 ROOT=Path(__file__).resolve().parents[1]
 class PacingHooks(unittest.TestCase):
  def fixture(self,root):
-  bodies=[PACING+'loc_001A3C34:\n'+POLL+'}\n',CORRECTION+STORE+'}\n']
+  resets='        vm_write32(ctx->gpr[31] + 0x124, ctx->gpr[0]);\n'*3
+  bodies=[PACING+'loc_001A3C34:\n'+POLL+resets+'}\n',CORRECTION+'loc_0016F014:\n        ctx->gpr[30] = (int64_t)(int32_t)(0);\n'+STORE+'}\n']
   for function,nid in [('0093BD84','1F953B9F'),('0093BE84','9647570B')]:
    bodies.append(f'void func_{function}(ppu_context* ctx) {{\n    PPU_MM_SNAP\n        ps3_hle_call(0x{nid}u, ctx); return;  /* import stub */\n}}\n')
+  bodies += ['void func_0016DD64(ppu_context* ctx) {\n    PPU_MM_SNAP\n        ctx->gpr[5] = ctx->gpr[26] - ctx->gpr[4];\n}\n',
+             'void func_0015B0BC(ppu_context* ctx) {\n    PPU_MM_SNAP\n        vm_write32(ctx->gpr[28] + 0x8, ctx->gpr[4]);\n}\n']
   for n,body in enumerate(bodies):(root/f'ppu_recomp_{n:03}.cpp').write_text(INCLUDE+body)
  def test_instruction_hooks_are_scoped_idempotent_and_register_neutral(self):
   with tempfile.TemporaryDirectory() as d:
@@ -17,13 +20,14 @@ class PacingHooks(unittest.TestCase):
    first={p:p.read_text() for p in root.iterdir()};patch_pacing(root)
    self.assertEqual(first,{p:p.read_text() for p in root.iterdir()})
    self.assertIn('tb_pacing_hook(ctx, 1);',first[root/'ppu_recomp_000.cpp'])
+   self.assertEqual(first[root/'ppu_recomp_000.cpp'].count('tb_pacing_hook(ctx, 10);'),3)
    self.assertIn(STORE+'        tb_pacing_hook(ctx, 2);',first[root/'ppu_recomp_001.cpp'])
    self.assertIn('tb_pacing_hook(ctx, 5);\n        ps3_hle_call(0x1F953B9Fu, ctx);\n        tb_pacing_hook(ctx, 6);',first[root/'ppu_recomp_002.cpp'])
  def test_empty_fixture_is_unchanged(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'ppu_recomp_000.cpp';p.write_text('void fixture() {}\n');patch_pacing(d);self.assertEqual(p.read_text(),'void fixture() {}\n')
  def test_unexpected_missing_and_ambiguous_layouts_fail_before_edits(self):
-  for mutation in ('anchor','function','duplicate','format'):
+  for mutation in ('anchor','function','duplicate','format','audit_function','reset','extra_reset'):
    with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as d:
     root=Path(d);self.fixture(root)
     if mutation=='anchor':
@@ -31,6 +35,11 @@ class PacingHooks(unittest.TestCase):
     elif mutation=='format':
      for p in root.iterdir():p.write_text(p.read_text().replace('    PPU_MM_SNAP\n','    PPU_MM_SNAP \n'))
     elif mutation=='function':(root/'ppu_recomp_001.cpp').unlink()
+    elif mutation=='audit_function':(root/'ppu_recomp_004.cpp').unlink()
+    elif mutation=='reset':
+     p=root/'ppu_recomp_000.cpp';p.write_text(p.read_text().replace(' + 0x124',' + 0x128',1))
+    elif mutation=='extra_reset':
+     patch_pacing(root);p=root/'ppu_recomp_000.cpp';p.write_text(p.read_text().replace('loc_001A3C34:\n','loc_001A3C34:\n        vm_write32(ctx->gpr[31] + 0x124, ctx->gpr[0]);\n',1))
     else:(root/'ppu_recomp_099.cpp').write_text((root/'ppu_recomp_001.cpp').read_text())
     before={p:p.read_bytes() for p in root.iterdir()}
     with self.assertRaises(ValueError):patch_pacing(root)
@@ -65,6 +74,13 @@ int main(int argc,char** argv) {
   tb_pacing_hook(&c,0);tb_pacing_hook(&c,1);c.cr=0;tb_pacing_hook(&c,1);c.cr=128;tb_pacing_hook(&c,2);
   tb_pacing_hook(&c,3);tb_pacing_hook(&c,4);tb_pacing_hook(&c,5);tb_pacing_hook(&c,6);
  }
+ if(argc>1 && !strcmp(argv[1],"audit")) {
+  c.gpr[6]=0x12000;c.gpr[30]=0x13000;c.gpr[28]=0x14000;c.gpr[4]=3;c.gpr[26]=7;c.gpr[5]=4;
+  const auto audit_before=c;
+  for(unsigned op=7;op<=10;++op)tb_pacing_hook(&c,op);
+  if(memcmp(&audit_before,&c,sizeof(c)))return 4;
+  c=before;
+ }
  if(memcmp(&before,&c,sizeof(c)))return 2;
  for(auto b:memory)if(b)return 3;
  if(argc<2 || strcmp(argv[1],"early")) std::this_thread::sleep_for(std::chrono::milliseconds(1100));
@@ -77,11 +93,11 @@ int main(int argc,char** argv) {
   subprocess.run([compiler,'-std=c++20','-O2','-pthread','-I'+str(cls.root),'-I'+str(ROOT),str(ROOT/'online_pacing.cpp'),str(cls.root/'fixture.cpp'),'-o',str(cls.exe)],check=True)
  @classmethod
  def tearDownClass(cls):cls.tmp.cleanup()
- def run_fixture(self,name,enabled,overflow=False,early=False):
+ def run_fixture(self,name,enabled,overflow=False,early=False,audit=False):
   trace=self.root/(name+'.jsonl');trigger=self.root/(name+'.trigger');trigger.touch()
   env={k:v for k,v in os.environ.items() if not k.startswith('TB_PACING_')}
   if enabled:env.update(TB_PACING_TRACE=str(trace),TB_PACING_TRIGGER=str(trigger),TB_PACING_SECONDS='1',TB_PACING_ROLE='host')
-  subprocess.run([str(self.exe)]+(['overflow'] if overflow else ['early'] if early else []),env=env,check=True)
+  subprocess.run([str(self.exe)]+(['overflow'] if overflow else ['early'] if early else ['audit'] if audit else []),env=env,check=True)
   return trace
  def test_disabled_creates_no_output_and_preserves_guest(self):
   self.assertFalse(self.run_fixture('off',False).exists())
@@ -96,6 +112,12 @@ int main(int argc,char** argv) {
   self.assertEqual({r['kind'] for r in rows[1:]},{1,2,3,4,5})
   self.assertEqual(rows[1]['correction_u32'],1234)
   self.assertTrue(all(rows[0]['start_ns']<=r['ns']<=rows[0]['end_ns'] for r in rows[1:]))
+ def test_producer_audit_records_operands_without_writing_guest(self):
+  rows=[json.loads(l) for l in self.run_fixture('audit',True,audit=True).read_text().splitlines()][1:]
+  samples=[r for r in rows if r['kind']==6]
+  self.assertEqual(len(samples),1)
+  self.assertEqual((samples[0]['previous_guest_us'],samples[0]['observed_guest_us'],samples[0]['correction_u32']),(3,7,4))
+  self.assertTrue({6,7,8,9}.issubset({r['kind'] for r in rows}))
  def test_shutdown_marks_interrupted_window(self):
   rows=[json.loads(l) for l in self.run_fixture('early',True,early=True).read_text().splitlines()]
   self.assertFalse(rows[0]['complete']);self.assertTrue(rows[0]['events'])
