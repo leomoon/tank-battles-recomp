@@ -31,7 +31,16 @@ def main():
             raise SystemExit('Strict stop lost its PPU failure report:\n' + log)
         if argument == '--invalid' and mode == 'diagnostic' and 'garbage vcall' not in log:
             raise SystemExit('Dispatch miss did not retain its diagnostic:\n' + log)
+        if argument is None and 'ppu-indirect=0x00000007' not in log:
+            raise SystemExit('Resolved calls were not counted exactly once:\n' + log)
         print(f'PASS: {argument or "resolved dispatch"} {mode}')
+    for setting, marker in [('PS3_CALLTRACE', '[CALL]'), ('PPU_RETWATCH', '[RETWATCH]')]:
+        result = subprocess.run([runner], env=dict(env, TB_EXECUTION_MODE='strict', **{setting:'1'}),
+                                capture_output=True, text=True, timeout=15)
+        log = result.stdout + result.stderr
+        if result.returncode or marker not in log or 'ppu-indirect=0x00000007' not in log:
+            raise SystemExit('Dispatch diagnostic changed: ' + setting + '\n' + log)
+        print('PASS: diagnostic ' + setting)
 
 
 if __name__ == '__main__':

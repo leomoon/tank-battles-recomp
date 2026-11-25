@@ -22,6 +22,18 @@ def interval_end_ns(manifest, timing_row):
  return timing_row['monotonic_ns']-timing_row['elapsed_ns']+round(manifest['interval_seconds'][1]*1e9)
 
 
+def wait_for_interval(out,process):
+ # The observer rewrites this file when it arms timing. A concurrent reader
+ # can briefly see a truncated document or a Windows writer's exclusive lock.
+ while process.poll() is None:
+  try:
+   manifest=json.loads((out/'measurement.json').read_text())
+   if manifest['interval_seconds']:return manifest
+  except (PermissionError,json.JSONDecodeError):pass
+  time.sleep(.2)
+ raise RuntimeError('Measurement exited before arming its gameplay interval')
+
+
 def windows_hud_countdown(ocr, size):
  """Use only one localized OCR word inside the live timer, never HUD scores."""
  width,height=size
@@ -73,6 +85,28 @@ def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=Fals
  raise RuntimeError('Boundary review not supplied: '+str(request))
 
 
+def validate_visual_boundaries(out,expected_overlay,require_receipt=False):
+ """Both saved captures must have matching, explicit live-HUD reviews."""
+ values={}
+ for label in ('gameplay-before','gameplay-after'):
+  digest=hashlib.sha256((out/(label+'.png')).read_bytes()).hexdigest()
+  answer=json.loads((out/(label+'-review.json')).read_text())
+  if (answer.get('image_sha256')!=digest or answer.get('live_gameplay') is not True or
+      not answer.get('reviewer') or type(answer.get('countdown')) is not int or
+      not 0<=answer['countdown']<=120 or type(answer.get('overlay_visible')) is not bool or
+      answer['overlay_visible']!=expected_overlay):
+   raise ValueError('Invalid/stale visual boundary review: '+label)
+  values[label]=answer['countdown']
+ if values['gameplay-after']>values['gameplay-before']:
+  raise ValueError('Visual boundary countdown increased')
+ if require_receipt:
+  receipt=json.loads((out/'visual-boundaries-verified.json').read_text())
+  hashes={label:hashlib.sha256((out/(label+'-review.json')).read_bytes()).hexdigest() for label in values}
+  if receipt.get('review_sha256')!=hashes:
+   raise ValueError('Visual boundary verification receipt mismatch')
+ return values
+
+
 def main():
  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True);parser.add_argument('--scene',choices=['battle','campaign'],default='battle');parser.add_argument('--reference-template');parser.add_argument('--appimage');parser.add_argument('--repeat',type=int,default=1);parser.add_argument('--scopes',action='store_true');parser.add_argument('--overlay',action='store_true');parser.add_argument('--correctness-video',action='store_true');parser.add_argument('--build-dir',default='build-vulkan');parser.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');parser.add_argument('--profile-seconds',type=int,help='Gameplay interval in seconds (default 60, or 25 for host resources)');parser.add_argument('--decode-profile',action='store_true');parser.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');parser.add_argument('--cpu-depth',action='store_true',help='Reference CPU depth conversion (TB_DEPTH_GPU=0); GPU conversion is the default');parser.add_argument("--color-readback-cache",action="store_true");parser.add_argument("--fence-poll",action="store_true");parser.add_argument("--draw-remap-cache",action="store_true");parser.add_argument("--draw-verify",action="store_true");parser.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");parser.add_argument("--frame-budget",action="store_true");parser.add_argument("--label-sync",action="store_true");parser.add_argument("--vk-serial",action="store_true");parser.add_argument("--page-census",action="store_true");parser.add_argument("--cpu-resolve",action="store_true");parser.add_argument("--vblank-hz",default="60");parser.add_argument("--soak-minutes",type=float,default=0,help="Keep the session running after live gameplay, cycling rounds and sampling resources; then close normally");parser.add_argument('--manual-boundaries',action='store_true',help='Allow explicit image-hash-bound review when countdown OCR fails');parser.add_argument('--cpu-samples',action='store_true',help='Windows diagnostic thread sampling during the interval');parser.add_argument('--pending-review',action='store_true',help='Timing diagnostic only: when countdown OCR fails, continue and retain the boundary images for later human review; never baseline-eligible')
  parser.add_argument('--host-resources',action='store_true',help='Sample Linux CPU and sensors across Battle and its menus')
@@ -81,10 +115,13 @@ def main():
  parser.add_argument('--vertex-profile',action='store_true',help='Diagnostic vertex preparation costs across the native Linux resource route')
  parser.add_argument('--raw-spu-idle',choices=['0','1'],help='Compare original raw-SPU polling (0) with bounded idle waits (1)')
  parser.add_argument('--cpu-accounting',action='store_true',help='Windows read-only CPU counters for every process thread')
+ parser.add_argument('--visual-boundaries',action='store_true',help='Windows: request immediate image-bound gameplay reviews instead of boundary OCR; requires --manual-boundaries')
  parser.add_argument('--render-scale',type=int,choices=[50,75,100,150,200,300],default=100)
  parser.add_argument('--expected-runtime-source',help='Require this runtime commit before a native measurement launches')
  parser.add_argument('--rsx-trace',action='store_true',help='Heavy diagnostic: three gameplay RSX state frames; never clean baseline evidence')
  a=parser.parse_args()
+ if a.visual_boundaries and (os.name!='nt' or not a.manual_boundaries):
+  parser.error('--visual-boundaries requires Windows and --manual-boundaries')
  if (a.linux_symbols or a.mailbox_profile or a.vertex_profile) and (not a.host_resources or a.reference_template):
   parser.error('CPU attribution requires the native --host-resources route')
  if a.host_resources and a.reference_template and a.correctness_video:
@@ -120,6 +157,7 @@ def main():
    if a.rsx_trace:command+=['--rsx-trace']
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
    if a.manual_boundaries:command+=['--manual-boundaries']
+   if a.visual_boundaries:command+=['--visual-boundaries']
    if a.pending_review:command+=['--pending-review']
    if a.cpu_depth:command+=['--cpu-depth']
    if a.color_readback_cache:command+=['--color-readback-cache']
@@ -222,6 +260,14 @@ def main():
   if desktop:
    pid=int((out/'pid').read_text());captured=desktop.capture(int(window),pid,path,out/(label+'-timer.png'))
    (out/(label+'-capture.json')).write_text(json.dumps(captured))
+   if a.visual_boundaries and label.startswith('gameplay-'):
+    # Capture/arm independently of review latency. Acceptance stays pending
+    # until BOTH hash-bound reviews are checked after the ending capture.
+    digest=hashlib.sha256(path.read_bytes()).hexdigest()
+    (out/(label+'-review-request.json')).write_text(json.dumps(dict(image=path.name,image_sha256=digest,
+      required='Review saved live HUD/countdown and overlay; write image-hash-bound review JSON.')))
+    (out/(label+'-timer.txt')).write_text('')
+    return ''
    result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(ROOT/'scripts/windows_ocr.ps1'),'-ImagePath',str(path)],capture_output=True,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW,check=True,timeout=25)
    ocr=json.loads(result.stdout);(out/(label+'-ocr.json')).write_text(json.dumps(ocr,indent=2))
    timer_result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(ROOT/'scripts/windows_ocr.ps1'),'-ImagePath',str(out/(label+'-timer.png'))],capture_output=True,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW,check=True,timeout=25)
@@ -374,14 +420,11 @@ def main():
     time.sleep(1)
     before=capture('gameplay-before')
   if first_campaign_briefing(before) or any(w in before for w in ['BRIEFING','RRIEFING','CONTROLS:','RULES:','SELECT MAP','MISSION FAILED','VICTORY','DEFEAT','GAME OVER','WINS','DEBRIEF']):raise RuntimeError('Still not live gameplay')
-  unread=a.scene=='battle' and not live_battle_timer((out/'gameplay-before-timer.txt').read_text())
-  if unread and not a.pending_review:raise RuntimeError('No readable live Battle countdown at start')
+  unread=a.visual_boundaries or a.scene=='battle' and not live_battle_timer((out/'gameplay-before-timer.txt').read_text())
+  if unread and not (a.pending_review or a.visual_boundaries):raise RuntimeError('No readable live Battle countdown at start')
   event('live-gameplay-boundary',ocr=before,pending_review=unread)
-  (out/'start.json').write_text(json.dumps(dict(live_gameplay_verified=not unread,pending_review=unread,source='scripted route plus retained live HUD boundary screenshot',scene=a.scene,input='scripted navigation; player one neutral during timed interval',boundary_image='gameplay-before.png')))
-  while process.poll() is None:
-   m=json.loads((out/'measurement.json').read_text())
-   if m['interval_seconds']:break
-   time.sleep(.2)
+  (out/'start.json').write_text(json.dumps(dict(live_gameplay_verified=not unread,pending_review=unread,visual_boundaries=a.visual_boundaries,source='scripted route plus retained live HUD boundary screenshot',scene=a.scene,input='scripted navigation; player one neutral during timed interval',boundary_image='gameplay-before.png')))
+  m=wait_for_interval(out,process)
   pad.write_text('')
   with (out/'gameplay.jsonl').open() as timing:deadline=interval_end_ns(m,json.loads(timing.readline()))
   event('timing-deadline',deadline_monotonic_ns=deadline)
@@ -391,6 +434,15 @@ def main():
    if (out/'progress-stall.json').exists():raise RuntimeError('No completed game frames for five seconds; retained progress-stall evidence')
    time.sleep(.1)
   pad.write_text('');after=capture('gameplay-after');event('end-gameplay-boundary',ocr=after)
+  if a.visual_boundaries:
+   for label in ('gameplay-before','gameplay-after'):
+    timer=boundary_countdown(out,label,'',True,process,a.overlay)
+    (out/(label+'-timer-source.json')).write_text(json.dumps(dict(source='image-hash-bound visual review',text=timer)))
+    (out/(label+'-timer.txt')).write_text(timer)
+   validate_visual_boundaries(out,a.overlay)
+   receipt=dict(review_sha256={label:hashlib.sha256((out/(label+'-review.json')).read_bytes()).hexdigest()
+                for label in ('gameplay-before','gameplay-after')},validated_qpc_ns=time.perf_counter_ns())
+   (out/'visual-boundaries-verified.json').write_text(json.dumps(receipt))
   if invalid_ending_scene(after) or a.scene=='battle' and not a.pending_review and not live_battle_timer((out/'gameplay-after-timer.txt').read_text()):
    event('invalid-ending-scene',reason='gameplay did not span full requested interval');(out/'invalid-scene.json').write_text(json.dumps(dict(reason='ending scene was not live gameplay')))
   if a.host_resources:

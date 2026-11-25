@@ -437,17 +437,143 @@ completed GAME FPS and 12.66 ms main CPU/frame for the control, versus 54.00
 FPS and 10.55 ms for PGO. Both were independent of training. This is one
 diagnostic pair, not a repeated Campaign cohort; OCR fallback required
 image-bound countdown reviews and the warm-up lengths differed. Clocks,
-temperatures and scheduler ready time were not collected. Further CPU and
-pipeline profiling, the other scales/platforms and clean sustained acceptance
-remain open; Step 7 is not complete.
+temperatures and scheduler ready time were not collected in that pair. The
+follow-up below covers the Windows scene/scale matrix and available clock
+telemetry. Repeated cross-platform acceptance remains open.
 
 Local evidence is in `pgo-comparison.json`, `pgo-campaign-comparison.json`,
 `pgo-artifacts.json` and `pgo-profile-identity.json` under
 `analysis/performance/resolution-step7-dispatch/`. The rejected
 `pgo-control-3` is retained and excluded. Production dispatch/boot CTests,
 Windows measurement/build-identity checks, strict-stop probes and the
-changed-function profile-rejection fixture passed. The normal player remains
-on its established runtime; the PGO candidate is a separate test build.
-Its display-settings launcher is staged at
-`out/Tank Battles Recomp PGO Step7/Play Tank Battles.exe`, with the measured
-player hash verified after assembly. The launcher CLI smoke check passed.
+changed-function profile-rejection fixture passed. Purchased-game profiles
+remain local and ordinary builder defaults remain unchanged.
+
+### Dispatch follow-up and remaining critical path
+
+A fresh actual CMake link emitted the map for a separate 30-second 50% PGO
+Battle profile. Its executable SHA-256 is
+`cf8682043ea1c25d23a185ec35a81042047e950a8c4ec6fa99fd1a28ad287e64`,
+and its map SHA-256 is
+`aebe327b329aa46932a7fdac9e34a3a3a87a5ba3c16e415e3bd5ad3e412d4f14`.
+Both outputs are preserved together under `symbol-build/Release/` in the
+local evidence directory. Do not use another link's map: earlier relinks
+produced different layouts, and later diagnostics replaced an older map.
+The tested `c2487d8a` player was restored before profiling began and remains
+the main launcher's executable.
+
+Of 18,322 main-thread instruction samples, 3.51% landed in
+`ps3_indirect_call_impl`, 2.07% in `func_00192EB8`, 1.77% in
+`func_002A74B8`, 1.66% in `func_002B89B0`, 1.59% in `func_0021B138`,
+1.47% in `func_00795984`, 1.44% in `func_002EFC30`, and 0.98% in
+`tb_execution_event`. Outside-module samples were 38.30%. Walker leaders were
+FIFO dispatch (4.70%), vertex remapping (3.90%) and vertex fetch (1.96%);
+69.30% were outside the executable. These are exclusive instruction-pointer
+samples, not inclusive stack costs or proof that outside-module time was
+spent runnable. Training function-entry counts include startup and menus
+and cannot supply phase-matched rates for every translated function.
+The diagnostic passed strict/live/visible/renderer/normal-exit checks at
+29.83 FPS and is excluded from clean baselines. The exact identities and
+ranked counts are in `symbol-map-identity.json` and `final-function-ranks.json`.
+
+A separately marked cache-counter build measured a 97.96% main-thread hit
+rate: 36,976,999 hits out of 37,748,736 lookups. Counters publish in blocks of
+1,048,576 lookups; the reported blocks end inside the gameplay interval, so
+the first block can straddle its beginning. This does not justify enlarging
+the existing 512-entry per-thread cache. Logs containing `[ppu-icache]` are
+explicitly excluded from clean baselines. No counter instrumentation remains
+in the production runtime.
+
+A compact resolved-dispatch path reduced a microbenchmark to about 17 ns,
+but its valid gameplay pilot measured 30.07 FPS and 18.50 ms main CPU/frame.
+An O3 PGO pilot measured 30.10 FPS and 18.31 ms. Both lie within the retained
+O2 PGO CPU range; neither establishes a gameplay improvement. Both changes
+were removed. Dispatch tests additionally require exactly seven indirect
+events for seven fixture calls, including CALLTRACE and RETWATCH modes.
+
+The earlier callback-event stall remains an unresolved synchronization
+experiment. Inspection found that the custom-context walker recycler can
+rewrite guest current/PUT and host GET while the guest callback also owns
+that bookkeeping. The flip code documents a related advance/flush race.
+This is a concrete ownership hazard to investigate, not a demonstrated
+interleaving or a verified repair. The event-delivery change stays rejected;
+established polling and strict FIFO-resync/stall rejection remain enabled.
+
+The 50% Battle trace matched 891 flip chains. Mean request-to-execution was
+3.10 ms, execution-to-vblank 10.02 ms, and vblank-to-callback 0.72 ms.
+Callback work averaged 0.013 ms and presentation queue delay 0.029 ms.
+Presentation jobs averaged 10.63 ms including their vblank wait. These
+overlapping stages do not demonstrate another full-vblank presentation delay
+and must not be added together. The retained main-thread CPU cost above
+16.67 ms remains the measured obstacle to 60 FPS in this Battle scene.
+
+### Windows scene/scale validation
+
+The final matrix uses the retained `c2487d8a` executable for every run, with
+the same runtime, 1280x720 window, 60 Hz clock, real host audio, overlay on
+and FXAA off. Each scene/scale has a 30-second frame-budget/OS CPU diagnostic
+and a separate clean 60-second interval after five seconds of gameplay
+warm-up. Diagnostics also collect live OS frequency estimates, performance
+limit flags and raw thread context-switch counters. They are not clean
+baselines. Their difference from the separate clean interval includes both
+collector overhead and scene variation; it cannot isolate profiler overhead.
+No compiler or heavy background test runs during these intervals.
+
+| Scene | Scale | Resolved output | Clean completed FPS | Traced main CPU, ms/frame | GPU, ms/frame |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Battle | Native | 1280x720 | 29.77 | 18.94 | 16.22 |
+| Battle | 75% | 960x540 | 29.85 | 20.21 | 12.34 |
+| Battle | 50% | 640x360 | 30.08 | 19.86 | 9.84 |
+| Campaign | Native | 1280x720 | 51.68 | 12.60 | 12.40 |
+| Campaign | 75% | 960x540 | 52.05 | 11.70 | 10.29 |
+| Campaign | 50% | 640x360 | 53.42 | 11.51 | 9.55 |
+
+All twelve accepted runs passed strict execution, live/visible boundaries,
+overlay consistency, renderer checks and normal shutdown. Each traced run
+verified its requested resolved extent with zero scale fallback/recovery;
+clean intervals deliberately have no in-interval tracing. Main CPU, walker
+CPU and GPU costs overlap and must not be added. These are one diagnostic and
+one clean interval per scene/scale, not a repeated cross-scale acceptance
+cohort. Diagnostic FPS differed from its clean counterpart by +0.22% to
+-1.27% in Battle and -6.21% to -8.42% in Campaign. That includes collector
+cost and scene variation. Clean p95 was 32.71-34.32 ms and p99 34.01-49.96 ms;
+none meets the sustained 60 FPS acceptance gate. The lower-resolution GPU
+saving is real, while the Battle CPU deadline remains missed.
+
+The six diagnostic intervals sampled median OS frequencies of 3.13-3.24 GHz
+(sample range 3.045-3.267 GHz), with sampled performance-limit flags zero.
+Evidence, rejected attempts and the complete mean/p95/p99/dependency records
+are local under `analysis/performance/resolution-step7-final/`, particularly
+`matrix-results.json` and `investigation-results.json`.
+
+`script_gameplay.py --manual-boundaries --visual-boundaries` supports explicit
+Windows capture review without delaying the measured scene while OCR runs.
+The start remains unverified until both retained images have matching SHA-256
+reviews asserting live gameplay, countdown and expected overlay state. The
+route then writes a receipt binding both review files; the observer requires
+that receipt before accepting the scene. Missing, stale, expired or non-live
+reviews cannot promote a run. Both captures are outside the timed interval.
+The existing OCR/manual-fallback route remains available. Early debriefs,
+visibility failures and expired reviews are retained and excluded.
+Interval arming also tolerates a concurrent manifest rewrite or Windows
+writer lock; an observer exit before arming still fails the route.
+
+The Windows Performance Recorder CPU profile could not start: 0xc5585011,
+"Failed to enable the policy to profile system performance." The thermal WMI
+query returned access denied. Recorded frequency values are OS estimates;
+zero sampled performance-limit flags do not prove that no throttling occurred.
+Context-switch counts and sampled thread states do not measure scheduler
+ready-time duration. Temperature, package power and precise ready time remain
+unavailable. There is no local Linux runner; Linux validation is still open.
+
+The tested local O2 PGO player is installed behind the main display-settings
+launcher at `out/Tank Battles Recomp/Play Tank Battles.exe`. Assembly verified
+the executable hash and every owned file, preserved all five existing
+save/settings/profile files, and retained the previous executable locally.
+The launcher passed its seven-screen UI smoke check, including display
+settings, and read-only account-status check. Forty Windows gameplay/timing
+tests, eight execution-policy tests, and the production dispatch/CPU-boot
+CTests passed after the retained-code changes. Ordinary builder defaults
+remain unchanged: this validates the local Windows artifact, not Linux PGO
+or a downloaded builder. Step 7's cross-platform/default-rollout gate and
+the separate sustained 60 FPS goal remain open.

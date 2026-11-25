@@ -213,6 +213,15 @@ def main():
   for stream in sample_streams:stream.close()
  log=(out/'startup.log').read_text(errors='replace');counts={k:int(v,16) for k,v in re.findall(r'\[execution-count\] ([a-z-]+)=0x([0-9a-fA-F]+)',log)}
  manifest.update(actual_audio=re.findall(r'\[gameplay-audio\] (.*)',log),swapchain_sizes=sorted(set(re.findall(r'window swapchain (\d+x\d+)',log))),session=session,renderer_failures=renderer_failures(log),strict_counts=counts,strict_passed=all(counts.get(k)==0 for k in ['ppu-miss','hle-missing','spu-interpreter','spu-untranslated','ppu-recovery']),internal_surfaces=sorted(set(re.findall(r'\[gameplay-surface\] (.*)',log))))
+ if marker and marker.get('visual_boundaries'):
+  from script_gameplay import validate_visual_boundaries
+  try:
+   validate_visual_boundaries(out,a.overlay,require_receipt=True)
+   manifest['live_gameplay_verified']=True
+   manifest['scene_evidence']=dict(marker,pending_review=False,live_gameplay_verified=True)
+  except (OSError,ValueError) as error:
+   manifest['live_gameplay_verified']=False
+   (out/'invalid-scene.json').write_text(json.dumps(dict(reason=str(error))))
  if (out/'invalid-scene.json').exists() or (out/'observer-error.json').exists():manifest['live_gameplay_verified']=False
  manifest['effective_runtime']=dict(device=re.findall(r'using device \d+: (.*)',log),present_mode=re.findall(r'window present mode (.*)',log),batch_submission=re.findall(r'draw batches: (.*)',log),depth_gpu_active='exact Z16 GPU conversion active' in log,nv3089_gpu_exact=True if 'NV3089 GPU point sampling matches' in log else False if 'NV3089 GPU point sampling differs' in log else None)
  actual=manifest['effective_runtime']['batch_submission']

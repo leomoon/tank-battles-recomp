@@ -10,6 +10,55 @@ from build_identity import measurement_build, read_command_log
 
 
 class BuildTests(unittest.TestCase):
+    def test_interval_arming_tolerates_concurrent_manifest_write(self):
+        from script_gameplay import wait_for_interval
+        process=Mock();process.poll.return_value=None
+        armed=dict(interval_seconds=[5,65])
+        with patch.object(Path,'read_text',side_effect=['',PermissionError('writer'),
+                json.dumps(dict(interval_seconds=[])),json.dumps(armed)]),patch('script_gameplay.time.sleep'):
+            self.assertEqual(wait_for_interval(Path('unused'),process),armed)
+        process.poll.return_value=1
+        with self.assertRaisesRegex(RuntimeError,'before arming'):
+            wait_for_interval(Path('unused'),process)
+
+    def test_visual_capture_acceptance_requires_both_matching_live_reviews(self):
+        from script_gameplay import validate_visual_boundaries
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            out=Path(tmp)
+            for label,value in [('gameplay-before',120),('gameplay-after',54)]:
+                data=label.encode();(out/(label+'.png')).write_bytes(data)
+                (out/(label+'-review.json')).write_text(json.dumps(dict(image_sha256=hashlib.sha256(data).hexdigest(),
+                    live_gameplay=True,countdown=value,reviewer='fixture',overlay_visible=True)))
+            self.assertEqual(validate_visual_boundaries(out,True)['gameplay-after'],54)
+            with self.assertRaises(OSError):validate_visual_boundaries(out,True,require_receipt=True)
+            receipt=dict(review_sha256={label:hashlib.sha256((out/(label+'-review.json')).read_bytes()).hexdigest()
+                for label in ('gameplay-before','gameplay-after')})
+            (out/'visual-boundaries-verified.json').write_text(json.dumps(receipt))
+            self.assertEqual(validate_visual_boundaries(out,True,require_receipt=True)['gameplay-after'],54)
+            (out/'visual-boundaries-verified.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError,'receipt mismatch'):validate_visual_boundaries(out,True,require_receipt=True)
+            with self.assertRaisesRegex(ValueError,'Invalid/stale'):validate_visual_boundaries(out,False)
+            review=out/'gameplay-after-review.json'
+            original=review.read_text()
+            answer=json.loads(original)
+            answer['live_gameplay']=False
+            review.write_text(json.dumps(answer))
+            with self.assertRaisesRegex(ValueError,'Invalid/stale'):validate_visual_boundaries(out,True)
+            answer['live_gameplay']=True
+            answer['countdown']=121
+            review.write_text(json.dumps(answer))
+            with self.assertRaisesRegex(ValueError,'Invalid/stale'):validate_visual_boundaries(out,True)
+            review.write_text(original)
+            before=out/'gameplay-before-review.json'
+            answer=json.loads(before.read_text());answer['countdown']=53
+            before.write_text(json.dumps(answer))
+            with self.assertRaisesRegex(ValueError,'countdown increased'):validate_visual_boundaries(out,True)
+            answer['countdown']=120;before.write_text(json.dumps(answer))
+            (out/'gameplay-after.png').write_bytes(b'changed capture')
+            with self.assertRaisesRegex(ValueError,'Invalid/stale'):validate_visual_boundaries(out,True)
+            (out/'gameplay-after-review.json').unlink()
+            with self.assertRaises(OSError):validate_visual_boundaries(out,True)
     def test_manual_countdown_is_a_fallback_for_unreadable_ocr(self):
         from script_gameplay import boundary_countdown
         process=Mock()
@@ -49,7 +98,7 @@ class BuildTests(unittest.TestCase):
             for percent in (50,75,100,150,200,300):
                 output=Path(tmp)/('native-'+str(percent))
                 arguments=['script_gameplay.py','--output',str(output),'--render-scale',str(percent),'--raw-spu-idle','0']
-                if os.name=='nt':arguments+=['--cpu-accounting']
+                if os.name=='nt':arguments+=['--cpu-accounting','--manual-boundaries','--visual-boundaries']
                 with patch('sys.argv',arguments),patch('subprocess.Popen',side_effect=InterceptLaunch) as launch:
                     with self.assertRaises(InterceptLaunch):main()
                     command=launch.call_args.args[0]
@@ -67,6 +116,12 @@ class BuildTests(unittest.TestCase):
                         self.assertEqual(command[command.index('--render-scale')+1],str(percent))
                         self.assertEqual(command[command.index('--raw-spu-idle')+1],'0')
                         if os.name=='nt':self.assertIn('--cpu-accounting',command)
+                        if os.name=='nt':self.assertIn('--visual-boundaries',command)
+    def test_visual_boundaries_require_explicit_manual_review(self):
+        from script_gameplay import main
+        with patch('sys.argv',['script_gameplay.py','--output','unused','--visual-boundaries']):
+            with self.assertRaises(SystemExit) as status:main()
+            self.assertEqual(status.exception.code,2)
     def test_end_capture_uses_measurement_clock_not_harness_wait_start(self):
         from script_gameplay import interval_end_ns
         manifest=dict(interval_seconds=[15.,75.])

@@ -53,6 +53,8 @@ def summarize(directory, minimum_seconds=60):
     if m.get('overlay_consistent') is False:raise ValueError('Overlay setting changed during interval')
     if m.get('renderer_failures'):raise ValueError('Renderer failure in interval/run')
     log=directory/'startup.log'
+    if log.exists() and '[ppu-icache]' in log.read_text(errors='replace'):
+        m['diagnostics']['ppu_dispatch_cache']=True
     if log.exists() and renderer_failures(log.read_text(errors='replace')):
         raise ValueError('Renderer failure in retained startup log')
     if not m.get('actual_audio'):raise ValueError('Actual host audio backend not recorded')

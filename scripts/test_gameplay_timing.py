@@ -4,6 +4,13 @@ from gameplay_report import summarize,compare,COMPAT,renderer_failures
 from port import ROOT
 
 class GameplayTimingTests(unittest.TestCase):
+ def test_dispatch_cache_counter_build_is_never_a_clean_baseline(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);self.fixture(p)
+   (p/'startup.log').write_text('[ppu-icache] instrumentation enabled; diagnostic build\n')
+   report=summarize(p)
+   self.assertFalse(report['baseline_eligible'])
+   with self.assertRaisesRegex(ValueError,'clean baselines'):compare([report,report])
  def test_pgo_training_cannot_be_a_clean_baseline(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);m=self.fixture(p);m['diagnostics']['pgo_training']=True

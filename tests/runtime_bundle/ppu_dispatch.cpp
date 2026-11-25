@@ -19,6 +19,7 @@ extern PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*);
 }
 
 static constexpr uint32_t target = 0x10000;
+void tank_battles_execution_report();
 static unsigned calls;
 static void leaf(ppu_context* ctx) { ++calls; ++ctx->gpr[3]; }
 static void replacement(ppu_context* ctx) { ++calls; ctx->gpr[3] += 2; }
@@ -106,5 +107,6 @@ int main(int argc, char** argv) {
     assert(ctx.gpr[3] == 8 && ctx.ctr == target);
     assert(ctx.gpr[2] == 0x12345678);
     assert(*ps3_ppu_dispatch_depth_slot() == 0 && *ps3_ppu_vcall_sp_slot() == 0);
+    tank_battles_execution_report();
     std::puts("PASS: production PPU dispatch, invalidation, collisions, explicit targets and trampolines");
 }
