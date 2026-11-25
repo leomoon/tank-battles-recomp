@@ -26,6 +26,7 @@ struct Trace {
     std::vector<Event> events;
     std::thread worker;
     std::string path,trigger,role="unspecified";
+    bool clock_only=false;
     uint64_t start=0,end=0;
     Trace() {
         const char* value=getenv("TB_PACING_TRACE");
@@ -34,6 +35,7 @@ struct Trace {
         value=getenv("TB_PACING_TRIGGER");
         if (!value || !*value) return; // Explicit gameplay trigger is mandatory.
         trigger=value;
+        value=getenv("TB_PACING_CLOCK_ONLY");clock_only=value && std::string(value)=="1";
         value=getenv("TB_PACING_ROLE");
         if(value && (std::string(value)=="host" || std::string(value)=="invited")) role=value;
         double seconds=20;
@@ -100,10 +102,12 @@ bool valid(uint64_t p) {return vm_base && p>=0x10000 && p<=0xfffffe00ull;}
 // op 0: pacing function entry; 1: original floating comparison, 2: correction
 // store completed; 3/4: sendto entry/exit; 5/6: recvfrom entry/exit;
 // 7: received frame snapshot subtraction; 8: peak selection;
-// 9: constructed numeric frame header; 10: completed pacing-field reset.
+// 9: constructed numeric frame header; 10: completed pacing-field reset;
+// 11: original network-clock calibration completed.
 extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
     auto& t=trace();
     if(!t.active.load(std::memory_order_acquire))return;
+    if(t.clock_only && op!=11)return;
     if(op==0) {polls=0;return;}
     Event e;
     if(op==1) {
@@ -148,6 +152,11 @@ extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
         e.kind=9;e.object=uint32_t(c->gpr[31]);e.correction=vm_read32(e.object+0x124);
         e.previous_us=vm_read64(e.object+0x110);
         e.flags=uint32_t(vm_read8(e.object+0x122))<<16 | uint32_t(vm_read8(e.object+0x12c))<<8 | vm_read8(e.object+0x12d);
+    } else if(op==11) {
+        if(!valid(c->gpr[3]) || !valid(c->gpr[30]))return;
+        e.kind=10;e.object=uint32_t(c->gpr[30]);e.socket=uint32_t(c->gpr[3]);
+        e.previous_us=c->gpr[22];e.guest_us=c->gpr[31];e.sequence=uint32_t(c->gpr[28]);
+        e.interval_bits=uint32_t(c->gpr[24]);e.result=uint32_t(c->gpr[25]);e.correction=uint32_t(c->gpr[23]);
     } else return;
     t.push(e);
 }

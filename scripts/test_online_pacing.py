@@ -2,7 +2,7 @@
 import json,os,shutil,subprocess,tempfile,unittest
 from pathlib import Path
 from pacing_report import report
-from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POLL
+from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POLL,CALIBRATION
 
 ROOT=Path(__file__).resolve().parents[1]
 class PacingHooks(unittest.TestCase):
@@ -13,6 +13,7 @@ class PacingHooks(unittest.TestCase):
    bodies.append(f'void func_{function}(ppu_context* ctx) {{\n    PPU_MM_SNAP\n        ps3_hle_call(0x{nid}u, ctx); return;  /* import stub */\n}}\n')
   bodies += ['void func_0016DD64(ppu_context* ctx) {\n    PPU_MM_SNAP\n        ctx->gpr[5] = ctx->gpr[26] - ctx->gpr[4];\n}\n',
              'void func_0015B0BC(ppu_context* ctx) {\n    PPU_MM_SNAP\n        vm_write32(ctx->gpr[28] + 0x8, ctx->gpr[4]);\n}\n']
+  bodies += ['void func_001D511C(ppu_context* ctx) {\n    PPU_MM_SNAP\n'+CALIBRATION+'}\n']
   for n,body in enumerate(bodies):(root/f'ppu_recomp_{n:03}.cpp').write_text(INCLUDE+body)
  def test_instruction_hooks_are_scoped_idempotent_and_register_neutral(self):
   with tempfile.TemporaryDirectory() as d:
@@ -27,7 +28,7 @@ class PacingHooks(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'ppu_recomp_000.cpp';p.write_text('void fixture() {}\n');patch_pacing(d);self.assertEqual(p.read_text(),'void fixture() {}\n')
  def test_unexpected_missing_and_ambiguous_layouts_fail_before_edits(self):
-  for mutation in ('anchor','function','duplicate','format','audit_function','reset','extra_reset'):
+  for mutation in ('anchor','function','duplicate','format','audit_function','reset','extra_reset','calibration'):
    with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as d:
     root=Path(d);self.fixture(root)
     if mutation=='anchor':
@@ -40,6 +41,8 @@ class PacingHooks(unittest.TestCase):
      p=root/'ppu_recomp_000.cpp';p.write_text(p.read_text().replace(' + 0x124',' + 0x128',1))
     elif mutation=='extra_reset':
      patch_pacing(root);p=root/'ppu_recomp_000.cpp';p.write_text(p.read_text().replace('loc_001A3C34:\n','loc_001A3C34:\n        vm_write32(ctx->gpr[31] + 0x124, ctx->gpr[0]);\n',1))
+    elif mutation=='calibration':
+     p=root/'ppu_recomp_006.cpp';p.write_text(p.read_text().replace(' + 0x18,',' + 0x20,'))
     else:(root/'ppu_recomp_099.cpp').write_text((root/'ppu_recomp_001.cpp').read_text())
     before={p:p.read_bytes() for p in root.iterdir()}
     with self.assertRaises(ValueError):patch_pacing(root)
@@ -75,10 +78,14 @@ int main(int argc,char** argv) {
   tb_pacing_hook(&c,3);tb_pacing_hook(&c,4);tb_pacing_hook(&c,5);tb_pacing_hook(&c,6);
  }
  if(argc>1 && !strcmp(argv[1],"audit")) {
-  c.gpr[6]=0x12000;c.gpr[30]=0x13000;c.gpr[28]=0x14000;c.gpr[4]=3;c.gpr[26]=7;c.gpr[5]=4;
+  c.gpr[3]=0x15000;c.gpr[6]=0x12000;c.gpr[30]=0x13000;c.gpr[28]=0x14000;c.gpr[4]=3;c.gpr[26]=7;c.gpr[5]=4;
   const auto audit_before=c;
   for(unsigned op=7;op<=10;++op)tb_pacing_hook(&c,op);
   if(memcmp(&audit_before,&c,sizeof(c)))return 4;
+  c.gpr[22]=123456789;c.gpr[31]=10000;c.gpr[28]=10;c.gpr[24]=9990;c.gpr[25]=40;c.gpr[23]=10;
+  const auto clock_before=c;
+  tb_pacing_hook(&c,11);
+  if(memcmp(&clock_before,&c,sizeof(c)))return 5;
   c=before;
  }
  if(memcmp(&before,&c,sizeof(c)))return 2;
@@ -93,10 +100,11 @@ int main(int argc,char** argv) {
   subprocess.run([compiler,'-std=c++20','-O2','-pthread','-I'+str(cls.root),'-I'+str(ROOT),str(ROOT/'online_pacing.cpp'),str(cls.root/'fixture.cpp'),'-o',str(cls.exe)],check=True)
  @classmethod
  def tearDownClass(cls):cls.tmp.cleanup()
- def run_fixture(self,name,enabled,overflow=False,early=False,audit=False):
+ def run_fixture(self,name,enabled,overflow=False,early=False,audit=False,clock_only=False):
   trace=self.root/(name+'.jsonl');trigger=self.root/(name+'.trigger');trigger.touch()
   env={k:v for k,v in os.environ.items() if not k.startswith('TB_PACING_')}
   if enabled:env.update(TB_PACING_TRACE=str(trace),TB_PACING_TRIGGER=str(trigger),TB_PACING_SECONDS='1',TB_PACING_ROLE='host')
+  if clock_only:env['TB_PACING_CLOCK_ONLY']='1'
   subprocess.run([str(self.exe)]+(['overflow'] if overflow else ['early'] if early else ['audit'] if audit else []),env=env,check=True)
   return trace
  def test_disabled_creates_no_output_and_preserves_guest(self):
@@ -117,10 +125,17 @@ int main(int argc,char** argv) {
   samples=[r for r in rows if r['kind']==6]
   self.assertEqual(len(samples),1)
   self.assertEqual((samples[0]['previous_guest_us'],samples[0]['observed_guest_us'],samples[0]['correction_u32']),(3,7,4))
-  self.assertTrue({6,7,8,9}.issubset({r['kind'] for r in rows}))
+  self.assertTrue({6,7,8,9,10}.issubset({r['kind'] for r in rows}))
+  clock=next(r for r in rows if r['kind']==10)
+  self.assertEqual((clock['previous_guest_us'],clock['observed_guest_us'],clock['local_sequence']),(123456789,10000,10))
+  self.assertEqual((clock['interval_bits'],clock['result_u32'],clock['correction_u32']),(9990,40,10))
  def test_shutdown_marks_interrupted_window(self):
   rows=[json.loads(l) for l in self.run_fixture('early',True,early=True).read_text().splitlines()]
   self.assertFalse(rows[0]['complete']);self.assertTrue(rows[0]['events'])
+ def test_clock_only_capture_filters_other_guest_events(self):
+  rows=[json.loads(l) for l in self.run_fixture('clock-only',True,audit=True,clock_only=True).read_text().splitlines()]
+  self.assertEqual(rows[0]['events'],1)
+  self.assertEqual(rows[1]['kind'],10)
  def test_overflow_is_bounded_and_counted(self):
   rows=[json.loads(l) for l in self.run_fixture('overflow',True,True).read_text().splitlines()]
   self.assertFalse(report(self.root/'overflow.jsonl')['usable_timeline'])

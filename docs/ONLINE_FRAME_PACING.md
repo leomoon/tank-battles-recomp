@@ -106,3 +106,35 @@ All retained subtraction, maximum-selection, halving and deadline observations m
 The reversible B-host result supports a causal connection between network/frame phase, positive correction and the lower completed-frame cadence. It contradicts a simple model in which larger peer delay always adds a fixed ping penalty to each frame. The unequal response between host assignments also shows why a fixed cap, blanket zero, or permanent artificial packet delay is not an established solution. Short phases can include scene and scheduling changes; this sweep is a mechanism experiment, not a performance acceptance result.
 
 The next implementation decision must account for frame-phase requests, calibrated clock offsets, the separate requested interval, and legitimate recovery waits. No candidate is enabled by this audit. A future experiment must retain the original path by default, preserve elapsed simulation time and peer frame progression, handle session resets, and prove complete-round synchronization before its FPS gain is accepted. Equivalent paired RPCS3 timing and original PS3 timing have not been captured; original console behavior remains unknown. Cross-machine checks remain pending as recorded in the baseline plan.
+
+## Step 4 decision: preserve the original synchronization path
+
+Step 4 reached its explicit evidence gate without establishing a safe causal correction. Its implementation and experiment-switch tasks remain deferred. The added clock-calibration capture is read-only; there is no alternative pacing algorithm, developer FPS toggle, synchronization cap, packet delay or new pacing state in the production path. A source/configuration failure is preferable to silently attaching a hook to an unexpected instruction layout.
+
+The extra investigation tested whether the title's calibration could explain the several-millisecond steady-state correction. `func_001D511C` uses its latest remote timestamp with half an average of elapsed response times. Mixing the latest sample with an average of older response times can be biased under changing delay. That is a testable concern, but its relevance must be demonstrated before changing the game clock.
+
+The new hook observes the original epoch write after `0x001D55b8`, without replacing it. A complete, lossless ten-sample private-room exchange had elapsed response times of 24–57 microseconds. All ten adjustments matched the original arithmetic and lay within the latest response's inferred offset bounds. Their differences from the latest-response midpoint were at most nine microseconds; the final difference was three microseconds. The unchanged game subsequently showed approximately 59.2 host FPS and 43.8 invited FPS in a short diagnostic observation. That observation used Field of War II and ordinary finite round settings, so it is not a replacement for the matched Field of War I baseline. It does show the slowdown while this captured calibration has no measured millisecond-scale midpoint bias.
+
+For an observed receive time `now`, the echoed request stamp `sent` and the remote response stamp `remote`, the offline check compares the original adjustment with:
+
+```text
+rtt = unsigned32(now - sent)
+lower_offset = signed32(remote - now)
+upper_offset = lower_offset + rtt
+latest_midpoint = signed32(remote - now + floor(rtt / 2))
+original_adjustment = signed32(remote - now + floor(mean_recorded_rtt / 2))
+```
+
+The bounds assume nonnegative path delays and stable clocks during each exchange. They do not establish symmetric paths, one-way latency, cross-machine clock accuracy or acceptable behavior under arbitrary network changes. Differences use the protocol's 32-bit wrap semantics. The absolute RTC epoch is 64-bit and must not be reconstructed by subtracting an unsigned negative adjustment from it without accounting for that distinction. `scripts/online_clock_report.py` reports differences without interpreting those wrapped high bits as an FPS cause.
+
+| Evaluated change | Decision and evidence |
+| --- | --- |
+| Replace signaling latency | Deferred. Its first-ACK measurement can include handshake time, but no causal dependency from that value to the sustained FPS loss was established. |
+| Replace calibration averaging | Deferred. A synthetic changing-delay case demonstrates possible bias; the observed exchange is consistent within nine microseconds while the slowdown persists. A synthetic possibility alone does not justify a game-clock change. |
+| Clear or cap the positive correction | Rejected as a candidate for this step. The field already clears at each normal pacing return, and its positive value is a synchronization request. No evidence establishes how much can safely be removed. |
+| Suppress recovery phases or count their pacing returns as frames | Rejected. The phase path participates in the original frame progression, and pacing returns have already been shown to differ from completed game frames. |
+| Permanently add packet delay or clock offset | Rejected. The reversible sweep had unequal results across host assignments and does not establish a correct protocol or timing change. |
+
+Any later candidate must preserve packet formats and ordering, remote frame identities, simulation duration, input delivery, required waits under poor network conditions and complete-round agreement. It must specify whether a correction is a phase target or synchronization debt before changing how it is consumed. It must account for receive-side phase requests and the separate nominal interval. Unknown session state, unsupported instruction layouts, stale samples, clock boundaries, stalls, reconnects, role swaps and map changes must retain the original behavior. New state would require explicit lifecycle resets and deterministic tests. A candidate may be enabled only through an exact developer opt-in after those rules are implemented; the shipped default must remain original until later acceptance succeeds.
+
+No new pacing state was introduced, so there is no candidate state to reset or enable. Existing recorder tests verify guest-register and memory preservation with recording disabled, active and filtered to clock-only events. Offline tests cover wrapped/negative clock differences, large prior response delays, incomplete exchanges, multiple interleaved transports and new exchanges. Those tests establish observation correctness, not a validated replacement algorithm. Step 5 candidate acceptance remains pending. The next evidence needed is a demonstrated error in frame progression or timing with a proposed correction that retains the required recovery behavior, rather than another FPS-only workaround.

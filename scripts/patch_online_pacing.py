@@ -7,6 +7,7 @@ PACING='void func_001A33CC(ppu_context* ctx) {\n    PPU_MM_SNAP\n'
 CORRECTION='void func_0016EEBC(ppu_context* ctx) {\n    PPU_MM_SNAP\n'
 STORE='loc_0016F304:\n        ctx->gpr[31] = vm_read32(ctx->gpr[2] + -0x2534);\n        ctx->gpr[11] = vm_read32(ctx->gpr[28] + 0x24);\n        vm_write32(ctx->gpr[31] + 0x0, ctx->gpr[11]);\n'
 POLL='        { double a = ctx->fpr[1]; double b = ctx->fpr[0]; uint32_t cr_val = (a != a || b != b) ? 1 : (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 4)) | (cr_val << 4); }\n        if (((ctx->cr >> 7) & 1)) goto loc_001A3C34;\n'
+CALIBRATION='        ctx->gpr[21] = ctx->gpr[22] - ctx->gpr[23];\n        vm_write64(ctx->gpr[3] + 0x18, ctx->gpr[21]);\n'
 
 
 def patch_pacing(directory):
@@ -17,6 +18,7 @@ def patch_pacing(directory):
     # fixtures contain none; a partially present title is rejected.
     signatures=[PACING,CORRECTION,'void func_0093BD84(ppu_context* ctx) {\n    PPU_MM_SNAP\n','void func_0093BE84(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
     signatures+=['void func_0016DD64(ppu_context* ctx) {\n    PPU_MM_SNAP\n', 'void func_0015B0BC(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
+    signatures+=['void func_001D511C(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
     present=[sum(s.count(sig) for s in sources.values()) for sig in signatures]
     names=tuple(sig.split('ppu_context*')[0] for sig in signatures)
     if not any(present) and not any(name in s for name in names for s in sources.values()):return
@@ -39,6 +41,8 @@ def patch_pacing(directory):
         elif '0015B0BC' in sig:
             anchor='        vm_write32(ctx->gpr[28] + 0x8, ctx->gpr[4]);\n'
             replacements=[(anchor,anchor+'        tb_pacing_hook(ctx, 9);\n')]
+        elif '001D511C' in sig:
+            replacements=[(CALIBRATION,CALIBRATION+'        tb_pacing_hook(ctx, 11);\n')]
         else:
             nid,op=('1F953B9F',5) if '0093BD84' in sig else ('9647570B',3)
             old=f'        ps3_hle_call(0x{nid}u, ctx); return;  /* import stub */\n'
