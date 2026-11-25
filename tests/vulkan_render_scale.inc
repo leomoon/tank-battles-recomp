@@ -405,6 +405,9 @@ static void check_scaled_raster(const tb_scale_layout* group)
     ++obsolete.generation;
     assert(!tb_vk_scale_scanout(obsolete));
 
+    /* Use the production engine presentation path for both selected and
+     * Native fallback images (vk_eng_init alone does not activate it). */
+    s_vk.eng_active = 1;
     assert(tb_vk_scale_present(native_display, scaled_display));
     assert(tb_present_scaled.active && !tb_present_scaled.readback.ptr);
     setenv("TB_FRAME_HISTORY", "fixture", 1); // Request full output backing.
@@ -422,7 +425,10 @@ static void check_scaled_raster(const tb_scale_layout* group)
                              0, 255, 0, 255, 18, 18, 18, 18};
     const tb_scale_rect patch = {3, 1, 1, 2};
     vk_eng_color_target_write(NULL, native_display, patch.x, patch.y, patch.width, patch.height, guest_rows, 8);
+    const u64 previous_serial=tb_scaled.display[0].serial;
     assert(tb_vk_scale_patch(display, native_display, patch, 0));
+    assert(tb_scaled.display[0].serial==previous_serial+1);
+    assert(tb_vk_scale_scanout(display)==scaled_display);
     scale_pixel(scaled_display, 6, 3, 0, 0, 255);
     scale_pixel(scaled_display, 7, 4, 0, 255, 0);
     scale_pixel(scaled_display, 8, 4, 0, 0, 0);
@@ -441,8 +447,11 @@ static void check_scaled_raster(const tb_scale_layout* group)
     tb_vk_scale_publish(display, 0);
     assert(!tb_vk_scale_scanout(display));
     vk_eng_clear_color(NULL, native_display, blue);
+    scale_pixel(native_display, 2, 2, 0, 0, 255);
+    scale_pixel(native_display, 3, 2, 0, 0, 255);
     vk_eng_present(NULL, native_display);
-    assert(!tb_present_scaled.active && s_vk.last_center == 255);
+    assert(tb_present_scaled.active && tb_present_extent().width == 6 && tb_present_extent().height == 4);
+    assert(rsx_vulkan_backend_presented_center() == 0xff0000ffu);
     unsetenv("TB_FRAME_HISTORY");
     tb_present_image_shutdown();
     vk_eng_color_target_release(NULL, native_display);
@@ -505,22 +514,30 @@ static void check_scaled_raster(const tb_scale_layout* group)
     vk_eng_pipeline_release(NULL, pipeline);
     vk_eng_depth_target_release(NULL, native_z);
     vk_eng_color_target_release(NULL, native);
+    s_vk.eng_active = 0;
 }
 
 #include "vulkan_scale_ownership.inc"
 #include "vulkan_scale_resolve.inc"
+#include "vulkan_scale_raster.inc"
 
 int main(int argc, char** argv)
 {
     const int geometry_only = argc==2 && !strcmp(argv[1],"--geometry-only");
     const int ownership_only = argc==2 && !strcmp(argv[1],"--ownership-only");
     const int resolve_only = argc==2 && !strcmp(argv[1],"--resolve-only");
-    assert(argc==1 || geometry_only || ownership_only || resolve_only);
+    const int raster_only = argc==2 && !strcmp(argv[1],"--raster-only");
+    assert(argc==1 || geometry_only || ownership_only || resolve_only || raster_only);
     check_scale_geometry();
     const unsigned presets[] = {50, 75, 100, 150, 200, 300};
     setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 1);
     assert(!vk_init_all(16, 16, "render scale fixture"));
     assert(!vk_eng_init(NULL, 16, 16));
+    if (raster_only) {
+        for (unsigned i=0;i<6;++i) check_depth_stencil(presets[i]);
+        vk_eng_shutdown(NULL);
+        return 0;
+    }
     if (resolve_only) {
         for (unsigned i=0;i<6;++i) check_resolve(presets[i]);
         vk_eng_shutdown(NULL);
@@ -646,6 +663,7 @@ int main(int argc, char** argv)
     tb_vk_scale_prepare(&group, 200);
     assert(tb_scaled.percent == 200);
     check_scaled_raster(&group);
+    for (unsigned i=0;i<6;++i) check_depth_stencil(presets[i]);
     vk_eng_shutdown(NULL);
     assert(live_objects() == 0 && s_e2.fb_count == 0 && !tb_scaled.percent);
     puts("PASS: presets, pre-resolve detail, viewport/scissor, WPOS, depth, stencil, partial transfers, aliases and scaled presentation");

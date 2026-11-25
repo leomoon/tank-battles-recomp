@@ -10,6 +10,16 @@ from build_identity import measurement_build, read_command_log
 
 
 class BuildTests(unittest.TestCase):
+    def test_campaign_briefing_requires_objective_and_continue_when_heading_is_lost(self):
+        from script_gameplay import first_campaign_briefing, invalid_ending_scene
+        self.assertTrue(first_campaign_briefing('CONTROLS: left stick MISSION: destroy all enemy units. CONTINUE'))
+        self.assertTrue(first_campaign_briefing('ujxrnols: left stick MISSION: DESTROY ALL ENEMY units. CONTINUE'))
+        self.assertFalse(first_campaign_briefing('MISSION: DESTROY ALL ENEMY units.'))
+        self.assertFalse(first_campaign_briefing('CONTINUE SELECT MISSION'))
+        self.assertFalse(first_campaign_briefing('MISSION FAILED CONTINUE'))
+        self.assertTrue(invalid_ending_scene('ujxrnols: MISSION: DESTROY ALL ENEMY units. CONTINUE'))
+        self.assertFalse(invalid_ending_scene('PLAYER 1 120'))
+
     def test_low_resolution_map_ocr_keeps_map_and_pack_evidence(self):
         from script_gameplay import default_battle_map
         self.assertTrue(default_battle_map('SEECT MAP PACK 1 COUNTRY MIPS FIELD OF WAR 1 COWR FIELDS CROSSOVER PACK 2 MILITARY X ZONE'))

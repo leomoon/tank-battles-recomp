@@ -5,6 +5,9 @@ import sys
 root=Path(__file__).resolve().parents[2]
 out=Path(sys.argv[1]);out.mkdir(parents=True,exist_ok=True)
 overlay=Path(sys.argv[2])
+(out/'trophy_abort.c').write_text(
+    f'#include "{(overlay/"libs/network/sceNpTrophy.c").as_posix()}"\n'
+    f'#include "{(root/"tests/runtime_bundle/trophy_abort.inc").as_posix()}"\n')
 tree=ast.parse((root/'scripts/test_vulkan_draw_groups.py').read_text())
 hooks=next(node.value for node in ast.walk(tree) if isinstance(node,ast.Constant) and isinstance(node.value,str) and 'tb_render_clock(unsigned' in node.value)
 hooks=hooks.replace('__thread const char* tb_wait_label;', '#ifdef _WIN32\n__declspec(thread) const char* tb_wait_label;\n#else\n__thread const char* tb_wait_label;\n#endif\n')

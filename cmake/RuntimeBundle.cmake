@@ -68,6 +68,15 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_bundle/generate_gpu.py"
     "${CMAKE_CURRENT_BINARY_DIR}/gpu-fixtures" "${EXECUTION_SDK}" COMMAND_ERROR_IS_FATAL ANY)
 find_package(SDL2 CONFIG REQUIRED)
+add_executable(runtime_trophy_abort_check "${CMAKE_CURRENT_BINARY_DIR}/gpu-fixtures/trophy_abort.c")
+target_include_directories(runtime_trophy_abort_check PRIVATE "${PS3RECOMP_DIR}/include")
+if(MSVC)
+    target_compile_options(runtime_trophy_abort_check PRIVATE /UNDEBUG)
+    target_compile_definitions(runtime_trophy_abort_check PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(runtime_trophy_abort_check PRIVATE -UNDEBUG)
+endif()
+add_test(NAME runtime_trophy_abort COMMAND runtime_trophy_abort_check)
 add_executable(runtime_render_scale_submission_check
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_scale_submission.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/texture_decode.cpp"
@@ -106,6 +115,7 @@ foreach(scale IN ITEMS 50 75)
         TIMEOUT 30)
 endforeach()
 find_package(glslang CONFIG REQUIRED)
+option(TB_TEST_VULKAN "Register real GPU fixtures with CTest (requires a Vulkan device)" OFF)
 foreach(fixture IN ITEMS draw_groups depth16 nv3089 render_scale)
     add_executable(vulkan_${fixture} "${CMAKE_CURRENT_BINARY_DIR}/gpu-fixtures/${fixture}.c")
     if(WIN32)
@@ -135,7 +145,37 @@ foreach(fixture IN ITEMS draw_groups depth16 nv3089 render_scale)
             target_link_libraries(vulkan_${fixture} PRIVATE m ${CMAKE_DL_LIBS} Threads::Threads)
         endif()
     endif()
+    if(TB_TEST_VULKAN)
+        foreach(mode IN ITEMS async serial)
+            add_test(NAME vulkan_${fixture}_${mode} COMMAND vulkan_${fixture})
+            if(mode STREQUAL "async")
+                set(async 1)
+            else()
+                set(async 0)
+            endif()
+            set_tests_properties(vulkan_${fixture}_${mode} PROPERTIES
+                LABELS "gpu" RUN_SERIAL TRUE TIMEOUT 180
+                ENVIRONMENT_MODIFICATION "TB_GPU_TIMING=unset:;TB_FRAME_BUDGET=unset:"
+                ENVIRONMENT "TB_VK_ASYNC=${async};TB_VK_SUBMIT_MODE=grouped;TB_FRAME_HISTORY=;TB_SETTINGS_FILE=")
+        endforeach()
+    endif()
 endforeach()
+if(TB_TEST_VULKAN)
+    foreach(part IN ITEMS geometry ownership resolve raster)
+        foreach(mode IN ITEMS async serial)
+            add_test(NAME vulkan_scale_${part}_${mode} COMMAND vulkan_render_scale --${part}-only)
+            if(mode STREQUAL "async")
+                set(async 1)
+            else()
+                set(async 0)
+            endif()
+            set_tests_properties(vulkan_scale_${part}_${mode} PROPERTIES
+                LABELS "gpu" RUN_SERIAL TRUE TIMEOUT 180
+                ENVIRONMENT_MODIFICATION "TB_GPU_TIMING=unset:;TB_FRAME_BUDGET=unset:"
+                ENVIRONMENT "TB_VK_ASYNC=${async};TB_VK_SUBMIT_MODE=grouped;TB_FRAME_HISTORY=;TB_SETTINGS_FILE=")
+        endforeach()
+    endforeach()
+endif()
 
 get_target_property(tb_runtime_sources ps3recomp_runtime SOURCES)
 set(tb_archive_sources "")
@@ -188,6 +228,7 @@ add_custom_target(runtime_bundle
       --boot "$<TARGET_FILE:tank_battles_boot_archive>" --cpu-boot "$<TARGET_FILE:tank_battles_cpu_boot>"
       --tool "$<TARGET_FILE:runtime_cpu_smoke>" --tool "$<TARGET_FILE:vulkan_draw_groups>"
       --tool "$<TARGET_FILE:runtime_shader_check>"
+      --tool "$<TARGET_FILE:runtime_trophy_abort_check>"
       --tool "$<TARGET_FILE:vulkan_depth16>" --tool "$<TARGET_FILE:vulkan_nv3089>" --tool "$<TARGET_FILE:vulkan_render_scale>"
       --tool "$<TARGET_FILE:runtime_display_settings_check>" --tool "$<TARGET_FILE:runtime_display_window_check>"
       --tool "$<TARGET_FILE:runtime_render_scale_check>"
@@ -202,7 +243,7 @@ add_custom_target(runtime_bundle
       runtime_cpu_smoke vulkan_draw_groups vulkan_depth16 vulkan_nv3089 vulkan_render_scale
       runtime_display_settings_check runtime_display_window_check runtime_render_scale_check
       runtime_render_scale_submission_check
-      runtime_shader_check
+      runtime_shader_check runtime_trophy_abort_check
       ${tb_audio_burst_dependency}
       hle_fixture positions_fixture hotplug_fixture keyboard_fixture audio_fixture cache_fixture timeline_fixture entitlement_fixture
       matching_rooms peer_udp_fixture sysnet_fixture

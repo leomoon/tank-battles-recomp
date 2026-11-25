@@ -259,6 +259,7 @@ static void drain_fifo(void)
 #if defined(PS3RECOMP_RSX_VULKAN)
 extern "C" void rsx_vulkan_backend_present_begin(void);
 extern "C" void rsx_vulkan_backend_present_finish(void);
+extern "C" void rsx_vulkan_backend_shutdown(void);
 extern "C" void tb_vk_idle_submit(void);   /* sdk_overrides/vulkan_async_batches.inc */
 /* Process lifetime on purpose: exit() must not destroy a condition variable
  * the present thread is still waiting on (glibc blocks in that destructor). */
@@ -310,6 +311,7 @@ static DWORD WINAPI present_worker(LPVOID)
                 q.cv.wait_for(lock, std::chrono::milliseconds(50), [&q, seen] { return render_stopping.load(std::memory_order_acquire) || q.vblanks != seen; });
             }
         }
+        if (render_stopping.load(std::memory_order_acquire)) break;
         const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
         rsx_vulkan_backend_present_finish();
         if (t0) tb_frame_budget_span(TB_FT_PRESENT_FINISH, 0, t0, tb_frame_budget_now());
@@ -518,7 +520,13 @@ static DWORD WINAPI rsx_walker(LPVOID)
                 /* Quit, as the console's Quit Game does, rather than leave
                  * the game running with no window. */
                 ps3_host_quit("window closed");
+#if !defined(PS3RECOMP_RSX_VULKAN)
                 return 0;
+#endif
+                /* Keep the Vulkan window owner alive through the guest's
+                 * quit grace period. On Windows, returning from this thread
+                 * destroys its HWND while the present worker still uses the
+                 * swapchain. The quit coordinator stops both workers below. */
             }
         }
         /* A flip the last drain stopped at: show exactly that frame before
@@ -554,6 +562,14 @@ static DWORD WINAPI rsx_walker(LPVOID)
         if (idle < 16)       std::this_thread::yield();
         else if (walker_sleep_us(idle < 36 ? 100 : 250, kick)) idle = 0;   /* kicked: drain now */
     }
+#if defined(PS3RECOMP_RSX_VULKAN)
+    /* The coordinator joins this owner before closing present_handle. Keep
+     * the native window valid until the present worker has stopped, then
+     * complete GPU work and destroy the swapchain/window on their owner. */
+    if (present_handle) WaitForSingleObject(present_handle, INFINITE);
+    rsx_vulkan_backend_shutdown();
+    fprintf(stderr, "[shutdown] renderer stopped on window owner\n");
+#endif
     return 0;
 }
 

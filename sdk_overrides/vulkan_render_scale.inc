@@ -343,11 +343,20 @@ int tb_vk_scale_patch(tb_scale_surface surface, u32 native, tb_scale_rect rect, 
     const u32 route = tb_vk_scale_display_index(surface);
     if (route != TB_SCALE_MAX_ROUTES) {
         if (!pending && !tb_scaled.display_ready[route]) return 1;
-        return tb_vk_color_blit(native, rect, tb_scaled.display[route].handle, rect, VK_FILTER_NEAREST);
+        /* An unassociated Native upload has no ownership callback to finish
+         * its staging batch. Match tb_vk_scale_uploaded before sampling it. */
+        tb_eng_complete();
+        const u32 display=tb_scaled.display[route].handle;
+        if (!tb_vk_color_blit(native, rect, display, rect, VK_FILTER_NEAREST)) return 0;
+        tb_vk_scale_wrote(display);
+        return 1;
     }
     const u32 color = tb_vk_scale_find_color(surface);
     if (!color || color != tb_scaled.active_color) return 1;
-    return tb_vk_color_blit(native, rect, color, rect, VK_FILTER_NEAREST);
+    tb_eng_complete();
+    if (!tb_vk_color_blit(native, rect, color, rect, VK_FILTER_NEAREST)) return 0;
+    tb_vk_scale_wrote(color);
+    return 1;
 }
 
 void tb_vk_scale_skip_frame(void)

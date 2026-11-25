@@ -162,10 +162,25 @@ static void check_resolve(unsigned percent)
     s_vk.dump_path="unused-step5-fixture"; s_vk.dump_every=UINT32_MAX;
     if (scaled) assert(tb_vk_scale_present(displays[2],last));
     else vk_eng_present(NULL,last);
+    /* Capture policy belongs to the submitted frame, even when toggled
+     * before the present worker completes it. */
+    s_vk.dump_path=NULL;
     rsx_vulkan_backend_present_finish();
     assert(tb_present_readback()->size==(VkDeviceSize)dw*dh*4);
+    assert(tb_present_captured);
     assert(rsx_vulkan_backend_presented_center()==0xffff0000u);
-    s_vk.dump_path=NULL;
+    const u8* captured=tb_present_readback()->ptr;
+    for (size_t i=0;i<(size_t)dw*dh;++i)
+        assert(captured[4*i]==255 && captured[4*i+1]==0 && captured[4*i+2]==0 && captured[4*i+3]==255);
+    vk_destroy_buffer(tb_present_readback());
+    if (scaled) assert(tb_vk_scale_present(displays[2],last));
+    else vk_eng_present(NULL,last);
+    setenv("TB_FRAME_HISTORY","fixture",1);
+    rsx_vulkan_backend_present_finish();
+    assert(!tb_present_captured && !tb_present_readback()->ptr);
+    assert(rsx_vulkan_backend_presented_center()==0xffff0000u);
+    assert(tb_present_readback()->size==4);
+    unsetenv("TB_FRAME_HISTORY");
     vk_destroy_buffer(tb_present_readback());
     if (scaled) {
         /* Give depth an owner too, then check Native memory really disappeared. */

@@ -17,6 +17,7 @@
 #include <vector>
 extern "C" {
 int np_is_initialized();
+int32_t tb_trophy_abort_handle(int32_t handle);
 int32_t cellSysutilQueueGuestCallbackArgs(uint32_t, const uint64_t*);
 void cellSysutilQueueEvent(int, uint32_t, uint32_t);
 void tb_sdk_ps3_hle_call(uint32_t, ppu_context*);
@@ -486,6 +487,8 @@ void tank_battles_init_offline_network(bool use_rpcn){
         fprintf(stderr,"[offline] Tank Battles profile: PSN and host matchmaking disabled\n");
 }
 void tank_battles_register_offline_network(){
+    tank_battles_register_override(ps3_compute_nid("sceNpTrophyAbortHandle"),
+        [](ppu_context* c) { c->gpr[3] = (int64_t)tb_trophy_abort_handle((int32_t)c->gpr[3]); });
     for(const auto& binding:bindings)tank_battles_register_override(ps3_compute_nid(binding.name),binding.fn);
     if (tb::rpcn::enabled()) {
         tb::rpcn::register_basic();

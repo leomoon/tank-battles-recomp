@@ -59,7 +59,10 @@ class PackagingTests(unittest.TestCase):
         (self.resources / "package.json").write_text("{}\n")
         python = self.resources / "toolchain/python/bin/python3"
         python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        # Only the POSIX AppRun test executes this interpreter. Windows
+        # payload tests must not require administrator symlink privilege.
+        if os.name != "nt":
+            python.symlink_to(sys.executable)
 
     def test_notices_name_every_component_and_the_lgpl_source(self):
         windows, linux = package_builder.notices("windows"), package_builder.notices("linux")
@@ -100,7 +103,8 @@ class PackagingTests(unittest.TestCase):
         names = zipfile.ZipFile(io.BytesIO(payload)).namelist()
         self.assertIn("scripts/builder_app.py", names)
         self.assertIn("package.json", names)
-        self.assertFalse(any(name.startswith("toolchain/python/bin") for name in names), "symlinks are not packed")
+        if os.name != "nt":
+            self.assertFalse(any(name.startswith("toolchain/python/bin") for name in names), "symlinks are not packed")
         damaged = bytearray(output.read_bytes())
         damaged[offset + 10] ^= 0xFF
         self.assertNotEqual(hashlib.sha256(bytes(damaged[offset:offset + size])).digest(), digest)

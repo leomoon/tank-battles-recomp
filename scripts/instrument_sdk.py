@@ -3,6 +3,37 @@ import argparse,hashlib,json,re
 from pathlib import Path
 
 EDITS={
+ 'libs/network/sceNpTrophy.c':[
+ ('    int in_use;\n} TrophyHandle;', '    int in_use;\n    int aborted;\n} TrophyHandle;'),
+ ('static TrophyHandle  s_handles[SCE_NP_TROPHY_MAX_HANDLES + 1];',
+  '''static TrophyHandle  s_handles[SCE_NP_TROPHY_MAX_HANDLES + 1];
+
+static s32 tb_trophy_handle_error(SceNpTrophyHandle handle)
+{
+    if (!s_trophy_initialized) return SCE_NP_TROPHY_ERROR_NOT_INITIALIZED;
+    if (handle <= 0 || handle > SCE_NP_TROPHY_MAX_HANDLES || !s_handles[handle].in_use)
+        return SCE_NP_TROPHY_ERROR_INVALID_HANDLE;
+    return __atomic_load_n(&s_handles[handle].aborted, __ATOMIC_ACQUIRE)
+        ? SCE_NP_TROPHY_ERROR_ABORT : CELL_OK;
+}
+
+s32 tb_trophy_abort_handle(SceNpTrophyHandle handle)
+{
+    const s32 error = tb_trophy_handle_error(handle);
+    if (error && error != (s32)SCE_NP_TROPHY_ERROR_ABORT) return error;
+    /* Trophy work is synchronous here; the permanent aborted state prevents
+     * further operations until this handle is destroyed and recreated. */
+    __atomic_store_n(&s_handles[handle].aborted, 1, __ATOMIC_RELEASE);
+    return CELL_OK;
+}'''),
+ ('            s_handles[i].in_use = 1;',
+  '            s_handles[i].in_use = 1;\n            __atomic_store_n(&s_handles[i].aborted, 0, __ATOMIC_RELEASE);'),
+ ('    if (!s_handles[handle].in_use) return SCE_NP_TROPHY_ERROR_INVALID_HANDLE;',
+  '''    if (!s_handles[handle].in_use) return SCE_NP_TROPHY_ERROR_INVALID_HANDLE;
+    if (__atomic_load_n(&s_handles[handle].aborted, __ATOMIC_ACQUIRE)) {
+        s_contexts[context].registered = 0;
+        return SCE_NP_TROPHY_ERROR_ABORT;
+    }''')],
  'libs/system/cellMsgDialog.c':[(
   'static int                   s_dialog_open = 0;',
   'static int                   s_dialog_open = 0;\nint tb_system_dialog_active(void) { return s_dialog_open; }')],
@@ -231,6 +262,13 @@ def main():
   for before,after in edits:
    if text.count(before)!=1:raise SystemExit('SDK anchor mismatch: '+relative)
    text=text.replace(before,after,1)
+  if relative=='libs/network/sceNpTrophy.c':
+   for function in ('sceNpTrophyRegisterContext','sceNpTrophyGetRequiredDiskSpace',
+                    'sceNpTrophyGetGameInfo','sceNpTrophyGetTrophyInfo','sceNpTrophyUnlockTrophy',
+                    'sceNpTrophyGetTrophyUnlockState','sceNpTrophyGetGameProgress'):
+    pattern=r'(^s32 '+function+r'\([^;{]*\)\n\{[\s\S]*?return SCE_NP_TROPHY_ERROR_INVALID_CONTEXT;)'
+    text,n=re.subn(pattern,lambda m:m[0]+'\n    const s32 tb_handle_error=tb_trophy_handle_error(handle);\n    if (tb_handle_error) return tb_handle_error;',text,count=1,flags=re.M)
+    if n!=1:raise SystemExit('Trophy handle validation anchor mismatch: '+function)
   if relative=='libs/video/rsx_vulkan_backend.c':
    from submission_overlay import instrument
    text=instrument(text)
@@ -344,21 +382,6 @@ def main():
    ]:
     if text.count(before)!=1:raise SystemExit('Frame counter anchor mismatch: '+before[:60])
     text=text.replace(before,after)
-   # The present's host copy feeds only the centre-pixel probe, the PPM dump
-   # and frame history. Copy the whole frame only when one of the dumps is
-   # armed; otherwise copy the centre pixel to the same buffer offset.
-   anchor='    pvkCmdCopyImageToBuffer(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,\n                            s_vk.readback.buf, 1, &region);'
-   if text.count(anchor)!=1:raise SystemExit('Present readback anchor mismatch')
-   text=text.replace(anchor,'''    {
-        static int full=-1;
-        if (full<0) { const char* history=getenv("TB_FRAME_HISTORY"); full=s_vk.dump_path || (history && *history); }
-        if (!full) {
-            region.bufferOffset = ((VkDeviceSize)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4u;
-            region.imageOffset = (VkOffset3D){ (int32_t)(s_vk.width / 2), (int32_t)(s_vk.height / 2), 0 };
-            region.imageExtent = (VkExtent3D){ 1, 1, 1 };
-        }
-    }
-'''+anchor)
    # Clears join the open batch too when submission is asynchronous.
    if text.count('    const int batched = vk_eb_active();\n')!=2:raise SystemExit('Async clear anchor mismatch')
    text=text.replace('    const int batched = vk_eb_active();\n','    const int batched = vk_eb_active() || tb_async_record();\n')
@@ -437,52 +460,37 @@ def main():
     const unsigned char* px = (const unsigned char*)s_vk.readback.ptr;
     size_t c = ((size_t)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4;''',
      '''    s_vk.presented++;
-    if (tb_present_full_capture()) {
+    tb_present_captured = tb_present_captured && tb_present_capture_pixels(1);
+    if (tb_present_captured) {
     const VkExtent2D extent = tb_present_extent();
     vk_buffer* const readback = tb_present_readback();
     vk_invalidate(readback);
     const unsigned char* px = readback->ptr;
-    const int full = tb_present_full_capture();
-    const size_t c = full ? ((size_t)(extent.height / 2) * extent.width + extent.width / 2) * 4 : 0;'''),
+    const size_t c = ((size_t)(extent.height / 2) * extent.width + extent.width / 2) * 4;'''),
     ('    tb_frame_history(px,s_vk.width,s_vk.height,s_vk.presented);',
-     '    if (full) tb_frame_history(px, extent.width, extent.height, s_vk.presented);'),
+     '    tb_frame_history(px, extent.width, extent.height, s_vk.presented);'),
     ('    vk_present_window();\n}', '    }\n    vk_present_window();\n}'),
     ('    s_vk.last_center = ((u32)px[c] << 16) | ((u32)px[c + 1] << 8) | (u32)px[c + 2];\n    s_vk.presented++;',
      '    s_vk.last_center = ((u32)px[c] << 16) | ((u32)px[c + 1] << 8) | (u32)px[c + 2];'),
-    ('static void vk_present_record_end(VkCommandBuffer cb)\n{', '''static void vk_present_record_end(VkCommandBuffer cb)
+    ('''static void vk_present_record_end(VkCommandBuffer cb)
 {
-    if (tb_present_full_capture()) {
-    const VkExtent2D extent = tb_present_extent();
-    const VkImage image = tb_present_image()->img;
-    const VkBuffer readback = tb_present_readback()->buf;'''),
-    ('''    vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-    VkBufferImageCopy region''',
-     '''    vk_barrier_image_on(cb, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-    VkBufferImageCopy region'''),
-    ('''        .imageExtent = { s_vk.width, s_vk.height, 1 },
+    vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    VkBufferImageCopy region = {
+        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageExtent = { s_vk.width, s_vk.height, 1 },
     };
-    {
-        static int full=-1;
-        if (full<0) { const char* history=getenv("TB_FRAME_HISTORY"); full=s_vk.dump_path || (history && *history); }
-        if (!full) {
-            region.bufferOffset = ((VkDeviceSize)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4u;
-            region.imageOffset = (VkOffset3D){ (int32_t)(s_vk.width / 2), (int32_t)(s_vk.height / 2), 0 };
-            region.imageExtent = (VkExtent3D){ 1, 1, 1 };
-        }
-    }
     pvkCmdCopyImageToBuffer(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
-                            s_vk.readback.buf, 1, &region);''',
-     '''        .imageExtent = { extent.width, extent.height, 1 },
+                            s_vk.readback.buf, 1, &region);
+    VkBufferMemoryBarrier host = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = s_vk.readback.buf, .offset = 0, .size = VK_WHOLE_SIZE,
     };
-    if (!tb_present_full_capture()) {
-        region.imageOffset = (VkOffset3D){(int32_t)(extent.width / 2), (int32_t)(extent.height / 2), 0};
-        region.imageExtent = (VkExtent3D){1, 1, 1};
-    }
-    pvkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, readback, 1, &region);'''),
-    ('        .buffer = s_vk.readback.buf, .offset = 0, .size = VK_WHOLE_SIZE,',
-     '        .buffer = readback, .offset = 0, .size = VK_WHOLE_SIZE,'),
-    ('    if (pvkEndCommandBuffer(cb) != VK_SUCCESS) { VK_LOG("vkEndCommandBuffer (present) failed\\n"); return; }',
-     '    tb_frame_budget_count(TB_FC_PRESENT_READBACK_BYTES, extent.width * extent.height * 4u);\n    }\n    if (pvkEndCommandBuffer(cb) != VK_SUCCESS) { VK_LOG("vkEndCommandBuffer (present) failed\\n"); return; }'),
+    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                          0, 0, NULL, 1, &host, 0, NULL);
+''',
+     'static void vk_present_record_end(VkCommandBuffer cb)\n{\n    tb_present_captured = tb_present_full_capture();\n'),
     ('u32 rsx_vulkan_backend_presented_center(void)\n{\n    return s_vk.presented ? (0xFF000000u | s_vk.last_center) : 0u;\n}',
      '''u32 rsx_vulkan_backend_presented_center(void)
 {
@@ -534,11 +542,20 @@ def main():
             };
             pvkCmdBlitImage(cb, o->im.img, VK_IMAGE_LAYOUT_GENERAL,
                             s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL, 1, &blit,
-                            (o->w == s_vk.width && o->h == s_vk.height) ? VK_FILTER_NEAREST''',
+                            (o->w == s_vk.width && o->h == s_vk.height) ? VK_FILTER_NEAREST
+                                                                        : VK_FILTER_LINEAR);''',
      '''                .dstOffsets = { { 0, 0, 0 }, { (int32_t)extent.width, (int32_t)extent.height, 1 } },
             };
-            pvkCmdBlitImage(cb, o->im.img, VK_IMAGE_LAYOUT_GENERAL, output, VK_IMAGE_LAYOUT_GENERAL, 1, &blit,
-                            (o->w == extent.width && o->h == extent.height) ? VK_FILTER_NEAREST'''),
+            if (o->w == extent.width && o->h == extent.height) {
+                const VkImageCopy copy = {
+                    .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                    .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                    .extent = {extent.width, extent.height, 1},
+                };
+                pvkCmdCopyImage(cb, o->im.img, VK_IMAGE_LAYOUT_GENERAL, output, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+            } else {
+                pvkCmdBlitImage(cb, o->im.img, VK_IMAGE_LAYOUT_GENERAL, output, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
+            }'''),
     ('/* Pixels a 2D transfer put into guest memory', '''static void vk_eng_present(void* user, u32 surface)
 {
     if (!tb_vk_scale_native(surface)) return;

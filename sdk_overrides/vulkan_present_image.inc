@@ -6,6 +6,9 @@ static struct {
     VkExtent2D extent, failed_extent;
     int active, written;
 } tb_present_scaled;
+/* Protected by present_mu. Describes the submitted frame, not a later
+ * change to the diagnostic environment while its copy is in flight. */
+static int tb_present_captured;
 
 /* Present images are never used by the engine's async draw batches. Free
  * only these resources after the present fence rather than flushing the
@@ -70,15 +73,25 @@ static vk_buffer* tb_present_readback(void)
         ? &tb_present_scaled.readback : &s_vk.readback;
 }
 
+static int tb_present_prepare_readback(VkDeviceSize bytes)
+{
+    vk_buffer* buffer = tb_present_readback();
+    if (buffer->ptr && buffer->size >= bytes) return 1;
+    tb_present_destroy_buffer(buffer);
+    return !vk_create_host_buffer(buffer, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+}
+
 /* Diagnostics opt in to a host transfer. Ordinary presentation never reads
- * pixels back. This runs with present_mu held, after its fence completed. */
-static u32 tb_present_probe_center(void)
+ * pixels back. This runs with present_mu held, after its fence completed.
+ * Iris 580 returns stale pixels if this copy shares the image-copy command
+ * buffer. A separate diagnostic submission leaves ordinary presents alone. */
+static int tb_present_capture_pixels(int full)
 {
     const VkExtent2D extent = tb_present_extent();
     vk_buffer* readback = tb_present_readback();
-    if (!s_vk.presented) return 0;
-    if (!tb_present_full_capture()) {
-        if (!readback->ptr && vk_create_host_buffer(readback, 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT)) return 0;
+    const VkDeviceSize bytes = full ? (VkDeviceSize)extent.width*extent.height*4u : 4u;
+    {
+        if (!tb_present_prepare_readback(bytes)) return 0;
         VkCommandBuffer cb = s_vk.present_cmd;
         if (pvkResetCommandBuffer(cb, 0)) return 0;
         const VkCommandBufferBeginInfo begin = {.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -86,8 +99,9 @@ static u32 tb_present_probe_center(void)
         if (pvkBeginCommandBuffer(cb, &begin)) return 0;
         vk_cmd_after_everything(cb);
         vk_barrier_image_on(cb, tb_present_image()->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-        const VkBufferImageCopy copy = {.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},
+        VkBufferImageCopy copy = {.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},
             .imageOffset={(int32_t)(extent.width/2),(int32_t)(extent.height/2),0},.imageExtent={1,1,1}};
+        if (full) { copy.imageOffset=(VkOffset3D){0,0,0}; copy.imageExtent=(VkExtent3D){extent.width,extent.height,1}; }
         pvkCmdCopyImageToBuffer(cb, tb_present_image()->img, VK_IMAGE_LAYOUT_GENERAL, readback->buf, 1, &copy);
         const VkBufferMemoryBarrier host={.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
             .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_HOST_READ_BIT,
@@ -96,14 +110,22 @@ static u32 tb_present_probe_center(void)
         pvkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,NULL,1,&host,0,NULL);
         if (pvkEndCommandBuffer(cb)) return 0;
         const VkSubmitInfo submit={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&cb};
-        pvkResetFences(s_vk.device,1,&s_vk.present_fence);
+        if (pvkResetFences(s_vk.device,1,&s_vk.present_fence)) return 0;
         if (vk_queue_submit(&submit,s_vk.present_fence)) return 0;
-        pvkWaitForFences(s_vk.device,1,&s_vk.present_fence,VK_TRUE,UINT64_MAX);
-        tb_frame_budget_count(TB_FC_PRESENT_READBACK_BYTES,4);
+        if (pvkWaitForFences(s_vk.device,1,&s_vk.present_fence,VK_TRUE,UINT64_MAX)) return 0;
+        tb_frame_budget_count(TB_FC_PRESENT_READBACK_BYTES,(u32)bytes);
     }
     vk_invalidate(readback);
-    const u8* pixels=readback->ptr;
-    const size_t c=tb_present_full_capture()?((size_t)(extent.height/2)*extent.width+extent.width/2)*4:0;
+    return 1;
+}
+
+static u32 tb_present_probe_center(void)
+{
+    if (!s_vk.presented) return 0;
+    if (!tb_present_captured && !tb_present_capture_pixels(0)) return 0;
+    const VkExtent2D extent=tb_present_extent();
+    const u8* pixels=tb_present_readback()->ptr;
+    const size_t c=tb_present_captured?((size_t)(extent.height/2)*extent.width+extent.width/2)*4:0;
     return 0xff000000u | ((u32)pixels[c]<<16) | ((u32)pixels[c+1]<<8) | pixels[c+2];
 }
 

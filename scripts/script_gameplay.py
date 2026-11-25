@@ -9,7 +9,7 @@ if os.name!='nt':
 
 
 def invalid_ending_scene(text):
- return any(word in text.upper() for word in ('MISSION FAILED','DEBRIEF','RESULTS','KILLS:','RANK','SELECT AN OPTION','CONTROLS:','RULES:','VICTORY','DEFEAT','GAME OVER','WINS'))
+ return first_campaign_briefing(text) or any(word in text.upper() for word in ('MISSION FAILED','DEBRIEF','RESULTS','KILLS:','RANK','SELECT AN OPTION','CONTROLS:','RULES:','VICTORY','DEFEAT','GAME OVER','WINS'))
 
 
 def live_battle_timer(text):
@@ -44,6 +44,14 @@ def default_battle_map(text):
  return bool(re.search(r'FIELD [O0]F WAR [I1]',normalized) and
              (('CONFIRM' in normalized or 'ELECT MAP' in normalized) and 'BACK' in normalized or
               'PACK 1' in normalized and 'PACK 2' in normalized))
+
+
+def first_campaign_briefing(text):
+ # Reduced-resolution OCR can lose the stylized CONTROLS heading. Require
+ # the first mission's objective and Continue together as an alternate cue.
+ normalized=' '.join(text.upper().split())
+ return ('CONTROLS' in normalized and 'CONTINUE' in normalized or
+         all(word in normalized for word in ('MISSION:', 'DESTROY ALL ENEMY', 'CONTINUE')))
 
 
 def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=False):
@@ -295,7 +303,10 @@ def main():
    text=capture('navigation')
    if a.reference_template and ('AUTO LOAD' in text or 'HDD ACCESS' in text):press(0x4000,'autosave notice');continue
    if a.reference_template and 'NOT SIGNED' in text:press(0x2000,'offline notice');continue
-   if all(w in ' '.join(text.split()) for w in words) or label=='title' and desktop and 'BUTTON' in text or label=='map' and default_battle_map(text):
+   if (all(w in ' '.join(text.split()) for w in words) or
+       label=='title' and desktop and 'BUTTON' in text or
+       label=='map' and default_battle_map(text) or
+       label=='briefing' and a.scene=='campaign' and first_campaign_briefing(text)):
     (out/(label+'.png')).write_bytes((out/'navigation.png').read_bytes());event(label,ocr=text);return
    time.sleep(2)
   raise RuntimeError('Did not reach '+label+': '+text)
@@ -354,7 +365,7 @@ def main():
      if evidence.is_file():(out/('countdown-retry-'+str(retry+1)+'-'+evidence.name)).write_bytes(evidence.read_bytes())
     time.sleep(1)
     before=capture('gameplay-before')
-  if any(w in before for w in ['BRIEFING','RRIEFING','CONTROLS:','RULES:','SELECT MAP','MISSION FAILED','VICTORY','DEFEAT','GAME OVER','WINS','DEBRIEF']):raise RuntimeError('Still not live gameplay')
+  if first_campaign_briefing(before) or any(w in before for w in ['BRIEFING','RRIEFING','CONTROLS:','RULES:','SELECT MAP','MISSION FAILED','VICTORY','DEFEAT','GAME OVER','WINS','DEBRIEF']):raise RuntimeError('Still not live gameplay')
   unread=a.scene=='battle' and not live_battle_timer((out/'gameplay-before-timer.txt').read_text())
   if unread and not a.pending_review:raise RuntimeError('No readable live Battle countdown at start')
   event('live-gameplay-boundary',ocr=before,pending_review=unread)

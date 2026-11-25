@@ -85,7 +85,7 @@ def pack(args):
     copy(args.runtime,'lib/'+Path(args.runtime).name)
     copy(args.boot,'lib/'+Path(args.boot).name)
     copy(args.cpu_boot,'lib/'+Path(args.cpu_boot).name)
-    allowed_tools={'runtime_cpu_smoke','runtime_shader_check','vulkan_draw_groups','vulkan_depth16','vulkan_nv3089',
+    allowed_tools={'runtime_cpu_smoke','runtime_shader_check','runtime_trophy_abort_check','vulkan_draw_groups','vulkan_depth16','vulkan_nv3089',
                    'runtime_display_settings_check','runtime_display_window_check','runtime_render_scale_check','runtime_render_scale_submission_check','vulkan_render_scale',
                    'hle_fixture','positions_fixture','hotplug_fixture','keyboard_fixture','audio_fixture',
                    'cache_fixture','timeline_fixture','entitlement_fixture','audio_burst_fixture',

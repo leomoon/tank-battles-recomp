@@ -66,11 +66,11 @@ A proven group supplies the scaled scene attachments for a frame. The renderer r
 
 The fragment shader maps WPOS back to the guest sample grid before applying the guest origin and pixel-center rules. Ordinary texture operations retain their normalized UVs and implicit LOD, and unnormalized samplers retain the dimensions from their guest texture descriptors. The generated shadow taps use the dimensions of the Native shadow image. The sampled depth-bounds fallback reads framebuffer pixel coordinates directly, so a frame that uses it cannot use the scaled draw. Dynamic depth bounds, stencil, and the depth range use the original state. Polygon offset retains its constant depth term. For equal X/Y host-to-guest ratios, its slope factor is multiplied by that actual ratio; a nonzero slope with unequal rounded ratios rejects the scaled frame.
 
-The renderer emits each eligible draw and clear once into the selected-resolution attachments. Native color/depth handles retain guest identity but their contents can be stale. A complete proven resource group is required before routing begins; its initial contents are imported once from Native. Color aliases use the current authoritative view, and feedback takes an ordered immutable snapshot. Native NV3089 still selects exact point samples at 100%. A recognized non-Native resolve writes the selected-size display backing directly; filtering and tile-phase acceptance at 50%/75% remain Step 5 work. Guest uploads patch only their mapped rectangle after the staged upload completes. Other point transfers reconstruct the source and establish Native continuation before mutating an authoritative destination.
+The renderer emits each eligible draw and clear once into the selected-resolution attachments. Native color/depth handles retain guest identity but their contents can be stale. A complete proven resource group is required before routing begins; its initial contents are imported once from Native. Color aliases use the current authoritative view, and feedback takes an ordered immutable snapshot. Native NV3089 still selects exact point samples at 100%. A recognized non-Native resolve writes the selected-size display backing directly; Step 5 validates filtering and tile phase at 50%/75%. Guest uploads patch only their mapped rectangle after the staged upload completes. Other point transfers reconstruct the source and establish Native continuation before mutating an authoritative destination.
 
 Draw groups retain immutable vertex, index, constant and descriptor slices until their slot's fence completes. The mirror queue and replay pass have been removed. Attachment changes end the current render pass within the batch, and a texture consumer of the preceding attachment completes its producer before drawing. The existing 64-draw bound, four submission slots and retirement fences still govern reuse.
 
-The registered display route publishes scaled scanout after all six tiles complete. While the route is unavailable, the presenter uses its Native scanout. The scaled presentation image has its own lifetime and effective dimensions, and capture reports those dimensions before optional FXAA. Ordinary presentation reads only one diagnostic pixel back to the CPU. Friends, invitations, and FPS are composed in swapchain coordinates after the window blit.
+The registered display route publishes scaled scanout after all six tiles complete. While the route is unavailable, the presenter uses its Native scanout. The scaled presentation image has its own lifetime and effective dimensions, and capture reports those dimensions before optional FXAA. Ordinary presentation performs no pixel readback; an explicit center-pixel probe reads four bytes after the presentation fence. Friends, invitations, and FPS are composed in swapchain coordinates after the window blit.
 
 Use `scripts/capture_rendering.py --build-dir build --output analysis/rendering/<run> --capture --rsx-trace --render-scale 150` to capture the resolved output. Traced frames also produce a pre-resolve `*-scaled.ppm` in the local RSX trace directory. The Vulkan fixtures compare Native and scaled raster detail through scanout, exercise fractional clear boundaries, WPOS, depth and stencil, check pitched partial copies and overlapping aliases, and verify FXAA at both output sizes.
 
@@ -308,3 +308,119 @@ scale, present-source extent, physical draw counts and retained image headers
 establish the active path. The logical candidate entry alone is not a fallback
 event. Source hashes, the frozen CPU baseline, captures and original reports
 are retained locally under `analysis/performance/resolution-step5/`.
+
+
+## Correctness and integration (lower-resolution Step 6)
+
+The full Vulkan render-scale fixture now passes on the Iris Pro 580. Its old
+`target 120 pixel 6,3` failure was in a pitched guest upload, before the
+subsequent depth/stencil assertions: an unassociated Native upload could still
+be queued when the patch sampled it. The patch now completes the upload before
+sampling, just like the authoritative ownership path, and advances the destination
+content serial while preserving a published display's validity.
+
+Further checks exposed a diagnostic capture failure. Native fallback and resized
+presentation images were correct on the GPU, but this driver returned stale
+pixels when the presentation image copy and full-image readback shared one
+command buffer. Explicit captures now run after the presentation fence in their
+own submission. Readback storage is allocated lazily for both the fixed and owned
+presentation paths, and the submitted frame retains its capture policy if the
+environment changes before completion. Ordinary presentation still performs no
+pixel readback. Equal-size presentation copies use `vkCmdCopyImage`.
+
+`tests/vulkan_scale_raster.inc` adds exact depth LESS, stencil-reference and
+partial depth/stencil-clear checks at 50/75/100/150/200/300%. Existing geometry,
+ownership, resolve and draw-group fixtures cover WPOS, odd extents, fractional
+viewports, partial writes and pitch, stale Native representations, cached guest
+reads, immutable feedback, unsupported-operation recovery, generation reuse,
+physical draw counts, all six resolve tiles, display rotation and FXAA. Full
+capture checks compare every pixel and exercise capture-policy changes while a
+presentation is in flight. Native fallback is tested through the engine-owned
+presentation path used by the player.
+
+Configure a runtime build with `-DTB_TEST_VULKAN=ON` to register the actual GPU
+fixtures with CTest, then run `ctest --test-dir BUILD -C Release -L gpu
+--output-on-failure`. The 16 cases run serially to avoid overlapping GPU tests;
+each fixture runs with asynchronous submissions and with `TB_VK_ASYNC=0`, both
+retaining grouped draws. Hosted machines without a GPU leave this option off.
+
+On this Windows host, all 16 GPU cases plus ten trophy, display/settings, geometry,
+submission, shader, CPU-smoke and frame-budget checks pass (26 total). The new
+runtime was packed and verified, then linked into the player while reusing 77
+unchanged translated objects. Current player SHA-256:
+`2cfe75f8d221abe655b9071ae5e1d60cf1bfec1d743fcdd6964d4e2f51cee4df`.
+The builder resource tree also passes file-hash, allowlist and runtime ABI
+verification. A separate synthetic player and launcher compiled from those
+assembled resources using local MSVC ClangCL passed installed-file hashes,
+all seven launcher screens, save/cancel/defaults, keyboard-selected 50%,
+controller-selected 75%, and relaunch at both reduced scales with the same
+executable. This verifies the local consumer path; it does not validate a
+downloaded standalone builder or its bundled Zig toolchain. Packaging tests
+now avoid requiring Windows symlink privilege for POSIX-only AppRun fixtures.
+
+The fresh 75% Battle route completed menus, map selection, briefing, gameplay,
+pause/resume, 960x540/1024x768/1280x720 window sizes, a 2560x1440 borderless
+round trip, and debriefing. Strict execution, visibility, overlay consistency,
+renderer checks and normal exit passed. Reviewed captures preserve HUD/menu
+content and 16:9 letterboxing at 1024x768. Its short timing interval remains
+pending boundary OCR review and is not performance acceptance. The earlier
+transition attempt timed out and remains rejected. A separate 50% Battle run
+exited normally with strict execution and reviewed live gameplay, but failed
+countdown OCR; retain its images as visual evidence only.
+
+The 50% Campaign route also passes gameplay, pause/resume, the same resize and
+borderless checks, strict execution, visibility, renderer checks and normal
+exit. Its initial attempt stopped at briefing because reduced-resolution OCR
+lost the stylized CONTROLS heading. The route now recognizes the first mission's
+objective and Continue together, with negative cases, and uses the same cue to
+reject briefing screens as gameplay boundaries. The failed navigation attempt
+is retained separately. The 15-second Campaign diagnostic completed 43.4 GAME
+FPS; the different workload and short interval do not establish a speedup over
+Battle or sustained performance acceptance.
+
+Evidence, exact source/artifact hashes and original logs are retained under
+`analysis/performance/resolution-step6/`.
+
+Closing the 75% Campaign window exposed the earlier Intel driver access
+violation again. The walker had returned immediately after requesting quit,
+while the presenter could still use its native window. Windows releases windows
+owned by a terminating thread ([thread termination semantics](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-thread)).
+The Vulkan owner now stays alive during the quit grace period, waits for the
+present worker to stop, then completes renderer/swapchain/window cleanup on
+its owner thread. The present worker also checks the stop flag after waking.
+
+Allowing guest cleanup to progress exposed a missing `sceNpTrophyAbortHandle`
+import. The port now registers that call against the trophy module's real
+handle state. Aborting marks a handle unusable until destruction/recreation;
+later operations return ABORT, and an abort during the installed callback
+prevents registration completion from being queued. This follows the permanent
+handle-abort model in [RPCS3's trophy implementation](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/Cell/Modules/sceNpTrophy.cpp).
+The CPU fixture covers initialization, invalid handles, repeated abort, later
+operations, callback abort and handle reuse. Strict failure reporting remains
+enabled. The new fixture is included in bundle builds and the game-free tool
+allowlist.
+
+On the final player, active-window closes at 50%, 75% and Native all pass with
+strict execution, exit code 0, owner-thread renderer cleanup and all render
+workers joined. These close probes deliberately have no gameplay timing marker;
+their parent measurement harness rejects them as benchmarks, while their child
+session records establish successful shutdown. The previously crashing 75%
+Campaign route also now exits normally with strict execution and no renderer
+failure. Earlier driver-crash, missing-HLE and OCR-rejected attempts remain
+rejected in the retained evidence. All 56 Python cases pass with two platform
+skips; 31 affected cases were rechecked after the cleanup changes.
+
+The final 50% Battle route also completes pause/resume, three window sizes,
+a borderless round trip, debriefing and normal shutdown with strict execution
+and no renderer failures. The final local resource tree verifies, and the
+synthetic consumer relinked against the final runtime passes launcher
+save/relaunch checks again at 50% and 75%.
+
+Windows gameplay coverage includes Battle and Campaign at both reduced presets;
+window transitions are covered at both presets. The earlier successful 75%
+Battle and 50% Campaign transition runs used the initial Step 6 player; final
+shutdown fixes were checked in 50% Battle, 75% Campaign and all three close
+probes. Step 6 remains open for Linux gameplay/window validation and a newly
+built/downloaded standalone builder. Linux execution is unavailable
+on this Windows host (WSL is not installed). These correctness checks do not
+establish the sustained 60 GAME FPS performance target.
