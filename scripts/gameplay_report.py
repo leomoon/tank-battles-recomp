@@ -90,3 +90,41 @@ def compare(reports,allowed_variants=(),candidate_plan=None):
             if key in allowed_variants or key in build_variants:continue
             if r['manifest'].get(key)!=first.get(key):raise ValueError('Incompatible '+key)
     return reports
+
+
+def paired_cadence(rows, start_ns, end_ns):
+    """Map independent process clocks onto one host's monotonic interval.
+
+    Only valid for peers on the same host. Separate-host captures must align
+    each peer's local interval explicitly, never compare raw monotonic clocks.
+    """
+    if end_ns-start_ns < 60_000_000_000:
+        raise ValueError('Need at least 60 seconds')
+    if not rows:
+        raise ValueError('Missing peer timing')
+    origins = [r['monotonic_ns']-r['elapsed_ns'] for r in rows]
+    if max(origins)-min(origins)>1_000_000:
+        raise ValueError('Peer clock origin changed')
+    origin=origins[0]
+    if rows[0]['monotonic_ns']-rows[0]['elapsed_ns']>start_ns or rows[-1]['monotonic_ns']<end_ns:
+        raise ValueError('Incomplete peer timing coverage')
+    out={}
+    for i,name in enumerate(STREAMS):
+        events=[origin+t for row in rows for t in row['events'][i]]
+        if any(b<=a for a,b in zip(events,events[1:])):
+            raise ValueError('Nonmonotonic or duplicate peer events')
+        if not events or events[0]>start_ns or events[-1]<end_ns:
+            raise ValueError('Incomplete '+name+' event coverage')
+        selected=[t for t in events if start_ns<=t<end_ns]
+        if len(selected)<2:
+            raise ValueError('Insufficient '+name)
+        intervals=[(b-a)/1e6 for a,b in zip(selected,selected[1:])]
+        boundaries=[(selected[0]-start_ns)/1e6,*intervals,(end_ns-selected[-1])/1e6]
+        if max(boundaries)>=5000:
+            raise ValueError('Stopped '+name+' stream')
+        seconds=(end_ns-start_ns)/1e9
+        buckets=[sum(start_ns+n*1_000_000_000<=t<start_ns+(n+1)*1_000_000_000 for t in selected) for n in range(int(seconds))]
+        out[name]=dict(frames=len(selected),fps=len(selected)/seconds,
+                       p50_ms=percentile(intervals,.5),p95_ms=percentile(intervals,.95),
+                       p99_ms=percentile(intervals,.99),max_ms=max(intervals),one_second_frames=buckets)
+    return out

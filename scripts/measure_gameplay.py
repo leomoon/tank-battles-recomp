@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Run one isolated visible gameplay measurement; operator marks a verified live scene."""
+"""Measure verified gameplay; use online-pair / online-pair-review for paired peers.
+
+See docs/ONLINE_FPS_BASELINES.md for paired capture and visibility review.
+"""
 import argparse,hashlib,json,os,re,subprocess,sys,time,tomllib
 from pathlib import Path
 from boot_session import run_session
@@ -249,4 +252,11 @@ def main():
   report=summarize(out,minimum_seconds=a.profile_seconds);(out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(report['cadence'])
  else:raise SystemExit('No verified live-gameplay start marker; diagnostic only')
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+ if len(sys.argv)>1 and sys.argv[1]=='online-pair':
+  from online_gameplay import capture
+  capture(sys.argv[2:])
+ elif len(sys.argv)>1 and sys.argv[1]=='online-pair-review':
+  from online_gameplay import review
+  review(sys.argv[2:])
+ else:main()
