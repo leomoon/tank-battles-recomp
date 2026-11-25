@@ -10,6 +10,18 @@ from build_identity import measurement_build, read_command_log
 
 
 class BuildTests(unittest.TestCase):
+    def test_manual_countdown_is_a_fallback_for_unreadable_ocr(self):
+        from script_gameplay import boundary_countdown
+        process=Mock()
+        self.assertEqual(boundary_countdown(Path('unused'),'gameplay-before','120',True,process),'120')
+        process.poll.assert_not_called()
+        with tempfile.TemporaryDirectory() as tmp:
+            out=Path(tmp);(out/'gameplay-before.png').write_bytes(b'boundary')
+            process.poll.return_value=0
+            with self.assertRaisesRegex(RuntimeError,'Boundary review not supplied'):
+                boundary_countdown(out,'gameplay-before','unreadable',True,process)
+            self.assertTrue((out/'gameplay-before-review-request.json').is_file())
+
     def test_campaign_briefing_requires_objective_and_continue_when_heading_is_lost(self):
         from script_gameplay import first_campaign_briefing, invalid_ending_scene
         self.assertTrue(first_campaign_briefing('CONTROLS: left stick MISSION: destroy all enemy units. CONTINUE'))
@@ -36,11 +48,14 @@ class BuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=base,prefix='scale-forwarding-') as tmp:
             for percent in (50,75,100,150,200,300):
                 output=Path(tmp)/('native-'+str(percent))
-                arguments=['script_gameplay.py','--output',str(output),'--render-scale',str(percent)]
+                arguments=['script_gameplay.py','--output',str(output),'--render-scale',str(percent),'--raw-spu-idle','0']
+                if os.name=='nt':arguments+=['--cpu-accounting']
                 with patch('sys.argv',arguments),patch('subprocess.Popen',side_effect=InterceptLaunch) as launch:
                     with self.assertRaises(InterceptLaunch):main()
                     command=launch.call_args.args[0]
                     self.assertEqual(command[command.index('--render-scale')+1],str(percent))
+                    self.assertEqual(command[command.index('--raw-spu-idle')+1],'0')
+                    if os.name=='nt':self.assertIn('--cpu-accounting',command)
                 arguments[2]=str(Path(tmp)/('repeat-'+str(percent)))
                 arguments+=['--repeat','2']
                 with patch('sys.argv',arguments),patch('subprocess.run',return_value=Mock(returncode=0)) as launch:
@@ -50,6 +65,8 @@ class BuildTests(unittest.TestCase):
                     for call in launch.call_args_list:
                         command=call.args[0]
                         self.assertEqual(command[command.index('--render-scale')+1],str(percent))
+                        self.assertEqual(command[command.index('--raw-spu-idle')+1],'0')
+                        if os.name=='nt':self.assertIn('--cpu-accounting',command)
     def test_end_capture_uses_measurement_clock_not_harness_wait_start(self):
         from script_gameplay import interval_end_ns
         manifest=dict(interval_seconds=[15.,75.])

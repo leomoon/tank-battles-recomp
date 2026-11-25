@@ -3,6 +3,26 @@ import argparse,hashlib,json,re
 from pathlib import Path
 
 EDITS={
+ 'runtime/syscalls/sys_semaphore.c':[
+ ('    int64_t r = sys_semaphore_wait_impl(ctx);',
+  '''    const uint64_t tb_start = PS3_FT_ON() ? ps3_ft_now() : 0;
+    const uint32_t tb_sem = (uint32_t)ctx->gpr[3];
+    int64_t r = sys_semaphore_wait_impl(ctx);
+    if (tb_start) ps3_ft_span(TB_FT_SEMAPHORE_WAIT, (uint32_t)ctx->thread_id,
+                              tb_sem, (uint32_t)r, tb_start, ps3_ft_now());'''),
+ ('int64_t sys_semaphore_post(ppu_context* ctx)\n{',
+  '''static int64_t tb_semaphore_post_impl(ppu_context* ctx);
+int64_t sys_semaphore_post(ppu_context* ctx)
+{
+    const uint64_t start = PS3_FT_ON() ? ps3_ft_now() : 0;
+    const uint32_t sem = (uint32_t)ctx->gpr[3], count = (uint32_t)ctx->gpr[4];
+    const int64_t result = tb_semaphore_post_impl(ctx);
+    if (start && !result) ps3_ft_span(TB_FT_SEMAPHORE_POST, (uint32_t)ctx->thread_id,
+                                     sem, count, start, ps3_ft_now());
+    return result;
+}
+static int64_t tb_semaphore_post_impl(ppu_context* ctx)
+{''')],
  'libs/network/sceNpTrophy.c':[
  ('    int in_use;\n} TrophyHandle;', '    int in_use;\n    int aborted;\n} TrophyHandle;'),
  ('static TrophyHandle  s_handles[SCE_NP_TROPHY_MAX_HANDLES + 1];',
@@ -123,6 +143,29 @@ s32 tb_trophy_abort_handle(SceNpTrophyHandle handle)
  ('            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,',
   '            if (!f && !m) tb_rsx_texture_capture(location,offset,fmt,w,h,pitch,face,tl->face_bytes,g.tex_staging,tl->dst_row_bytes,tl->rows);\n            g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,')],
  'libs/video/cellGcmSys.c':[
+ ('    if (waiting) s_flip_tick_seq = s_flip_req_seq;',
+  '''    if (waiting) {
+        s_flip_tick_seq = s_flip_req_seq;
+        if (PS3_FT_ON()) { const uint64_t t = ps3_ft_now();
+            ps3_ft_span(TB_FT_FLIP_TICK, 0, s_flip_tick_seq, s_fifo_flips_reached, t, t); }
+    }'''),
+ ('                       ps3_ft_span(PS3_FT_FLIP_REQ, 0, bufferId, (uint32_t)in_fifo, t, t); }',
+  '''                       ps3_ft_span(PS3_FT_FLIP_REQ, 0, bufferId, (uint32_t)in_fifo, t, t);
+                       ps3_ft_span(TB_FT_FLIP_SEQUENCE, 0, s_flip_req_seq, bufferId, t, t); }'''),
+ ('                               ps3_ft_span(PS3_FT_FLIP_FIFO, 0, w & 7u, 0, t, t); }',
+  '''                               ps3_ft_span(PS3_FT_FLIP_FIFO, 0, w & 7u, 0, t, t);
+                               ps3_ft_span(TB_FT_FLIP_EXECUTED, 0, s_flip_req_seq, w & 7u, t, t); }'''),
+ ('        g_ps3_guest_caller(s_vblank_handler_opd, (uint64_t)s_vblank_count,\n                           0, 0, 0, 0, 0, 0, 0);',
+  '''        const uint64_t tb_start = PS3_FT_ON() ? ps3_ft_now() : 0;
+        const u32 tb_count = s_vblank_count;
+        g_ps3_guest_caller(s_vblank_handler_opd, (uint64_t)s_vblank_count,
+                           0, 0, 0, 0, 0, 0, 0);
+        if (tb_start) ps3_ft_span(TB_FT_GCM_CALLBACK, 0, tb_count, 1, tb_start, ps3_ft_now());'''),
+ ('            g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0, 0, 0, 0, 0);',
+  '''            const uint64_t tb_start = PS3_FT_ON() ? ps3_ft_now() : 0;
+            const u32 tb_seq = s_flip_tick_seq;
+            g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0, 0, 0, 0, 0);
+            if (tb_start) ps3_ft_span(TB_FT_GCM_CALLBACK, 0, tb_seq, 2, tb_start, ps3_ft_now());'''),
  ('    extern u32 g_rsx_last_reference;\n    /* #466:',
   '    extern u32 g_rsx_last_reference;\n    if ((m==0x0050u || m==0x0104u || m==0x1D70u || m==0x1D74u || m==0x1800u) && rsx_draw_engine_enabled()) rsx_draw_engine_flush();\n    /* #466:'),
  ('                        atomic_thread_fence(memory_order_release);\n                        vm_write32(la, v);',
@@ -255,6 +298,8 @@ def main():
  root=Path(args.sdk).resolve();out=Path(args.output);out.mkdir(parents=True,exist_ok=True);records=[]
  for relative,edits in EDITS.items():
   original=root/relative;text=original.read_text();digest=hashlib.sha256(text.encode()).hexdigest()
+  if relative in ('runtime/syscalls/sys_semaphore.c','libs/video/cellGcmSys.c'):
+   text='#include "'+str(Path(__file__).resolve().parent.parent/'frame_budget.h')+'"\n#include "ps3emu/ps3_ftrace.h"\n'+text
   for function,kind in PROFILE_FUNCTIONS.get(relative,{}).items():
    pattern = r'(^static [^;{]*?\b'+function+r'\([^;{]*?\)\n\{)'
    text,n = re.subn(pattern, lambda m: m[0]+'\n    TB_RENDER_SCOPE('+str(kind)+');', text, flags=re.M)

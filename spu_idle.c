@@ -4,6 +4,7 @@
 #include "win32_compat.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 extern void (*g_spu_idle_poll_hook)(spu_context*);
 
@@ -54,4 +55,5 @@ void tank_battles_spu_idle_init(void)
     const int enabled = setting && strcmp(setting, "1") == 0;
 #endif
     g_spu_idle_poll_hook = enabled ? tank_battles_spu_poll : NULL;
+    fprintf(stderr, "[spu-idle] bounded wait %s\n", enabled ? "enabled" : "disabled");
 }

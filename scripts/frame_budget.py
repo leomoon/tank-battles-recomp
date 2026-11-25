@@ -11,8 +11,9 @@ A frame is the time between two flips the RSX walker reached (FLIP_FIFO).
 For the walker thread every frame splits into exclusive parts that add up to
 the frame: FIFO drain (of which GPU fence waits are a subset), swapchain
 present, frame-clock sleep and the remainder (ticks, event pumping, loop).
-For each guest PPU thread it splits into blocked (syscall, usleep poll or HLE
-import) and running. Put latency is the delay from the guest moving the FIFO
+For each guest PPU thread it splits into traced calls (syscall, usleep poll or
+HLE import) and untraced wall time, which also includes scheduling and untraced
+waiting. Separate Windows OS counters measure CPU execution. Put latency is the delay from the guest moving the FIFO
 put register to the next drain that starts after it.
 """
 import argparse
@@ -26,6 +27,8 @@ from pathlib import Path
 
 SYSCALL, USLEEP, DRAIN, FLIP_FIFO, FLIP_REQ, PRESENT, HLE = 1, 2, 7, 8, 9, 10, 15
 CLOCK_SLEEP, PUT_ADVANCE, FENCE_WAIT, DRAIN_CALL, VBLANK, PRESENT_FINISH, BATCH_SUBMIT, PUBLISH = 16, 17, 18, 19, 20, 21, 22, 23
+FLIP_SEQUENCE, FLIP_EXECUTED, FLIP_TICK, GCM_CALLBACK = 33, 34, 35, 36
+SEMAPHORE_WAIT, SEMAPHORE_POST, PRESENT_QUEUE, PRESENT_JOB = 37, 38, 39, 40
 COUNT, GPU_CMD, GPU_PASS = 24, 25, 26
 # frame_budget.h TB_FC_* ids, in order from 1.
 COUNTER_NAMES = ('queue_submit', 'alloc_memory', 'create_image', 'create_buffer', 'render_pass', 'barrier',
@@ -154,6 +157,54 @@ def summary(values):
     return dict(mean=statistics.fmean(values), p50=percentile(values, .5), p95=percentile(values, .95), max=max(values))
 
 
+def frame_dependencies(spans):
+    """Match only unique sequence IDs inside the trace; never pair by proximity."""
+    def unique(kind, flip_callback=False):
+        values={}
+        for row in spans:
+            if row[0]==kind and (not flip_callback or row[3]==2):
+                values.setdefault(row[2],[]).append(row)
+        return {seq:rows[0] for seq,rows in values.items() if len(rows)==1}
+    requests,executed,ticks,callbacks=(unique(FLIP_SEQUENCE),unique(FLIP_EXECUTED),
+                                      unique(FLIP_TICK),unique(GCM_CALLBACK,True))
+    pairs=[]
+    for seq in requests.keys() & executed.keys() & ticks.keys() & callbacks.keys():
+        req,run,tick,cb=(table[seq] for table in (requests,executed,ticks,callbacks))
+        # Executed records carry a request-sequence snapshot. More than one
+        # outstanding request can make it ambiguous; reject reversed order or
+        # a different display buffer rather than manufacture a latency chain.
+        if req[3]!=run[3] or not req[4]<=run[4]<=tick[4]<=cb[4]:continue
+        pairs.append(dict(sequence=seq,request_ms=req[4],executed_ms=run[4],tick_ms=tick[4],
+                          callback_start_ms=cb[4],callback_end_ms=cb[5]))
+    delays={label:summary([p[end]-p[start] for p in pairs]) for label,start,end in (
+        ('request_to_executed_ms','request_ms','executed_ms'),
+        ('executed_to_tick_ms','executed_ms','tick_ms'),
+        ('tick_to_callback_ms','tick_ms','callback_start_ms'),
+        ('callback_work_ms','callback_start_ms','callback_end_ms'))}
+    queues,jobs=unique(PRESENT_QUEUE),unique(PRESENT_JOB)
+    waits=[jobs[seq][4]-queues[seq][4] for seq in queues.keys() & jobs.keys()
+           if jobs[seq][4]>=queues[seq][4]]
+    semaphores={}
+    for kind,who,sem,value,start,end in spans:
+        if kind not in (SEMAPHORE_WAIT,SEMAPHORE_POST):continue
+        bucket=semaphores.setdefault((who,sem),dict(waits=[],timeouts=0,posts=0,tokens=0))
+        if kind==SEMAPHORE_WAIT:
+            bucket['waits'].append(end-start)
+            bucket['timeouts']+=int(value!=0)
+        else:bucket['posts']+=1;bucket['tokens']+=value
+    sems=[dict(thread=who,semaphore=sem,waits=len(b['waits']),failed_waits=b['timeouts'],
+               total_wait_ms=sum(b['waits']),wait_ms=summary(b['waits']),posts=b['posts'],tokens=b['tokens'])
+          for (who,sem),b in semaphores.items()]
+    return dict(status='observed' if ticks else 'unavailable',matched_flip_sequences=len(pairs),
+                delays=delays,present_queue_delay_ms=summary(waits),
+                present_job_ms=summary([r[5]-r[4] for r in spans if r[0]==PRESENT_JOB]),
+                semaphores=sorted(sems,key=lambda r:-r['total_wait_ms']),sequences=sorted(pairs,key=lambda r:r['request_ms']),
+                limitations=['Only unique, ordered request/executed/tick/callback sequences are matched.',
+                             'Executed sequence is a request snapshot; ambiguous or reversed records are excluded.',
+                             'Callback and semaphore spans are wall time and can include preemption.',
+                             'Present serials belong to a separate queue; do not equate them with guest flip sequences.'])
+
+
 def analyze(spans, names=None, nids=None):
     names, nids = names or {}, nids or {}
     flips = sorted(s[4] for s in spans if s[0] == FLIP_FIFO)
@@ -278,7 +329,7 @@ def gpu_per_frame(spans, frames):
 
 
 def headroom(result):
-    """Busy time of each candidate critical resource per frame against 60 Hz."""
+    """Scope-based resource estimates; untraced wall time is not OS CPU time."""
     guests = result['guest_threads']
     walker = result['walker_ms_per_frame']
     parts = dict(main_guest_thread=guests[0]['running_ms'] if guests else 0.0,
@@ -287,7 +338,8 @@ def headroom(result):
     if result.get('gpu'):
         parts['gpu_busy'] = result['gpu']['busy_ms']
     limiter = max(parts, key=parts.get)
-    return dict(budget_ms=BUDGET_MS, busy_ms=parts, limiter=limiter, headroom_ms=BUDGET_MS - parts[limiter])
+    return dict(budget_ms=BUDGET_MS, busy_ms=parts, limiter=limiter, headroom_ms=BUDGET_MS - parts[limiter],
+                basis='Scope wall-time estimates: CPU entries include untraced waits and scheduling delay. See os_cpu for Windows execution counters.')
 
 
 def render(result):
@@ -307,6 +359,11 @@ def render(result):
         lines.append(f"present thread {result['present_thread_ms_per_frame']:.2f} ms/frame (off the walker)")
     if result.get('vblank_hz'):
         lines.append(f"vblank beat {result['vblank_hz']:.2f} Hz")
+    dependency=result.get('frame_dependencies',{})
+    if dependency.get('status')=='observed':
+        lines.append(f"sequence-linked flip chains: {dependency['matched_flip_sequences']}")
+        for label,value in dependency['delays'].items():
+            if value:lines.append(f"  {label}: mean {value['mean']:.3f}, p95 {value['p95']:.3f}, max {value['max']:.3f}")
     p = result['put_to_drain_ms']
     if p:
         lines.append(f"put->drain ms: mean {p['mean']:.3f} p50 {p['p50']:.3f} p95 {p['p95']:.3f} max {p['max']:.3f} "
@@ -324,13 +381,21 @@ def render(result):
         lines.append('work per frame: ' + ', '.join(f"{k} {v:.1f}" for k, v in sorted(result['counters'].items())))
     if result.get('headroom'):
         h = result['headroom']
-        lines.append('busy ms/frame vs %.2f budget: ' % h['budget_ms'] +
+        lines.append('scope estimates ms/frame vs %.2f budget: ' % h['budget_ms'] +
                      '  '.join(f"{k} {v:.2f}" for k, v in h['busy_ms'].items()) +
                      f"; limiter {h['limiter']}, headroom {h['headroom_ms']:+.2f} ms")
+        lines.append(h['basis'])
+    cpu=result.get('os_cpu',{})
+    if cpu.get('status')=='observed':
+        lines.append(f"Windows OS CPU execution: {cpu['process_logical_cores']:.3f} process cores, "
+                     f"{cpu['process_cpu_ms_per_frame']:.2f} CPU ms/completed frame "
+                     f"over {cpu['coverage_seconds']:.2f}s / {cpu['completed_frames']} completed frames")
+        for thread in cpu['threads'][:8]:
+            lines.append(f"  {thread['name']:30s} {thread['cpu_ms_per_frame']:6.2f} CPU ms/frame, {thread['logical_cores']:.3f} cores")
     lines.append('guest threads (ms/frame):')
     for g in result['guest_threads'][:8]:
         top = ', '.join(f"{label} {ms:.2f}" for label, ms in g['top_blocking_ms_per_frame'])
-        lines.append(f"  {g['tid']:>3} {g['name'][:24]:24s} running {g['running_ms']:6.2f} blocked {g['blocked_ms']:6.2f}  [{top}]")
+        lines.append(f"  {g['tid']:>3} {g['name'][:24]:24s} untraced {g['running_ms']:6.2f} traced calls {g['blocked_ms']:6.2f}  [{top}]")
     return '\n'.join(lines)
 
 
@@ -368,6 +433,9 @@ def report(trace, build_dir='build-vulkan', json_path=None):
     result['materializations'] = materializations(spans)
     result['gpu'] = gpu_per_frame(spans, frames)
     result['headroom'] = headroom(result)
+    result['frame_dependencies'] = frame_dependencies(spans)
+    from windows_cpu_report import analyze as os_cpu
+    result['os_cpu'] = os_cpu(Path(trace).parent)
     result['trace_header'] = header
     if json_path:
         Path(json_path).write_text(json.dumps(result, indent=2) + '\n')

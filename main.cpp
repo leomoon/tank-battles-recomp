@@ -298,11 +298,15 @@ static DWORD WINAPI present_worker(LPVOID)
 #endif
     while (!render_stopping.load(std::memory_order_acquire)) {
         PresentQueue& q = present_queue();
+        uint64_t job_start = 0;
+        unsigned job_serial = 0;
         {
             std::unique_lock<std::mutex> lock(q.mu);
             q.cv.wait(lock, [&q] { return render_stopping.load(std::memory_order_acquire) || q.requested != q.finished; });
             if (render_stopping.load(std::memory_order_acquire)) break;
             q.finished = q.requested;   /* later requests complete earlier ones */
+            job_serial = q.finished;
+            job_start = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
             /* VSYNC flips become visible at the vblank, as on the console:
              * show the frame on the next beat rather than whenever the walker
              * reached its flip, so the display cadence is the beat's. */
@@ -315,6 +319,7 @@ static DWORD WINAPI present_worker(LPVOID)
         const uint64_t t0 = tb_frame_budget_on() ? tb_frame_budget_now() : 0;
         rsx_vulkan_backend_present_finish();
         if (t0) tb_frame_budget_span(TB_FT_PRESENT_FINISH, 0, t0, tb_frame_budget_now());
+        if (job_start) tb_frame_budget_span(TB_FT_PRESENT_JOB, job_serial, job_start, tb_frame_budget_now());
     }
     return 0;
 }
@@ -344,7 +349,8 @@ static void present_frame_now(void)
     if (present_thread_on()) {
         rsx_vulkan_backend_present_begin();
         PresentQueue& q = present_queue();
-        { std::lock_guard<std::mutex> lock(q.mu); q.requested++; }
+        { std::lock_guard<std::mutex> lock(q.mu); q.requested++;
+          tb_frame_budget_mark(TB_FT_PRESENT_QUEUE, q.requested, 0); }
         q.cv.notify_one();
         return;
     }

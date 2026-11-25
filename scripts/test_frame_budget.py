@@ -30,6 +30,25 @@ def two_frames():
 
 
 class FrameBudgetTests(unittest.TestCase):
+    def test_dependencies_require_unique_ordered_sequences_and_matching_buffers(self):
+        from frame_budget import frame_dependencies, FLIP_SEQUENCE,FLIP_EXECUTED,FLIP_TICK,GCM_CALLBACK,SEMAPHORE_WAIT,SEMAPHORE_POST,PRESENT_QUEUE,PRESENT_JOB
+        rows=[(FLIP_SEQUENCE,0,9,1,0.,0.),(FLIP_EXECUTED,0,9,1,3.,3.),
+              (FLIP_TICK,0,9,8,16.,16.),(GCM_CALLBACK,0,9,2,16.4,16.6),
+              (SEMAPHORE_WAIT,1,4,0,2.,16.7),(SEMAPHORE_POST,2,4,1,16.5,16.6),
+              (PRESENT_QUEUE,0,20,0,4.,4.),(PRESENT_JOB,0,20,0,4.1,17.)]
+        result=frame_dependencies(rows)
+        self.assertEqual(result['matched_flip_sequences'],1)
+        self.assertAlmostEqual(result['delays']['tick_to_callback_ms']['mean'],.4)
+        self.assertEqual(result['delays']['executed_to_tick_ms']['mean'],13)
+        self.assertAlmostEqual(result['present_queue_delay_ms']['mean'],.1)
+        self.assertEqual(result['semaphores'][0]['thread'],1)
+        self.assertEqual(result['semaphores'][0]['waits'],1)
+        self.assertEqual(result['semaphores'][1]['tokens'],1)
+        # Duplicate, stale and mismatched-buffer records must not become a chain.
+        self.assertEqual(frame_dependencies(rows+[rows[1]])['matched_flip_sequences'],0)
+        self.assertEqual(frame_dependencies([rows[0],(FLIP_EXECUTED,0,9,2,3.,3.),*rows[2:]])['matched_flip_sequences'],0)
+        self.assertEqual(frame_dependencies([rows[0],(FLIP_EXECUTED,0,9,1,20.,20.),*rows[2:]])['matched_flip_sequences'],0)
+        self.assertEqual(frame_dependencies([])['status'],'unavailable')
     def test_materialization_resources_keep_location_and_operation_separate(self):
         from frame_budget import materializations
         trace=two_frames()+[(30,0,0x1234,16,1.,1.),(30,0,0x80001234,32,2.,2.),

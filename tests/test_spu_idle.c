@@ -1,8 +1,6 @@
 #include "../spu_idle.c"
 #include <assert.h>
-#include <pthread.h>
 #include <stdio.h>
-#include <time.h>
 
 void (*g_spu_idle_poll_hook)(spu_context*);
 int yz_lockstep_enabled(void) { return 0; }
@@ -14,17 +12,17 @@ static uint64_t published_ns, maximum_latency_ns[4];
 
 static uint64_t monotonic_ns(void)
 {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (uint64_t)now.tv_sec * 1000000000u + now.tv_nsec;
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    return (uint64_t)((double)now.QuadPart * 1e9 / frequency.QuadPart);
 }
 
-static void* produce(void* unused)
+static DWORD WINAPI produce(LPVOID unused)
 {
     (void)unused;
     __atomic_store_n(&writer_ready, 1, __ATOMIC_RELEASE);
-    struct timespec delay = {0, 100000};
-    nanosleep(&delay, NULL);
+    Sleep(1);
     published_ns = monotonic_ns();
     if (action == 0) spu_channel_write(&context.ch_in_mbox, 0x12345678);
     if (action == 1)
@@ -37,7 +35,17 @@ static void* produce(void* unused)
         ReleaseSRWLockExclusive((SRWLOCK*)&context.ch_wait_lock);
         WakeAllConditionVariable((CONDITION_VARIABLE*)&context.ch_wait_cv);
     }
-    return NULL;
+    return 0;
+}
+
+static void setting(const char* value)
+{
+#ifdef _WIN32
+    assert(_putenv_s("TB_RAW_SPU_IDLE", value ? value : "") == 0);
+#else
+    if (value) assert(setenv("TB_RAW_SPU_IDLE", value, 1) == 0);
+    else assert(unsetenv("TB_RAW_SPU_IDLE") == 0);
+#endif
 }
 
 int main(void)
@@ -47,10 +55,17 @@ int main(void)
     context.pc = 0x248;
     context.image_id = 0x12D69DD7;
     context.gpr[1]._u32[0] = 0x100;
-    setenv("TB_RAW_SPU_IDLE", "0", 1);
+    setting(NULL);
+    tank_battles_spu_idle_init();
+#ifdef __linux__
+    assert(g_spu_idle_poll_hook);
+#else
+    assert(!g_spu_idle_poll_hook);
+#endif
+    setting("0");
     tank_battles_spu_idle_init();
     assert(!g_spu_idle_poll_hook);
-    setenv("TB_RAW_SPU_IDLE", "1", 1);
+    setting("1");
     tank_battles_spu_idle_init();
     assert(g_spu_idle_poll_hook);
     assert(tank_battles_spu_idle(&context));
@@ -91,14 +106,15 @@ int main(void)
             writer_ready = 0;
             context.stop_request = context.event_status = context.event_mask = 0;
             memset(local_store + 0x120, 0, 8);
-            pthread_t writer;
-            assert(pthread_create(&writer, NULL, produce, NULL) == 0);
+            HANDLE writer = CreateThread(NULL, 0, produce, NULL, 0, NULL);
+            assert(writer);
             while (!__atomic_load_n(&writer_ready, __ATOMIC_ACQUIRE)) {}
             for (int i = 0; i < 1000 && tank_battles_spu_idle(&context); ++i)
                 g_spu_idle_poll_hook(&context);
             assert(!tank_battles_spu_idle(&context));
             const uint64_t observed_ns = monotonic_ns();
-            pthread_join(writer, NULL);
+            assert(WaitForSingleObject(writer, 5000) == WAIT_OBJECT_0);
+            CloseHandle(writer);
             const uint64_t latency = observed_ns - published_ns;
             if (latency > maximum_latency_ns[action]) maximum_latency_ns[action] = latency;
             if (action == 0)

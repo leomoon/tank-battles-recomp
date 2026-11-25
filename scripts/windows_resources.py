@@ -12,8 +12,8 @@ class Memory(c.Structure):
 
 
 class WindowsResources:
-    def __init__(self,pid):
-        self.k=kernel();self.pid=pid;self.threads={}
+    def __init__(self,pid,all_threads=False):
+        self.k=kernel();self.pid=pid;self.threads={};self.all_threads=all_threads
         self.process=self.k.OpenProcess(0x0400|0x0010,False,pid)
         if not self.process:raise c.WinError(c.get_last_error())
         self.ps=c.WinDLL('psapi',use_last_error=True)
@@ -34,15 +34,21 @@ class WindowsResources:
             handle=self.k.OpenThread(0x0800,False,tid)
             if not handle:continue
             name=thread_name(self.k,handle)
-            if name in ('ppu main','tb-rsx-walker','tb-present'):self.threads[tid]=(handle,name)
+            if self.all_threads or name in ('ppu main','tb-rsx-walker','tb-present'):
+                self.threads[tid]=(handle,name or f'unnamed-{tid}')
             else:self.k.CloseHandle(handle)
         threads=[]
         for tid,(handle,name) in self.threads.items():
-            try:threads.append(dict(tid=tid,name=name,cpu_ns=self.times(self.k.GetThreadTimes,handle)))
+            try:
+                # A thread can be observed before it assigns its description.
+                name=thread_name(self.k,handle) or name
+                self.threads[tid]=(handle,name)
+                threads.append(dict(tid=tid,name=name,cpu_ns=self.times(self.k.GetThreadTimes,handle)))
             except OSError:continue
         return dict(status='available',monotonic_ns=time.perf_counter_ns(),process_cpu_ns=self.times(self.k.GetProcessTimes,self.process),
                     working_set_bytes=memory.WorkingSetSize,private_bytes=memory.PrivateUsage,
-                    peak_working_set_bytes=memory.PeakWorkingSetSize,threads=threads)
+                    peak_working_set_bytes=memory.PeakWorkingSetSize,threads=threads,
+                    thread_coverage='all_process_threads' if self.all_threads else 'main_walker_present')
 
     def close(self):
         for handle,_ in self.threads.values():self.k.CloseHandle(handle)

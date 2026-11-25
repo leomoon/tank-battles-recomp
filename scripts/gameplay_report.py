@@ -3,13 +3,32 @@ import json,math,re
 from pathlib import Path
 
 STREAMS=('guest_flip','completed_frame','window_present')
-COMPAT=('scene','guest_resolution','internal_surfaces','window_size','gpu','driver','audio','input_source','build_type','compiler','effective_flags','diagnostics','sdk_verbose','overlay','executable_sha256','sdk_manifest_sha256','source_commit','source_inputs_sha256','submission_mode','texture_decode_mode','depth_conversion','color_readback_mode','draw_remap_mode','fence_wait_mode','label_publication','batch_submission','surface_blits','vblank_hz','actual_audio','swapchain_sizes','render_scale','window_mode','fxaa')
+COMPAT=('scene','guest_resolution','internal_surfaces','window_size','gpu','driver','audio','input_source','build_type','compiler','effective_flags','diagnostics','sdk_verbose','overlay','executable_sha256','sdk_manifest_sha256','source_commit','source_inputs_sha256','submission_mode','texture_decode_mode','depth_conversion','color_readback_mode','draw_remap_mode','fence_wait_mode','label_publication','batch_submission','surface_blits','vblank_hz','actual_audio','swapchain_sizes','render_scale','window_mode','fxaa','raw_spu_idle')
+
+class FrameProgress:
+    """Detect a stopped completed-frame stream inside an active timing window."""
+    def __init__(self):
+        self.frames=None
+        self.advanced_ns=None
+        self.active=False
+
+    def observe(self,frames,now_ns,active):
+        entering=active and not self.active
+        self.active=active
+        if not active or entering or self.frames is None or frames!=self.frames:
+            self.frames=frames
+            self.advanced_ns=now_ns
+            return None
+        if now_ns-self.advanced_ns>=5_000_000_000:
+            return dict(reason='No completed game frames for five seconds',completed_frames=frames,
+                        last_progress_qpc_ns=self.advanced_ns,observed_qpc_ns=now_ns)
+        return None
 
 def renderer_failures(log):
     pattern=r'\[(?:rsx engine|RSX vulkan)\].*(?:failed|unsupported|unhandled|skipped|object table full|stale .* release)'
     failures=[]
     for line in log.splitlines():
-        if re.search(pattern,line,re.I):
+        if re.search(pattern,line,re.I) or re.search(r'\[cellGcmSys\].*FIFO (?:resync|walker circling)',line):
             failures.append(line)
             if len(failures)>=64:break
     return failures
@@ -51,7 +70,7 @@ def summarize(directory, minimum_seconds=60):
     return dict(manifest=m,cadence=out,scene_verification='pending human review of retained boundary images' if pending else 'verified',baseline_eligible=not pending and m['live_gameplay_verified'] and not m.get('quick_bench',False) and not any(m['diagnostics'].values()) and m.get('sdk_verbose') is False,scope='Timing measures selected completed guest serials, not pixel uniqueness or simulation speed. Confirm scene and wall-clock progression separately.')
 
 def compare(reports,allowed_variants=(),candidate_plan=None):
-    if set(allowed_variants)-{'overlay','texture_decode_mode','depth_conversion','color_readback_mode','draw_remap_mode','fence_wait_mode'}:raise ValueError('Unsupported comparison variant')
+    if set(allowed_variants)-{'overlay','texture_decode_mode','depth_conversion','color_readback_mode','draw_remap_mode','fence_wait_mode','raw_spu_idle'}:raise ValueError('Unsupported comparison variant')
     if not reports or any(not r['baseline_eligible'] for r in reports):raise ValueError('Comparison needs clean baselines with verbose SDK logging explicitly disabled; keep profiles separate')
     build_variants=()
     if candidate_plan is not None:
@@ -62,6 +81,7 @@ def compare(reports,allowed_variants=(),candidate_plan=None):
     if 'color_readback_mode' in allowed_variants and {r['manifest'].get('color_readback_mode') for r in reports}!={'reference','cached'}:raise ValueError('Color readback comparison requires reference and cached modes')
     if 'draw_remap_mode' in allowed_variants and {r['manifest'].get('draw_remap_mode') for r in reports}!={'reference','cached'}:raise ValueError('Draw remap comparison requires reference and cached modes')
     if 'fence_wait_mode' in allowed_variants and {r['manifest'].get('fence_wait_mode') for r in reports}!={'blocking','poll'}:raise ValueError('Fence comparison requires blocking and poll modes')
+    if 'raw_spu_idle' in allowed_variants and {r['manifest'].get('raw_spu_idle') for r in reports}!={'0','1'}:raise ValueError('Raw-SPU comparison requires explicit polling (0) and idle wait (1) modes')
     first=reports[0]['manifest']
     for r in reports[1:]:
         for key in COMPAT:

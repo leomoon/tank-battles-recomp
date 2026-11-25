@@ -55,7 +55,7 @@ def first_campaign_briefing(text):
 
 
 def boundary_countdown(out,label,text,allow_manual,process,expected_overlay=False):
- if not allow_manual:return text
+ if not allow_manual or live_battle_timer(text):return text
  image=out/(label+'.png');digest=hashlib.sha256(image.read_bytes()).hexdigest()
  request=out/(label+'-review-request.json')
  request.write_text(json.dumps(dict(image=image.name,image_sha256=digest,required='Review live HUD and countdown, then write <label>-review.json with image_sha256, live_gameplay=true, countdown (0..120), reviewer and overlay_visible.')))
@@ -79,6 +79,8 @@ def main():
  parser.add_argument('--mailbox-profile',action='store_true',help='Record Linux raw SPU mailbox status counters by scene')
  parser.add_argument('--linux-symbols',action='store_true',help='Diagnostic user-space CPU samples across the Linux resource route')
  parser.add_argument('--vertex-profile',action='store_true',help='Diagnostic vertex preparation costs across the native Linux resource route')
+ parser.add_argument('--raw-spu-idle',choices=['0','1'],help='Compare original raw-SPU polling (0) with bounded idle waits (1)')
+ parser.add_argument('--cpu-accounting',action='store_true',help='Windows read-only CPU counters for every process thread')
  parser.add_argument('--render-scale',type=int,choices=[50,75,100,150,200,300],default=100)
  parser.add_argument('--expected-runtime-source',help='Require this runtime commit before a native measurement launches')
  parser.add_argument('--rsx-trace',action='store_true',help='Heavy diagnostic: three gameplay RSX state frames; never clean baseline evidence')
@@ -104,6 +106,8 @@ def main():
  if a.reference_template and not a.appimage:parser.error('--reference-template requires --appimage')
  if a.reference_template and a.render_scale!=100:parser.error('--render-scale applies only to the native player')
  if a.reference_template and a.expected_runtime_source:parser.error('--expected-runtime-source applies only to the native player')
+ if a.reference_template and (a.raw_spu_idle is not None or a.cpu_accounting):parser.error('CPU accounting and raw-SPU settings require the native player')
+ if a.cpu_accounting and os.name!='nt':parser.error('--cpu-accounting requires Windows')
  if a.repeat>1:
   out.mkdir(parents=True,exist_ok=False)
   outcomes=[]
@@ -111,6 +115,8 @@ def main():
    command=[sys.executable,__file__,'--output',str(out/f'run-{index+1}'),'--scene',a.scene,'--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
    command+=['--render-scale',str(a.render_scale)]
    if a.expected_runtime_source:command+=['--expected-runtime-source',a.expected_runtime_source]
+   if a.raw_spu_idle is not None:command+=['--raw-spu-idle',a.raw_spu_idle]
+   if a.cpu_accounting:command+=['--cpu-accounting']
    if a.rsx_trace:command+=['--rsx-trace']
    if a.reference_template:command+=['--reference-template',a.reference_template,'--appimage',a.appimage]
    if a.manual_boundaries:command+=['--manual-boundaries']
@@ -149,6 +155,8 @@ def main():
   cmd+=['--build-dir',a.build_dir,'--submit-mode',a.submit_mode,'--texture-decode-mode',a.texture_decode_mode]
   cmd+=['--render-scale',str(a.render_scale)]
   if a.expected_runtime_source:cmd+=['--expected-runtime-source',a.expected_runtime_source]
+  if a.raw_spu_idle is not None:cmd+=['--raw-spu-idle',a.raw_spu_idle]
+  if a.cpu_accounting:cmd+=['--cpu-accounting']
   if a.rsx_trace:cmd+=['--rsx-trace']
   if a.cpu_depth:cmd+=['--cpu-depth']
   if a.soak_minutes:cmd+=['--lifecycle-stats']
@@ -379,7 +387,9 @@ def main():
   event('timing-deadline',deadline_monotonic_ns=deadline)
   # Capture at the actual interval end, not several seconds later: a round
   # ending in that extra delay used to invalidate otherwise complete intervals.
-  while time.perf_counter_ns()<deadline+200_000_000 and process.poll() is None:time.sleep(.1)
+  while time.perf_counter_ns()<deadline+200_000_000 and process.poll() is None:
+   if (out/'progress-stall.json').exists():raise RuntimeError('No completed game frames for five seconds; retained progress-stall evidence')
+   time.sleep(.1)
   pad.write_text('');after=capture('gameplay-after');event('end-gameplay-boundary',ocr=after)
   if invalid_ending_scene(after) or a.scene=='battle' and not a.pending_review and not live_battle_timer((out/'gameplay-after-timer.txt').read_text()):
    event('invalid-ending-scene',reason='gameplay did not span full requested interval');(out/'invalid-scene.json').write_text(json.dumps(dict(reason='ending scene was not live gameplay')))
@@ -409,7 +419,8 @@ def main():
    first,last=countdown['gameplay-before'],countdown['gameplay-after']
    elapsed=(last['capture']-first['capture'])/1e9
    progression=(first['value']-last['value'])/elapsed if first['value'] is not None and last['value'] is not None and elapsed>0 else None
-   (out/'countdown.json').write_text(json.dumps(dict(boundaries=countdown,wall_seconds=elapsed,game_seconds_per_wall_second=progression,method='image-hash-bound visual review' if a.manual_boundaries else 'Windows OCR',limitations='Integer boundary samples; no RPCS3 reference captured on this host.'),indent=2))
+   reviewed=[label for label in countdown if (out/(label+'-review.json')).exists()]
+   (out/'countdown.json').write_text(json.dumps(dict(boundaries=countdown,wall_seconds=elapsed,game_seconds_per_wall_second=progression,method='image-hash-bound visual review' if len(reviewed)==2 else 'Windows OCR with image-hash-bound review' if reviewed else 'Windows OCR',limitations='Integer boundary samples; no RPCS3 reference captured on this host.'),indent=2))
   if a.soak_minutes:
    # Long session: Confirm every 20 s cycles rounds/results; resources sampled every 10 s.
    pid=int((out/'pid').read_text());soak_begin=time.perf_counter();soak_end=soak_begin+60*a.soak_minutes;last_press=0;samples=[]

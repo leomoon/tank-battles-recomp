@@ -6,7 +6,7 @@ from boot_session import run_session
 from port import ROOT,resolve,launch_environment
 from user_profiles import open_profile
 from diagnostic_logs import open_log
-from gameplay_report import summarize,renderer_failures
+from gameplay_report import summarize,renderer_failures,FrameProgress
 from build_identity import source_identity, measurement_build, require_runtime_source
 from host_inventory import inventory
 
@@ -15,12 +15,15 @@ def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',required=True);p.add_argument('--scene',required=True,choices=['battle','campaign']);p.add_argument('--profile',required=True);p.add_argument('--resume',action='store_true');p.add_argument('--scripted-input',help='Explicit PAD_FILE path for labeled scripted navigation/gameplay');p.add_argument('--scopes',action='store_true');p.add_argument('--overlay',action='store_true');p.add_argument('--pin-window',action='store_true',help='Float/pin only this test window across workspace switches');p.add_argument('--timeout',type=float,default=300);p.add_argument('--correctness-video',action='store_true');p.add_argument('--build-dir',default='build-vulkan');p.add_argument('--submit-mode',choices=['serial','grouped'],default='grouped');p.add_argument('--profile-seconds',type=int,default=60,help='10..60 seconds, shorter intervals require --scopes and cannot be clean baselines');p.add_argument('--decode-profile',action='store_true');p.add_argument('--texture-decode-mode',choices=['reference','specialized'],default='specialized');p.add_argument('--cpu-depth',action='store_true',help='Reference CPU depth conversion (TB_DEPTH_GPU=0); GPU conversion is the default');p.add_argument("--color-readback-cache",action="store_true");p.add_argument("--fence-poll",action="store_true");p.add_argument("--content-root",help="Isolated purchased title copy inside analysis/");p.add_argument("--lifecycle-stats",action="store_true");p.add_argument("--cpu-samples",action="store_true",help="Windows diagnostic: sample the main guest, walker and present threads during the interval");p.add_argument("--draw-remap-cache",action="store_true");p.add_argument("--draw-verify",action="store_true");p.add_argument("--quick",action="store_true",help="Short clean iteration interval; never acceptance evidence");p.add_argument("--frame-budget",action="store_true",help="Record the per-frame walker/guest timeline inside the interval");p.add_argument("--label-sync",action="store_true",help="Reference mode: wait for the GPU before every label/reference publication");p.add_argument("--vk-serial",action="store_true",help="Reference mode: submit and wait for every draw batch");p.add_argument("--page-census",action="store_true",help="Diagnostic: record CPU accesses to RSX surface memory");p.add_argument("--cpu-resolve",action="store_true",help="Reference mode: NV3089 surface blits through guest memory");p.add_argument("--vblank-hz",default="60",help="Vblank beat; 62.5 is the old 16 ms frame clock")
  p.add_argument('--mailbox-profile',action='store_true',help='Linux raw SPU mailbox diagnostic')
  p.add_argument('--vertex-profile',action='store_true',help='Linux vertex preparation cost diagnostic')
+ p.add_argument('--raw-spu-idle',choices=['0','1'],help='Compare original raw-SPU polling (0) with bounded idle waits (1)')
+ p.add_argument('--cpu-accounting',action='store_true',help='Windows read-only OS CPU counters for every process thread; no suspension or timeline hooks')
  p.add_argument('--render-scale',type=int,choices=[50,75,100,150,200,300],default=100)
  p.add_argument('--expected-runtime-source',help='Require and verify this runtime commit before launching the game')
  p.add_argument('--rsx-trace',action='store_true',help='Heavy diagnostic: retain three command/state frames at gameplay entry')
  a=p.parse_args()
  if a.mailbox_profile and sys.platform!='linux':p.error('--mailbox-profile requires Linux')
  if a.vertex_profile and sys.platform!='linux':p.error('--vertex-profile requires Linux')
+ if a.cpu_accounting and os.name!='nt':p.error('--cpu-accounting requires Windows')
  if not 10<=a.profile_seconds<=60 or a.profile_seconds!=60 and not (a.scopes or a.quick):p.error('Shorter profile intervals require --scopes or --quick and 10..60 seconds')
  build=resolve(a.build_dir)
  out=resolve(a.output)
@@ -56,6 +59,7 @@ def main():
  if a.page_census:env['TB_PAGE_CENSUS']='1'
  env['TB_GPU_RESOLVE']='0' if a.cpu_resolve else '1'
  env['TB_VBLANK_HZ']=a.vblank_hz
+ if a.raw_spu_idle is not None:env['TB_RAW_SPU_IDLE']=a.raw_spu_idle
  if a.draw_verify:env['TB_DRAW_REMAP_VERIFY']='1'
  if a.frame_budget:env.update(TB_FRAME_BUDGET_TRIGGER=str(out/'frame-budget.trigger'),TB_FRAME_BUDGET=str(out/'frame-budget.trace'),TB_FRAME_BUDGET_DELAY='5',TB_FRAME_BUDGET_SECONDS=str(a.profile_seconds))
  if a.scopes:env.update(TB_RENDER_PROFILE=str(out/'scopes.jsonl'),TB_RENDER_PROFILE_MAX_REPORTS='600')
@@ -72,7 +76,8 @@ def main():
  host=inventory();(out/'host.json').write_text(json.dumps(host,indent=2)+'\n')
  gpu=host.get('hardware',{}).get('gpu',host.get('graphics',{}))
  exe=inspected['executable'];manifest=dict(scene=a.scene,phase='unverified',live_gameplay_verified=False,interval_seconds=None,visible_entire_interval=False,strict_passed=False,guest_resolution=[1280,720],internal_surfaces=[],window_size=None,gpu=gpu,driver=('win32' if os.name=='nt' else 'x11')+'/Vulkan',audio=env.get('SDL_AUDIODRIVER','host-default'),input_source='scripted navigation, neutral player one; physical/keyboard excluded' if a.scripted_input else 'physical controller/keyboard; no synthetic PAD inputs',sdk_verbose=False,submission_mode=a.submit_mode,texture_decode_mode=a.texture_decode_mode,fence_wait_mode="poll" if a.fence_poll else "blocking",label_publication="gpu-complete" if a.label_sync else "processed",batch_submission="serial" if a.vk_serial else "async",surface_blits="guest-memory" if a.cpu_resolve else "gpu",vblank_hz=a.vblank_hz,draw_remap_mode="cached" if a.draw_remap_cache else "reference",color_readback_mode="cached" if a.color_readback_cache else "reference",depth_conversion="reference" if a.cpu_depth else "gpu",build_directory=str(build),source_inputs_sha256=hashlib.sha256(json.dumps(frozen['files'],sort_keys=True).encode()).hexdigest() if frozen else source_identity(),build_type=inspected['build_type'],compiler=inspected['compiler'],effective_flags=flags,diagnostics=dict(video=a.correctness_video,screenshots=False,textures=False,resources=False,input_trace=False,wait_trace=False,passes=False,scopes=a.scopes,frame_budget=a.frame_budget,page_census=a.page_census,texture_decode_profile=a.decode_profile,draw_verify=a.draw_verify,lifecycle_stats=a.lifecycle_stats,cpu_samples=a.cpu_samples,vertex_profile=a.vertex_profile),overlay=a.overlay,quick_bench=a.quick,source_commit=frozen['commit'] if frozen else subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),sdk_manifest_sha256=inspected['sdk_manifest_sha256'],runtime_source_commit=inspected['runtime_source_commit'],runtime_build=inspected['runtime_build'],profile=metadata,clock_origin='TB_GAMEPLAY_TIMING first event; marker and observation clocks mapped by current telemetry timestamp')
- manifest.update(render_scale=a.render_scale,window_mode='windowed',fxaa=False)
+ manifest.update(render_scale=a.render_scale,window_mode='windowed',fxaa=False,raw_spu_idle=a.raw_spu_idle or 'runtime-default')
+ manifest['diagnostics']['cpu_accounting']=a.cpu_accounting
  manifest['host_clock']=dict(name='perf_counter',implementation=time.get_clock_info('perf_counter').implementation,
   resolution_seconds=time.get_clock_info('perf_counter').resolution,
   reason='QueryPerformanceCounter matches tb_host_now on Windows; CLOCK_MONOTONIC on Linux.')
@@ -88,9 +93,9 @@ def main():
   subprocess.run(['cc','-O2',str(ROOT/'scripts/sample_gameplay_cpu.c'),'-o',str(out/'cpu-sampler')],check=True)
  def on_start(process):
   nonlocal child,resources;child=process;(out/'pid').write_text(str(process.pid))
-  if os.name=='nt' and (a.scopes or a.frame_budget):
+  if os.name=='nt' and (a.scopes or a.frame_budget or a.cpu_accounting):
    from windows_resources import WindowsResources
-   try:resources=WindowsResources(process.pid)
+   try:resources=WindowsResources(process.pid,all_threads=True)
    except OSError as error:(out/'resources-unavailable.json').write_text(json.dumps(dict(error=str(error))))
  desktop=None
  if os.name=='nt':
@@ -98,6 +103,7 @@ def main():
   desktop=WindowsDesktop()
  def watch():
   nonlocal marker,sampler
+  progress=FrameProgress()
   while not stop.wait(1):
    t=None;path=out/'gameplay.jsonl'
    if path.exists():
@@ -105,6 +111,18 @@ def main():
      last=json.loads(path.read_text().splitlines()[-1]);t=(time.perf_counter_ns()-(last['monotonic_ns']-last['elapsed_ns']))/1e9
     except (IndexError,json.JSONDecodeError):continue
    if t is None:continue
+   interval=manifest.get('interval_seconds')
+   stalled=progress.observe(last.get('completed',0),time.perf_counter_ns(),
+                            bool(interval and interval[0]<=t<=interval[1]))
+   if stalled:
+    (out/'progress-stall.json').write_text(json.dumps(stalled,indent=2)+'\n')
+    (out/'invalid-scene.json').write_text(json.dumps(stalled,indent=2)+'\n')
+    (out/'diagnostic.trigger').write_text('snapshot')
+    if desktop:
+     window=desktop.find(child.pid,title)
+     if window and window.get('visible'):
+      desktop.capture(window['window'],child.pid,out/'progress-stall.png')
+    return
    if os.name=='nt':
     if child is None:continue
     c=desktop.find(child.pid,title)
@@ -205,6 +223,9 @@ def main():
   begin,end=manifest['interval_seconds'];rows=[r for r in observations if begin<=r['seconds']<=end];manifest['visible_entire_interval']=bool(rows) and rows[-1]['seconds']>=end-1.5 and all(r['visible'] and r['window_size']==manifest['window_size'] for r in rows)
   manifest['overlay_consistent']=bool(rows) and all(r.get('overlay_consistent') for r in rows)
  (out/'measurement.json').write_text(json.dumps(manifest,indent=2)+'\n')
+ if resources and marker:
+  from windows_cpu_report import analyze
+  (out/'windows-cpu.json').write_text(json.dumps(analyze(out),indent=2)+'\n')
  if marker and a.rsx_trace:
   completed=sorted(path.name for path in (out/'rsx').glob('*.done'))
   accepted=manifest['strict_passed'] and manifest['live_gameplay_verified'] and manifest['visible_entire_interval'] and manifest['overlay_consistent'] and not manifest['renderer_failures'] and len(completed)==3

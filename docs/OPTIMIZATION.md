@@ -17,7 +17,7 @@ Use a separate result row for each hardware/OS/driver configuration. The startin
 
 The benchmark contract retains default Battle (Field of War I, default mode, neutral player one and three CPU opponents) and first campaign mission, isolated purchased profiles, real audio and 1280x720 output with unchanged internal surfaces/quality. Allow five seconds after verified gameplay entry before a 60-second interval. Confirm both boundaries and countdown progression. Use at least three clean repeats for baseline comparisons; final acceptance requires five valid Battle minutes and campaign, completed GAME FPS within 0.25% of 60, mean at most 16.71 ms, p95 at most 18 ms and p99 at most 25 ms. Initial and sustained thermal conditions must be identified separately.
 
-Keep correctness captures and profiled runs separate from clean timing. In the current renderer, defining `TB_GPU_TIMING` forces serial submission, including an empty value or `0`; leave it entirely absent when measuring default async performance. The existing `TB_FRAME_BUDGET_TRIGGER` file can arm the timeline on both platforms. CPU scope collection no longer implicitly enables GPU timing. Windows CPU stack/context-switch sampling remains unavailable.
+Keep correctness captures and profiled runs separate from clean timing. In the current renderer, defining `TB_GPU_TIMING` forces serial submission, including an empty value or `0`; leave it entirely absent when measuring default async performance. The existing `TB_FRAME_BUDGET_TRIGGER` file can arm the timeline on both platforms. CPU scope collection no longer implicitly enables GPU timing. Windows instruction sampling and OS CPU counters are available below; scheduler ready-time/context-switch evidence has not been collected.
 
 For Linux resource comparisons, add `--host-resources` to the scripted Battle route. Use an isolated, previously warmed reference profile with `--reference-template` and `--appimage` to collect the RPCS3 side. Alternate run order across pairs. Both routes use 60 Hz pacing, hold the main menu, level select, briefing and debriefing for 12 seconds each, and default to a 25-second Battle interval so an early round ending is less likely to invalidate it. The harness retains boundary screenshots, process and per-thread CPU counters at 8 Hz, and independent memory, GPU, temperature and fan samples at about 1 Hz. `host-resource-report.json` summarizes CPU time by scene and `host-sensors.jsonl` retains timestamps for checking delayed fan response. The round-end transition is bounded by the last observed live frame and the first observed debriefing, with scene search and OCR occurring in that bracket. Use the stable-scene intervals for CPU baseline comparisons and the bracket for investigating transitions. RPCS3 supplies its title-reported FPS and the native player counts completed frames.
 
@@ -155,7 +155,7 @@ The limiter is now the main guest thread (21.1 ms), with the GPU at 19.7 ms. The
 
 ### Windows CPU sampling and fast runtime relinks
 
-`--cpu-samples` (on `script_gameplay.py`, and `frame_budget.py run`) starts `scripts/sample_windows_cpu.py` 5 seconds after the gameplay marker. It samples the `ppu main`, `tb-rsx-walker` and `tb-present` threads by suspend-and-sample at about 1 kHz for the interval. Samples are symbolized with the `TankBattlesRecomp.map` that consumer builds now write through `/lldmap` (no runtime cost). Samples outside the executable mean kernel/driver time, mostly blocking. The render threads now carry Windows thread names. Sampling perturbs timing, so keep it out of clean runs.
+`--cpu-samples` (on `script_gameplay.py`, and `frame_budget.py run`) starts `scripts/sample_windows_cpu.py` 5 seconds after the gameplay marker. It samples the `ppu main`, `tb-rsx-walker` and `tb-present` threads by suspend-and-sample at about 1 kHz for the interval. Use a map verified against the measured executable; a runtime relink can invalidate an older map. An instruction address outside the executable does not distinguish DLL execution from blocking. The render threads carry Windows thread names. Sampling perturbs timing, so keep it out of clean runs.
 
 `scripts/relink_player.py --build-dir <consumer build> --bundle <bundle>` replays only the final link against another runtime bundle with the same ABI, reusing every title object. It records the bundle in `runtime-relink.json` so measurement manifests name the runtime that was actually linked.
 
@@ -284,3 +284,69 @@ the default compiler settings are unchanged. The existing build is frozen,
 and both diagnostic runs, function samples and compiler identities remain
 local under `analysis/performance/resolution-step5/`. Sustained CPU optimization
 and 60 FPS acceptance remain open. [Resolve checks and limitations](RENDER_SCALE.md)
+
+## Step 7 Windows CPU investigation
+
+`--cpu-accounting` records read-only `GetProcessTimes`/`GetThreadTimes`
+snapshots for every process thread. It does not suspend threads or enable
+renderer tracing. `scripts/windows_cpu_report.py <run>` matches the OS CPU
+deltas to completed-frame events within the same QPC snapshot bounds;
+`windows-cpu.json` reports execution time, coverage, residual CPU and session
+checks. Frame-budget reports include these counters separately from untraced
+wall time. CPU-accounting runs remain diagnostics, not clean FPS acceptance.
+
+Six verified 60-second 50% Battle intervals compared the existing raw-SPU
+polling and bounded idle-wait paths on one executable, with callback polling,
+real host audio, FXAA off and the overlay on. Run order was poll/idle,
+idle/poll, poll/idle; the last polling interval ended its round early and was
+rejected, then repeated after the third idle interval. All accepted intervals
+passed strict execution, visibility, renderer checks and normal exit.
+The measured executable was
+`353326856e8542e83cd1deafe0480283f7cb498420183de4426cd9d1df43193c`.
+
+| Median of three intervals | Raw-SPU polling | Bounded idle wait |
+| --- | ---: | ---: |
+| Completed GAME FPS | 29.83 | 29.48 |
+| Process CPU, logical cores | 2.212 | 1.315 |
+| Raw-SPU CPU, logical cores | 0.994 | 0.042 |
+| Main guest CPU, ms/completed frame | 20.65 | 22.75 |
+
+The wait saves about 41% of total process CPU, but main-thread CPU increases
+and FPS is slightly lower. It remains opt-in on Windows (`TB_RAW_SPU_IDLE=1`),
+with the previously validated Linux default unchanged. These are observations
+on this NUC, not a measured power saving or a universal performance claim.
+Live clocks, temperatures and scheduler ready time were not collected.
+
+The frame-budget timeline now records request sequence, executed marker,
+vblank completion, callback spans, semaphore wait/post and presentation queue
+serials. The report matches only unique, ordered flip sequences with matching
+buffers and keeps presentation serials separate. In a 30-second 50% Battle
+diagnostic, 889 matched chains measured 1.72 ms request-to-execution, 8.91 ms
+execution-to-vblank and 0.80 ms vblank-to-callback on average. Presentation jobs
+averaged 9.65 ms including their vblank wait, rather than demonstrating an
+additional full-vblank delay. The main thread used 21.94 ms of actual OS CPU
+per completed frame; GPU work averaged 10.42 ms. These overlapping stages must
+not be added together.
+
+An event-driven callback experiment reduced average callback wake latency to
+0.013 ms, but a subsequent full-minute run stopped advancing frames and logged
+FIFO circling/resync. It was rejected and the experimental implementation was
+removed; the established callback polling remains. This identifies an ordering
+investigation, not a proven root-cause repair. Benchmarks now reject FIFO
+resyncs and detect five seconds without completed-frame progress during the
+timed interval, retaining a screenshot and diagnostic snapshot request before
+closing the owned test window.
+
+Local evidence is under `analysis/performance/resolution-step7/`, including
+rejected runs. The final artifact is rebuilt after restoring Windows defaults.
+Its executable SHA-256 is
+`0bd9c0e95d0f1ff28d7db5f0b61732b153ba49ef9dbf04c930a7e067c25ad8f2`.
+The final 30-second 75% Campaign diagnostic passed strict execution, visibility,
+renderer/overlay checks and normal exit at 44.6 completed GAME FPS. An earlier
+Campaign attempt failed the visibility gate and remains excluded. Four native
+CTest checks passed, and 75 Python tests completed with two platform/tool skips.
+Step 7 remains open: the main thread still exceeds 16.67 ms even with polling,
+and no safe FPS improvement has been established. Further dispatch/translated
+code optimization, the matching Native/75%/50% scene matrix and clean sustained
+acceptance remain pending. Neither the clock, simulation speed nor acceptance
+thresholds were changed.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the title idle predicate and bounded producer/wait races on Linux."""
+"""Linux standalone idle-wait and raw-worker stop tests; CTest also covers Windows wake races."""
 from pathlib import Path
 import subprocess
 import tempfile

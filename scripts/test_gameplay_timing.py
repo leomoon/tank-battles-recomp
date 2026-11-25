@@ -4,6 +4,27 @@ from gameplay_report import summarize,compare,COMPAT,renderer_failures
 from port import ROOT
 
 class GameplayTimingTests(unittest.TestCase):
+ def test_progress_watch_rejects_a_stopped_stream_only_during_timing(self):
+  from gameplay_report import FrameProgress
+  progress=FrameProgress()
+  self.assertIsNone(progress.observe(1,0,False))
+  self.assertIsNone(progress.observe(1,20_000_000_000,True))
+  # Starting a measured interval after a held menu must reset the watchdog.
+  self.assertIsNone(progress.observe(2,21_000_000_000,True))
+  self.assertIsNone(progress.observe(2,25_999_999_999,True))
+  self.assertEqual(progress.observe(2,26_000_000_000,True)['completed_frames'],2)
+  self.assertIsNone(progress.observe(3,27_000_000_000,True))
+  self.assertIsNone(progress.observe(3,40_000_000_000,False))
+ def test_raw_spu_comparison_requires_explicit_matched_modes(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);self.fixture(p);r=summarize(p)
+   a=dict(r,manifest=dict(r['manifest'],raw_spu_idle='0'))
+   b=dict(r,manifest=dict(r['manifest'],raw_spu_idle='1'))
+   with self.assertRaisesRegex(ValueError,'Incompatible raw_spu_idle'):compare([a,b])
+   self.assertEqual(len(compare([a,b],allowed_variants=('raw_spu_idle',))),2)
+   with self.assertRaisesRegex(ValueError,'explicit polling'):compare([a,a],allowed_variants=('raw_spu_idle',))
+   changed=dict(b,manifest=dict(b['manifest'],render_scale=75))
+   with self.assertRaisesRegex(ValueError,'Incompatible render_scale'):compare([a,changed],allowed_variants=('raw_spu_idle',))
  def test_changed_overlay_rejects_an_otherwise_clean_interval(self):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp);manifest=self.fixture(path);manifest['overlay_consistent']=False
@@ -13,7 +34,7 @@ class GameplayTimingTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p);r=summarize(p)
    base=dict(r,manifest=dict(r['manifest'],render_scale=100,window_mode='windowed',fxaa=False))
-   for field,value in [('render_scale',150),('window_mode','borderless'),('fxaa',True)]:
+   for field,value in [('render_scale',150),('window_mode','borderless'),('fxaa',True),('raw_spu_idle','1')]:
     changed=dict(base,manifest=dict(base['manifest'],**{field:value}))
     with self.assertRaisesRegex(ValueError,'Incompatible '+field):compare([base,changed])
  def test_backend_resource_lifetime_failures_reject_measurement(self):
@@ -27,6 +48,12 @@ class GameplayTimingTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'Renderer failure'):summarize(p)
    m['renderer_failures']=[];(p/'measurement.json').write_text(json.dumps(m))
    (p/'startup.log').write_text(full)
+   with self.assertRaisesRegex(ValueError,'retained startup log'):summarize(p)
+ def test_fifo_resync_is_a_failed_gameplay_run(self):
+  text='[cellGcmSys] FIFO walker circling (get=0x005C9650, put=0x005D3C3C)\n[cellGcmSys] FIFO resync (circling) 0x005C9650 -> put 0x005D3C3C'
+  self.assertEqual(len(renderer_failures(text)),2)
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);self.fixture(p);(p/'startup.log').write_text(text)
    with self.assertRaisesRegex(ValueError,'retained startup log'):summarize(p)
  def test_real_cadence_deduplicates_refreshes_and_stale_serials(self):
   with tempfile.TemporaryDirectory() as tmp:

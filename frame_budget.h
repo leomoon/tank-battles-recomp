@@ -26,6 +26,14 @@
 #define TB_FT_COLOR_STORE 30 /* completed guest color write; a=location<<31|surface offset, b=bytes */
 #define TB_FT_DEPTH_STORE 31 /* completed guest depth write; same payload */
 #define TB_FT_DEPTH_ALIAS 32 /* newly converted GPU depth alias; same payload, not a guest write */
+#define TB_FT_FLIP_SEQUENCE 33 /* request: a=request sequence, b=buffer */
+#define TB_FT_FLIP_EXECUTED 34 /* FIFO marker: a=request sequence snapshot, b=buffer */
+#define TB_FT_FLIP_TICK 35 /* vblank completion: a=request sequence, b=FIFO reached count */
+#define TB_FT_GCM_CALLBACK 36 /* guest callback span: a=sequence/count, b=1 vblank or 2 flip */
+#define TB_FT_SEMAPHORE_WAIT 37 /* who=guest thread, a=semaphore, b=returned status */
+#define TB_FT_SEMAPHORE_POST 38 /* who=guest thread, a=semaphore, b=posted count; success only */
+#define TB_FT_PRESENT_QUEUE 39 /* instant: a=presentation request serial */
+#define TB_FT_PRESENT_JOB 40 /* finish span including vblank wait: a=request serial */
 
 /* Per-frame work counters (TB_FT_COUNT). Ids are part of the trace format:
  * append only, and keep scripts/frame_budget.py COUNTER_NAMES in step. */
