@@ -186,6 +186,16 @@ s32 tb_trophy_abort_handle(SceNpTrophyHandle handle)
   '      if (s_sema_blocked_pass || s_park_pass || s_report_hold_pass || tb_packet_wait) {'),
  ('        if (!strcmp(why, "flip") && s_fifo_getoff != put) head_consumed = 0;',
   '        if ((!strcmp(why, "flip") && s_fifo_getoff != put) || tb_packet_wait) head_consumed = 0;'),
+ ('    if (s_gcm_ctx_out_ea && !(s_seg_size && vm_read32(s_gcm_ctx_out_ea) == s_gcm_context_ea)) {',
+  '''    /* Tank Battles owns and rotates this context through command-buffer
+     * segments in func_0026F148. A transient current > end does not mean its
+     * callback declined recycling. Rewinding it from the walker races the
+     * writer and can discard a queued flip and its completion semaphore.
+     * Only the runtime's own callback permits runtime context recycling. */
+    const u32 tb_recycle_ctx=s_gcm_ctx_out_ea ? vm_read32(s_gcm_ctx_out_ea) : 0;
+    const u32 tb_recycle_cb=tb_recycle_ctx ? vm_read32(tb_recycle_ctx+12) : 0;
+    if (tb_recycle_cb && vm_read32(tb_recycle_cb)==GCM_FIFO_CALLBACK_SENTINEL_EA &&
+        !(s_seg_size && tb_recycle_ctx==s_gcm_context_ea)) {'''),
  ('                  if (eng) rsx_draw_engine_method((subch << 13) | m, vm_read32(dea)); }',
   '                  const u32 tb_full=(subch<<13)|m;\n                  if (eng && (subch==0 || (subch==1 && !s1_2d) ||\n                      tb_full==0xE920u || tb_full==0xE924u || tb_full==0xE944u ||\n                      tb_full==0xEB00u || tb_full==0xEB04u))\n                      rsx_draw_engine_method(tb_full,vm_read32(dea)); } /* Keep 2D state out of NV4097. */'),
  ('          } }\n        { static int _n = 0; static int cap = -1;',

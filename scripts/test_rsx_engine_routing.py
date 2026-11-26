@@ -18,6 +18,8 @@ s=s.replace('int  rsx_process_method(rsx_state* state, u32 method, u32 data) { (
 s+=r'''
 #include <assert.h>
 void tb_rsx_memory_written(u32 l,u32 o,u32 n){(void)l;(void)o;(void)n;}
+void tb_rsx_guest_read_bytes(u32 l,u32 o,u32 n){(void)l;(void)o;(void)n;}
+void tb_rsx_guest_wrote_bytes(u32 l,u32 o,u32 n){(void)l;(void)o;(void)n;}
 void tb_rsx_transfer_trace(u32 s,u32 m,u32 v){(void)s;(void)m;(void)v;}
 void tb_frame_event(u32 k,u32 a,u32 b,u32 c,u32 d){(void)k;(void)a;(void)b;(void)c;(void)d;}
 static u32 before_label;static int before_report;static u64 report_stamp;

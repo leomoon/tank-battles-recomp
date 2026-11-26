@@ -59,6 +59,35 @@ int main(int argc,char** argv) {
     cellGcmTickFlip();ppu_gcm_pump();
     for(int wait=0;wait<2000 && atomic_load(&calls)<4;wait++)usleep(1000);
     assert(atomic_load(&calls)==4);
+    /* Model a title moving through its own command-buffer segments. Its
+     * writer can publish current before updating end or PUT. The walker's
+     * generic overflow fallback must not rewind those guest-owned fields. */
+    const u32 runtime_callback=vm_read32(ctx+12), own_callback=host_alloc(8,4);
+    vm_write32(own_callback,0x10000);vm_write32(own_callback+4,0);
+    vm_write32(ctx+12,own_callback);
+    const u32 begin=vm_read32(ctx),end=vm_read32(ctx+4),put=s_fifo_getoff;
+    vm_write32(ctx+8,end+4);
+    cellGcm_rsx_process_fifo();
+    assert(vm_read32(ctx+8)==end+4);
+    assert(vm_read32(GCM_CONTROL_GUEST_ADDR)==put && s_fifo_getoff==put);
+    /* Having observed that transition must not arm later near-end rewinds. */
+    vm_write32(ctx+8,end-8);
+    assert(_cellGcmSetFlipCommand((void*)(uintptr_t)ctx,0)==0);
+    cellGcm_rsx_process_fifo();
+    assert(vm_read32(ctx+8)==end-4 && vm_read32(ctx)==begin);
+    assert(vm_read32(GCM_CONTROL_GUEST_ADDR)==put && s_fifo_getoff==put);
+    cellGcmTickFlip();ppu_gcm_pump();usleep(20000);
+    assert(atomic_load(&calls)==4); // Still unpublished; no fabricated callback.
+    vm_write32(GCM_CONTROL_GUEST_ADDR,gcm_ea2io(vm_read32(ctx+8)));
+    cellGcm_rsx_process_fifo();cellGcmTickFlip();ppu_gcm_pump();
+    for(int wait=0;wait<2000 && atomic_load(&calls)<5;wait++)usleep(1000);
+    assert(atomic_load(&calls)==5 && s_fifo_flips_reached==s_fifo_flips_queued);
+    vm_write32(ctx+8,begin);vm_write32(ctx+12,runtime_callback);
+    puts("PASS: walker preserves title-owned context during segment transitions");
+    vm_write32(ctx+8,end+4);
+    cellGcm_rsx_process_fifo();
+    assert(vm_read32(ctx+8)==begin && s_fifo_getoff==gcm_ea2io(begin));
+    puts("PASS: runtime-owned buffer recycling is retained");
     puts("PASS: queued flip completes only after real FIFO execution");
     puts("PASS: no early callback, one completion per flip, dedicated delivery while caller waits, no idle callbacks");
     return 0;
