@@ -69,10 +69,11 @@ static void data(Bytes& output,unsigned field,const Bytes& value){
     output.push_back(field*8+2);output.push_back(value.size());
     output.insert(output.end(),value.begin(),value.end());
 }
-static Bytes room(uint64_t id,const char* host,unsigned players=1,unsigned slots=4){
+static Bytes room(uint64_t id,const char* host,unsigned players=1,unsigned slots=4,unsigned open_public=~0u){
     Bytes row,wrapped,user;
     number(row,6,id);
-    number(wrapped,1,slots);data(row,7,wrapped);
+    number(wrapped,1,open_public==~0u?slots-players:open_public);data(row,7,wrapped);
+    wrapped.clear();number(wrapped,1,slots);data(row,8,wrapped);
     wrapped.clear();number(wrapped,1,players);data(row,10,wrapped);
     data(user,1,Bytes(host,host+std::strlen(host)));data(row,12,user);
     return row;
@@ -116,9 +117,22 @@ int main(){
     const auto selected=vm_read32(result+12);
     assert(vm_read64(selected+24)==202 && vm_read32(selected)==0);
 
+    // Open slots are not total capacity: 2/4 and 3/4 must remain joinable.
+    for(unsigned players:{2u,3u}) {
+        search();response.set_value(search_result({room(606,"FourPlayerHost",players)}));pump_matching();
+        assert(labels==std::vector<std::string>{"FourPlayerHost  "+std::to_string(players)+"/4"});
+        press(0x4000);assert(!panel && callbacks.size()==1 && !callbacks.back()[4]);
+    }
+    // A room can have reserved private capacity without a public opening.
+    search();response.set_value(search_result({room(707,"ReservedHost",1,4,0)}));pump_matching();
+    assert(labels==std::vector<std::string>{"ReservedHost  1/4"});
+    press(0x4000);assert(panel && callbacks.empty() && toast=="ROOM IS FULL");
+    press(0x2000);
+
     search();response.set_value(search_result({}));pump_matching();
     assert(labels.empty() && panel && callbacks.empty());
-    press(0x8000);assert(last_packet==original_packet && searches==3);
+    const auto before_refresh=searches;
+    press(0x8000);assert(last_packet==original_packet && searches==before_refresh+1);
     response.set_value(search_result({room(303,"FullHost",4)}));pump_matching();
     press(0x4000);assert(panel && callbacks.empty() && toast=="ROOM IS FULL");
     press(0x8000);response.set_value(search_result({room(404,"OnlyHost")}));pump_matching();

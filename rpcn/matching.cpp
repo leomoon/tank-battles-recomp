@@ -78,7 +78,7 @@ struct GuestCall {
 struct PublicRoom {
     uint32_t offset;
     uint64_t id;
-    uint16_t players, slots;
+    uint16_t players, slots, open_public;
     std::string label;
 };
 
@@ -255,9 +255,10 @@ void pump_browser() {
                             name.push_back(result.image.bytes[owner+j]);
                     const auto id=result.image.read(offset+24,8);
                     const auto players=static_cast<uint16_t>(result.image.read(offset+38,2));
-                    const auto slots=static_cast<uint16_t>(result.image.read(offset+32,2));
+                    const auto slots=static_cast<uint16_t>(result.image.read(offset+34,2));
+                    const auto open_public=static_cast<uint16_t>(result.image.read(offset+32,2));
                     if (name.empty()) name="ROOM "+std::to_string(id);
-                    rooms.push_back({offset,id,players,slots,name+"  "+std::to_string(players)+"/"+std::to_string(slots)});
+                    rooms.push_back({offset,id,players,slots,open_public,name+"  "+std::to_string(players)+"/"+std::to_string(slots)});
                     offset=static_cast<uint32_t>(result.image.read(offset,4));
                 }
                 view.image=std::move(result.image);
@@ -283,7 +284,7 @@ void pump_browser() {
         show_browser();
     } else if ((buttons&0x4000) && !view.rooms.empty()) {
         const auto& selected=view.rooms[view.selected];
-        if (selected.slots && selected.players>=selected.slots) {
+        if (!selected.open_public) {
             tb_show_network_toast("ROOM IS FULL","REFRESH OR CHOOSE ANOTHER ROOM");
             return;
         }
