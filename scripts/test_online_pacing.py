@@ -158,11 +158,12 @@ int main(int argc,char** argv) {
   subprocess.run([compiler,'-std=c++20','-O2','-pthread','-I'+str(cls.root),'-I'+str(ROOT),str(ROOT/'online_pacing.cpp'),str(cls.root/'fixture.cpp'),'-o',str(cls.exe)],check=True)
  @classmethod
  def tearDownClass(cls):cls.tmp.cleanup()
- def run_fixture(self,name,enabled,overflow=False,early=False,audit=False,clock_only=False):
+ def run_fixture(self,name,enabled,overflow=False,early=False,audit=False,clock_only=False,frame_only=False):
   trace=self.root/(name+'.jsonl');trigger=self.root/(name+'.trigger');trigger.touch()
   env={k:v for k,v in os.environ.items() if not k.startswith('TB_PACING_') and k!='TB_EXPERIMENTAL_ONLINE_PACING'}
   if enabled:env.update(TB_PACING_TRACE=str(trace),TB_PACING_TRIGGER=str(trigger),TB_PACING_SECONDS='1',TB_PACING_ROLE='host')
   if clock_only:env['TB_PACING_CLOCK_ONLY']='1'
+  if frame_only:env['TB_PACING_FRAME_ONLY']='1'
   subprocess.run([str(self.exe)]+(['overflow'] if overflow else ['early'] if early else ['audit'] if audit else []),env=env,check=True)
   return trace
  def test_disabled_creates_no_output_and_preserves_guest(self):
@@ -200,6 +201,10 @@ int main(int argc,char** argv) {
   rows=[json.loads(l) for l in self.run_fixture('clock-only',True,audit=True,clock_only=True).read_text().splitlines()]
   self.assertEqual(rows[0]['events'],1)
   self.assertEqual(rows[1]['kind'],10)
+ def test_frame_only_capture_preserves_guest_and_retains_frame_events(self):
+  rows=[json.loads(l) for l in self.run_fixture('frame-only',True,audit=True,frame_only=True).read_text().splitlines()]
+  self.assertEqual(rows[0]['dropped'],0)
+  self.assertEqual({r['kind'] for r in rows[1:]},{1,2,3,9,11})
  def test_overflow_is_bounded_and_counted(self):
   rows=[json.loads(l) for l in self.run_fixture('overflow',True,True).read_text().splitlines()]
   self.assertFalse(report(self.root/'overflow.jsonl')['usable_timeline'])

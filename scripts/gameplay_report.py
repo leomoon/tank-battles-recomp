@@ -24,6 +24,13 @@ class FrameProgress:
                         last_progress_qpc_ns=self.advanced_ns,observed_qpc_ns=now_ns)
         return None
 
+    def observe_record(self, row, now_ns, active):
+        """A bounded recorder ending is not evidence that the game stopped."""
+        limit = row.get('duration_limit_ns', 600_000_000_000)
+        origin = row['monotonic_ns'] - row['elapsed_ns']
+        expired = row.get('recording_ended', False) or now_ns - origin > limit
+        return self.observe(row.get('completed', 0), now_ns, active and not expired)
+
 def renderer_failures(log):
     pattern=r'\[(?:rsx engine|RSX vulkan)\].*(?:failed|unsupported|unhandled|skipped|object table full|stale .* release)'
     failures=[]

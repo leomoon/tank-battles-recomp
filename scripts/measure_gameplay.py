@@ -117,7 +117,7 @@ def main():
     except (IndexError,json.JSONDecodeError):continue
    if t is None:continue
    interval=manifest.get('interval_seconds')
-   stalled=progress.observe(last.get('completed',0),time.perf_counter_ns(),
+   stalled=progress.observe_record(last,time.perf_counter_ns(),
                             bool(interval and interval[0]<=t<=interval[1]))
    if stalled:
     (out/'progress-stall.json').write_text(json.dumps(stalled,indent=2)+'\n')

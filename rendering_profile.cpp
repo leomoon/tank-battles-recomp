@@ -84,6 +84,7 @@ struct GameplayTiming {
     FILE* file=nullptr;
     uint64_t base=0,last_write=0;
     GameplayCadence cadence;
+    GameplayRecordingWindow window{getenv("TB_GAMEPLAY_TIMING_SECONDS")};
     std::mutex mutex;
     GameplayTiming() {
         if(const char* path=getenv("TB_GAMEPLAY_TIMING")) {
@@ -93,9 +94,10 @@ struct GameplayTiming {
     }
     void write(uint64_t t) {
         if(!file)return;
-        fprintf(file,"{\"monotonic_ns\":%llu,\"elapsed_ns\":%llu,\"guest\":%llu,\"completed\":%llu,\"presents\":%llu,\"events\":[",
+        fprintf(file,"{\"monotonic_ns\":%llu,\"elapsed_ns\":%llu,\"guest\":%llu,\"completed\":%llu,\"presents\":%llu,\"recording_ended\":%s,\"duration_limit_ns\":%llu,\"events\":[",
                 (unsigned long long)(base+t),(unsigned long long)t,(unsigned long long)cadence.guest,
-                (unsigned long long)cadence.completed,(unsigned long long)cadence.presents);
+                (unsigned long long)cadence.completed,(unsigned long long)cadence.presents,
+                window.ended?"true":"false",(unsigned long long)window.limit_ns);
         for(unsigned k=0;k<3;k++) {
             fprintf(file,"%s[",k?",":"");
             for(size_t i=0;i<cadence.events[k].size();i++)
@@ -113,7 +115,8 @@ extern "C" void tb_gameplay_event(unsigned kind,uint64_t serial) {
     auto& p=gameplay_timing();if(!p.file)return;
     std::lock_guard<std::mutex> guard(p.mutex);
     const auto t=now()-p.base;
-    if(t>600000000000ull)return; // Bounded ten-minute diagnostic session.
+    if(p.window.finish(t)) {p.write(t);return;}
+    if(p.window.ended)return;
     if(kind==0)p.cadence.flip(t);else p.cadence.present(t,serial);
     if(t-p.last_write>=1000000000ull)p.write(t);
 }

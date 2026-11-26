@@ -28,7 +28,7 @@ struct Trace {
     std::vector<Event> events;
     std::thread worker;
     std::string path,trigger,role="unspecified";
-    bool clock_only=false;
+    bool clock_only=false, frame_only=false;
     uint64_t start=0,end=0;
     Trace() {
         const char* value=getenv("TB_PACING_TRACE");
@@ -38,6 +38,7 @@ struct Trace {
         if (!value || !*value) return; // Explicit gameplay trigger is mandatory.
         trigger=value;
         value=getenv("TB_PACING_CLOCK_ONLY");clock_only=value && std::string(value)=="1";
+        value=getenv("TB_PACING_FRAME_ONLY");frame_only=value && std::string(value)=="1";
         value=getenv("TB_PACING_ROLE");
         if(value && (std::string(value)=="host" || std::string(value)=="invited")) role=value;
         double seconds=20;
@@ -80,6 +81,7 @@ struct Trace {
         fclose(file);
     }
     void push(Event e) {
+        if(frame_only && e.kind!=1 && e.kind!=2 && e.kind!=3 && e.kind!=9 && e.kind!=11 && e.kind!=14)return;
         e.ns=tb_host_now();
         if(e.ns<start || e.ns>end) return;
         e.tx=tx.load(std::memory_order_relaxed);e.rx=rx.load(std::memory_order_relaxed);

@@ -4,6 +4,38 @@ from gameplay_report import summarize,compare,COMPAT,renderer_failures
 from port import ROOT
 
 class GameplayTimingTests(unittest.TestCase):
+ @unittest.skipIf(os.name=='nt','Native POSIX integration; portable window logic is checked by the cadence fixture')
+ def test_real_recorder_marks_duration_end_once(self):
+  compiler=shutil.which('g++') or shutil.which('clang++')
+  if not compiler:self.skipTest('C++ compiler unavailable')
+  with tempfile.TemporaryDirectory() as tmp:
+   path=Path(tmp);source=path/'record.cpp';target=path/'record';trace=path/'timing.jsonl'
+   source.write_text('''#include "rendering_profile.h"
+#include <thread>
+#include <chrono>
+int main(){tb_gameplay_event(0,0);tb_gameplay_event(1,1);
+ std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+ tb_gameplay_event(0,0);tb_gameplay_event(1,2);tb_gameplay_event(0,0);}
+''')
+   subprocess.run([compiler,'-std=c++20','-pthread','-I'+str(ROOT),str(source),str(ROOT/'rendering_profile.cpp'),'-o',str(target)],check=True)
+   env=dict(os.environ,TB_GAMEPLAY_TIMING=str(trace),TB_GAMEPLAY_TIMING_SECONDS='1')
+   subprocess.run([str(target)],env=env,check=True)
+   rows=[json.loads(line) for line in trace.read_text().splitlines()]
+   self.assertEqual(len(rows),1)
+   self.assertTrue(rows[0]['recording_ended'])
+   self.assertEqual(rows[0]['duration_limit_ns'],1_000_000_000)
+   self.assertEqual((rows[0]['guest'],rows[0]['completed'],rows[0]['presents']),(1,1,1))
+ def test_finished_diagnostic_window_is_not_a_game_stall(self):
+  from gameplay_report import FrameProgress
+  progress=FrameProgress()
+  row=dict(monotonic_ns=599_000_000_000,elapsed_ns=599_000_000_000,completed=100)
+  self.assertIsNone(progress.observe_record(row,599_000_000_000,True))
+  self.assertIsNone(progress.observe_record(row,610_000_000_000,True))
+  row.update(monotonic_ns=620_000_000_000,elapsed_ns=620_000_000_000,duration_limit_ns=1800_000_000_000)
+  self.assertIsNone(progress.observe_record(row,620_000_000_000,True))
+  self.assertIsNotNone(progress.observe_record(row,625_000_000_000,True))
+  row['recording_ended']=True
+  self.assertIsNone(progress.observe_record(row,626_000_000_000,True))
  def test_dispatch_cache_counter_build_is_never_a_clean_baseline(self):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp);self.fixture(p)
@@ -73,7 +105,12 @@ class GameplayTimingTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp);source=path/'test.cpp';source.write_text('''#include "gameplay_timing.h"
 #include <cassert>
-int main(){GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666667ull);c.present(i*16666667ull,c.guest);}assert(c.guest==20&&c.completed==20&&c.presents==60);c.present(2000000000,2);assert(c.completed==20);c.flip(2100000000);c.present(2200000000,c.guest);assert(c.completed==21);assert(c.events[1].back()==2200000000);}''')
+int main(){
+ GameplayRecordingWindow w;assert(w.limit_ns==600000000000ull);
+ assert(!w.finish(w.limit_ns));assert(w.finish(w.limit_ns+1));assert(w.ended);assert(!w.finish(w.limit_ns+2));
+ for(const char* invalid: {"", "0", "-1", "3601", "2x", "999999999999999999999999"})assert(GameplayRecordingWindow(invalid).limit_ns==600000000000ull);
+ assert(GameplayRecordingWindow("1800").limit_ns==1800000000000ull);
+ GameplayCadence c;for(unsigned i=0;i<60;i++){if(i%3==0)c.flip(i*16666667ull);c.present(i*16666667ull,c.guest);}assert(c.guest==20&&c.completed==20&&c.presents==60);c.present(2000000000,2);assert(c.completed==20);c.flip(2100000000);c.present(2200000000,c.guest);assert(c.completed==21);assert(c.events[1].back()==2200000000);}''')
    if os.name=='nt':
     sys.path.insert(0,str(ROOT/'external/ps3recomp/tools'))
     from msvc_env import environ,find_vcvars
