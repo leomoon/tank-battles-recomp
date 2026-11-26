@@ -11,6 +11,9 @@ POLL='        { double a = ctx->fpr[1]; double b = ctx->fpr[0]; uint32_t cr_val 
 CALIBRATION='        ctx->gpr[21] = ctx->gpr[22] - ctx->gpr[23];\n        vm_write64(ctx->gpr[3] + 0x18, ctx->gpr[21]);\n'
 FRAME_SAMPLE='        ctx->gpr[28] = vm_read32(ctx->gpr[3] + 0x20);\n'
 PHASE_REQUEST='        ctx->gpr[31] = vm_read32(ctx->gpr[2] + -0x2540);\n'
+MAIN='void func_000E0A68(ppu_context* ctx) {\n    PPU_MM_SNAP\n'
+UPDATE_CALL='        ctx->lr = 0x000E0DA8; func_0001F518(ctx); DRAIN_TRAMPOLINE(ctx);\n'
+RENDER_GATE='        ctx->gpr[29] = vm_read8(ctx->gpr[7] + 0x0);\n'
 ROLE_IDS='        ctx->gpr[7] = ctx->gpr[29] ^ ctx->gpr[3];\n'
 
 
@@ -25,6 +28,7 @@ def patch_pacing(directory):
     signatures+=['void func_001D511C(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
     signatures+=['void func_0015361C(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
     lifecycle=['00169438','001696DC','00170A60','001D3A2C','001A3368']
+    signatures += [MAIN]
     signatures += [f'void func_{name}(ppu_context* ctx) {{\n    PPU_MM_SNAP\n' for name in lifecycle]
     present=[sum(s.count(sig) for s in sources.values()) for sig in signatures]
     names=tuple(sig.split('ppu_context*')[0] for sig in signatures)
@@ -45,8 +49,11 @@ def patch_pacing(directory):
                 anchor='        vm_write64(ctx->gpr[9] + 0x110, ctx->gpr[3]);\n'
                 replacements=[(anchor,anchor+'        tb_pacing_experiment(ctx, 15);\n')]
             else:replacements=[(sig,sig+'    tb_pacing_experiment(ctx, 15);\n')]
+        elif sig==MAIN:
+            replacements=[(RENDER_GATE,RENDER_GATE+'        tb_pacing_hook(ctx, 17);\n        tb_pacing_experiment(ctx, 17);\n'), (UPDATE_CALL,'        tb_pacing_hook(ctx, 18);\n'+UPDATE_CALL)]
         elif sig==PACING:
-            replacements=[(PACING,PACING+'    tb_pacing_hook(ctx, 0);\n'),(POLL,POLL.replace('        if (','        tb_pacing_hook(ctx, 1);\n        if (',1))]
+            body=body.replace('        tb_pacing_hook(ctx, 1);\n        if (', '        tb_pacing_hook(ctx, 1);\n        tb_pacing_experiment(ctx, 16);\n        if (')
+            replacements=[(PACING,PACING+'    tb_pacing_hook(ctx, 0);\n'),(POLL,POLL.replace('        if (','        tb_pacing_hook(ctx, 1);\n        tb_pacing_experiment(ctx, 16);\n        if (',1))]
         elif sig==CORRECTION:
             peak='loc_0016F014:\n        ctx->gpr[30] = (int64_t)(int32_t)(0);\n'
             replacements=[(STORE,STORE+'        tb_pacing_hook(ctx, 2);\n'),(peak,peak+'        tb_pacing_hook(ctx, 8);\n')]

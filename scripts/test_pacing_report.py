@@ -1,6 +1,6 @@
 import json,tempfile,unittest
 from pathlib import Path
-from pacing_report import report, frame_accounting
+from pacing_report import report, frame_accounting, update_timing
 
 class PacingReportTests(unittest.TestCase):
  def write(self,root,**changes):
@@ -37,6 +37,18 @@ class PacingReportTests(unittest.TestCase):
    log.write_text('')
    with self.assertRaisesRegex(ValueError,'clock mapping'):report(path,budget,log)
 
+class UpdateTimingTests(unittest.TestCase):
+ def test_delta_uses_update_boundaries_and_excludes_uncaptured_preceding_time(self):
+  rows=[dict(kind=18,ns=1000000000,interval_bits=0x3f800000),
+        dict(kind=18,ns=1010000000,interval_bits=0x3c23d70a),
+        dict(kind=18,ns=1020000000,interval_bits=0x3c23d70a)]
+  result=update_timing(rows)
+  self.assertAlmostEqual(result['delta_per_wall_second'],1.,places=6)
+  self.assertEqual(result['update_hz'],100.)
+  self.assertIsNone(update_timing(rows[:1]))
+  rows[-1]['interval_bits']=0x7fc00000
+  with self.assertRaisesRegex(ValueError,'Invalid'):update_timing(rows)
+
 class FrameAccountingTests(unittest.TestCase):
  def test_clock_mapping_and_exclusive_overlap(self):
   base=1000000000
@@ -54,6 +66,13 @@ class FrameAccountingTests(unittest.TestCase):
   self.assertEqual(sum(row[k] for k in ('pacing_only_ms','semaphore_only_ms','overlapping_wait_ms','remaining_ms')),row['frame_ms'])
   self.assertEqual(result['reset_count'],1)
   self.assertIsNone(result['zero_correction_frames'])
+ def test_probe_action_closes_wait_without_inventing_ordinary_exit(self):
+  events=[dict(kind=3,ns=0),dict(kind=1,object=1,ns=2000000),
+          dict(kind=15,object=1,ns=3000000),dict(kind=9,object=1,ns=4000000),dict(kind=3,ns=11000000)]
+  result=frame_accounting(events,[(8,0,0,0,0.,0.),(8,0,0,0,10.,10.)],0)
+  self.assertEqual(result['deadline_bypasses'],1)
+  self.assertEqual(result['exit_count'],0)
+  self.assertEqual(result['exclusive_ms']['pacing_only_ms']['mean'],1.)
  def test_incomplete_windows_and_reset_do_not_invent_waits(self):
   events=[dict(kind=3,ns=0),dict(kind=1,object=1,ns=1),dict(kind=9,object=1,ns=2),
           dict(kind=2,object=1,ns=3,correction_u32=0,interval_bits=0x3c888889,flags=0),dict(kind=3,ns=20000000)]

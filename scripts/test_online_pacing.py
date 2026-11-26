@@ -2,7 +2,7 @@
 import json,os,shutil,subprocess,tempfile,unittest
 from pathlib import Path
 from pacing_report import report
-from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POLL,CALIBRATION,FRAME_SAMPLE,PHASE_REQUEST,ROLE_IDS
+from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POLL,CALIBRATION,FRAME_SAMPLE,PHASE_REQUEST,ROLE_IDS,MAIN,RENDER_GATE,UPDATE_CALL
 
 ROOT=Path(__file__).resolve().parents[1]
 class PacingHooks(unittest.TestCase):
@@ -18,6 +18,7 @@ class PacingHooks(unittest.TestCase):
   for name in ('00169438','001696DC','00170A60','001D3A2C','001A3368'):
    extra='        vm_write64(ctx->gpr[31] + 0x18, ctx->gpr[3]);\n' if name=='00169438' else '        vm_write64(ctx->gpr[9] + 0x110, ctx->gpr[3]);\n' if name=='001A3368' else ''
    bodies += [f'void func_{name}(ppu_context* ctx) {{\n    PPU_MM_SNAP\n'+extra+'}\n']
+  bodies += [MAIN+RENDER_GATE+UPDATE_CALL+'}\n']
   for n,body in enumerate(bodies):(root/f'ppu_recomp_{n:03}.cpp').write_text(INCLUDE+body)
  def test_instruction_hooks_are_scoped_idempotent_and_register_neutral(self):
   with tempfile.TemporaryDirectory() as d:
@@ -82,6 +83,40 @@ uint8_t memory[0x20000]={};uint8_t* vm_base=memory;
 extern "C" void tb_pacing_hook(ppu_context*,unsigned);
 extern "C" void tb_pacing_experiment(ppu_context*,unsigned);
 int main(int argc,char** argv) {
+ if(argc>1 && !strcmp(argv[1],"render-probe")) {
+  ppu_context c{};memory[0x13014]=1;memory[0x10121]=1;memory[0x10122]=1;
+  auto request=[&](unsigned delta) {c.gpr[29]=33;c.gpr[3]=16;tb_pacing_experiment(&c,14);
+    c.gpr[30]=0x13000;c.gpr[31]=101+delta;c.gpr[28]=101;c.gpr[3]=0;tb_pacing_experiment(&c,12);};
+  request(1);c.gpr[7]=0x10122;c.gpr[29]=1;c.cr=0x12345678;
+  const auto before=c;uint8_t saved[sizeof(memory)];memcpy(saved,memory,sizeof(memory));
+  const bool enabled=getenv("TB_EXPERIMENTAL_ONLINE_PACING") && !strcmp(getenv("TB_EXPERIMENTAL_ONLINE_PACING"),"recovery-render");
+  tb_pacing_experiment(&c,17);if(c.gpr[29]!=(enabled?0:1))return 30;
+  c.gpr[29]=1;if(memcmp(&c,&before,sizeof(c)) || memcmp(saved,memory,sizeof(memory)))return 31;
+  tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 32;
+  request(2);c.gpr[7]=0x10122;c.gpr[29]=1;tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 33;
+  request(1);tb_pacing_experiment(&c,15);c.gpr[7]=0x10122;c.gpr[29]=1;
+  tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 34;
+  return 0;
+ }
+ if(argc>1 && !strcmp(argv[1],"deadline-probe")) {
+  ppu_context c{};memory[0x13014]=1;
+  memory[0x10121]=1;memory[0x10122]=0;memory[0x1012d]=1;
+  auto request=[&] {c.gpr[29]=33;c.gpr[3]=16;tb_pacing_experiment(&c,14);
+    c.gpr[30]=0x13000;c.gpr[31]=102;c.gpr[28]=101;c.gpr[3]=0;tb_pacing_experiment(&c,12);};
+  request();c.gpr[31]=0x10000;c.cr=0x123456f8;
+  const auto before=c;uint8_t saved[sizeof(memory)];memcpy(saved,memory,sizeof(memory));
+  tb_pacing_experiment(&c,16);
+  const bool enabled=getenv("TB_EXPERIMENTAL_ONLINE_PACING") && !strcmp(getenv("TB_EXPERIMENTAL_ONLINE_PACING"),"recovery-no-wait");
+  if(c.cr!=(enabled?(before.cr&~128u):before.cr))return 20;
+  c.cr=before.cr;if(memcmp(&c,&before,sizeof(c)) || memcmp(saved,memory,sizeof(memory)))return 21;
+  tb_pacing_experiment(&c,16);if(c.cr!=before.cr)return 22; // Only one bypass per request.
+  request();tb_pacing_experiment(&c,15);c.gpr[31]=0x10000;
+  tb_pacing_experiment(&c,16);if(c.cr!=before.cr)return 23;
+  c.gpr[29]=16;c.gpr[3]=16;tb_pacing_experiment(&c,14);
+  c.gpr[30]=0x13000;c.gpr[31]=102;c.gpr[28]=101;c.gpr[3]=0;tb_pacing_experiment(&c,12);
+  c.gpr[31]=0x10000;tb_pacing_experiment(&c,16);if(c.cr!=before.cr)return 24;
+  return 0;
+ }
  if(argc>1 && !strcmp(argv[1],"candidate")) {
   ppu_context c{};c.gpr[2]=0x18000;
   vm_write32(0x18000-0x2534,0x10124);memory[0x10121]=1;memory[0x13014]=1;
@@ -91,6 +126,7 @@ int main(int argc,char** argv) {
   c.gpr[28]=0x13000;tb_pacing_experiment(&c,8);
   vm_write32(0x13020,0);vm_write32(0x13024,4000);vm_write32(0x10124,4000);
   c.gpr[11]=4000;tb_pacing_experiment(&c,2);
+  c.gpr[30]=0x14000;tb_pacing_experiment(&c,16);c.gpr[30]=0x13000;
   c.gpr[3]=0;c.gpr[31]=101;c.gpr[28]=100;const auto before=c;
   tb_pacing_experiment(&c,12);
   if(memcmp(&before,&c,sizeof(c)))return 10;
@@ -140,6 +176,7 @@ int main(int argc,char** argv) {
   c.gpr[1]=0x16000;c.gpr[7]=c.gpr[29]^c.gpr[3];
   const auto phase_before=c;
   for(unsigned op=12;op<=14;++op)tb_pacing_hook(&c,op);
+  c.fpr[1]=1.0/60.0;tb_pacing_hook(&c,18);c=phase_before;
   if(memcmp(&phase_before,&c,sizeof(c)))return 6;
   c.gpr[1]=clock_before.gpr[1];
   c.gpr[7]=clock_before.gpr[7];
@@ -174,6 +211,16 @@ int main(int argc,char** argv) {
     env={k:v for k,v in os.environ.items() if not k.startswith('TB_PACING_') and k!='TB_EXPERIMENTAL_ONLINE_PACING'}
     if value is not None:env['TB_EXPERIMENTAL_ONLINE_PACING']=value
     subprocess.run([str(self.exe),'candidate'],env=env,check=True)
+ def test_deadline_probe_is_one_shot_role_scoped_and_changes_only_branch(self):
+  for option in (None,'0','recovery-no-wait-typo','recovery-no-wait'):
+   env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_'))}
+   if option is not None:env['TB_EXPERIMENTAL_ONLINE_PACING']=option
+   subprocess.run([str(self.exe),'deadline-probe'],env=env,check=True)
+ def test_render_probe_preserves_phase_memory_and_requires_exact_one_frame_recovery(self):
+  for option in (None,'stale-phase','recovery-no-wait','recovery-render-typo','recovery-render'):
+   env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_'))}
+   if option is not None:env['TB_EXPERIMENTAL_ONLINE_PACING']=option
+   subprocess.run([str(self.exe),'render-probe'],env=env,check=True)
  def test_enabled_records_numeric_metadata_and_preserves_guest(self):
   path=self.run_fixture('on',True)
   rows=[json.loads(l) for l in path.read_text().splitlines()]
@@ -191,6 +238,8 @@ int main(int argc,char** argv) {
   self.assertEqual(len(samples),1)
   self.assertEqual((samples[0]['previous_guest_us'],samples[0]['observed_guest_us'],samples[0]['correction_u32']),(3,7,4))
   self.assertTrue({6,7,8,9,10,11,12,13}.issubset({r['kind'] for r in rows}))
+  update=next(r for r in rows if r['kind']==18)
+  self.assertEqual(update['interval_bits'],0x3c888889)
   clock=next(r for r in rows if r['kind']==10)
   self.assertEqual((clock['previous_guest_us'],clock['observed_guest_us'],clock['local_sequence']),(123456789,10000,10))
   self.assertEqual((clock['interval_bits'],clock['result_u32'],clock['correction_u32']),(9990,40,10))
@@ -204,7 +253,7 @@ int main(int argc,char** argv) {
  def test_frame_only_capture_preserves_guest_and_retains_frame_events(self):
   rows=[json.loads(l) for l in self.run_fixture('frame-only',True,audit=True,frame_only=True).read_text().splitlines()]
   self.assertEqual(rows[0]['dropped'],0)
-  self.assertEqual({r['kind'] for r in rows[1:]},{1,2,3,9,11})
+  self.assertEqual({r['kind'] for r in rows[1:]},{1,2,3,6,7,8,9,11,12,18})
  def test_overflow_is_bounded_and_counted(self):
   rows=[json.loads(l) for l in self.run_fixture('overflow',True,True).read_text().splitlines()]
   self.assertFalse(report(self.root/'overflow.jsonl')['usable_timeline'])

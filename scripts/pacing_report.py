@@ -1,6 +1,20 @@
 """Summarize TB_PACING_TRACE without mixing guest and host clock domains."""
-import argparse,json,statistics,struct,bisect,re
+import argparse,json,statistics,struct,bisect,re,math
 from pathlib import Path
+
+
+def update_timing(events):
+ """Delta at the main game-update call, measured against its own host span."""
+ rows=[e for e in events if e['kind']==18]
+ if len(rows)<2:return None
+ duration=(rows[-1]['ns']-rows[0]['ns'])/1e9
+ if duration<=0:return None
+ values=[struct.unpack('!f',struct.pack('!I',e['interval_bits']))[0] for e in rows[1:]]
+ if any(not math.isfinite(v) or v<0 for v in values):raise ValueError('Invalid main-update delta')
+ total=sum(values)
+ return dict(calls=len(rows),wall_seconds=duration,update_hz=(len(rows)-1)/duration,
+             summed_delta_seconds=total,delta_per_wall_second=total/duration,
+             scope='Main update at 0x000E0DA8 only. First delta excluded because its preceding interval is outside this span.')
 
 
 def frame_accounting(events, spans, base_ns):
@@ -14,7 +28,7 @@ def frame_accounting(events, spans, base_ns):
  waits=[];pending={}
  for e in events:
   if e['kind']==1:pending[e['object']]=e['ns']
-  elif e['kind']==2:
+  elif e['kind'] in (2,15):
    begin=pending.pop(e['object'],None)
    if begin is not None:waits.append((begin,e['ns']))
   elif e['kind']==9:pending.pop(e['object'],None)
@@ -38,12 +52,18 @@ def frame_accounting(events, spans, base_ns):
       flags=[e['flags'] for e in exits],
       previous_guest_us=[e.get('previous_guest_us') for e in exits],
       recovery_requests=sum(e['kind']==11 and a<=e['ns']<b for e in events),
-      invalidations=sum(e['kind']==14 and a<=e['ns']<b for e in events)))
+      invalidations=sum(e['kind']==14 and a<=e['ns']<b for e in events),
+      deadline_bypasses=sum(e['kind']==15 and a<=e['ns']<b for e in events),
+      recovery_renders=sum(e['kind']==16 and a<=e['ns']<b for e in events),
+      render_gate_skips=sum(e['kind']==17 and e['flags'] and a<=e['ns']<b for e in events)))
  keys=('frame_ms','pacing_only_ms','semaphore_only_ms','overlapping_wait_ms','remaining_ms')
  return dict(frames=len(frames),exclusive_ms={key:summary([f[key] for f in frames]) for key in keys},
      zero_correction_frames=summary([f['frame_ms'] for f in frames if f['corrections_us'] and not any(f['corrections_us'])]),
      positive_correction_frames=summary([f['frame_ms'] for f in frames if any(f['corrections_us'])]),
      reset_count=sum(f['pacing_resets'] for f in frames),exit_count=sum(f['pacing_exits'] for f in frames),
+     deadline_bypasses=sum(f['deadline_bypasses'] for f in frames),
+     recovery_renders=sum(f['recovery_renders'] for f in frames),
+     render_gate_skips=sum(f['render_gate_skips'] for f in frames),
      reset_groups={str(n):dict(count=len(group),frame_ms=summary([f['frame_ms'] for f in group]))
                    for n in sorted({f['pacing_resets'] for f in frames})
                    if (group:=[f for f in frames if f['pacing_resets']==n])},
@@ -107,6 +127,7 @@ def report(path, frame_budget=None, startup_log=None):
   i=bisect.bisect_right(receives,e['ns'])-1
   if i>=0:after_receive.append((e['ns']-receives[i])/1e6)
  result['correction_since_latest_local_receive_ms']=stats(after_receive)
+ result['main_update_timing']=update_timing(events)
  result['lossless']=header['dropped']==0
  result['usable_timeline']=bool(header.get('complete') and result['lossless'] and (not frame_budget or frame_dropped==0))
  if frame_budget:result['frame_accounting']['usable_timeline']=result['usable_timeline']
