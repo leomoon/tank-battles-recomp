@@ -1,7 +1,9 @@
-// Read-only title diagnostics. This object belongs to the title executable so
+// Title diagnostics and an explicit developer pacing experiment. This object
+// belongs to the title executable so
 // old runtime bundles and game-free runtime fixtures need no new ABI symbols.
 #include "ppu_recomp.h"
 #include "host_services.h"
+#include "online_pacing_recovery.h"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -97,13 +99,84 @@ Trace& trace() {
 thread_local uint32_t polls=0;
 thread_local Event io[2];
 bool valid(uint64_t p) {return vm_base && p>=0x10000 && p<=0xfffffe00ull;}
+
+struct RecoveryExperiment {
+    bool enabled=false;
+    std::mutex mutex;
+    uint32_t queue=0;
+    uint64_t role_ids=0;
+    bool role_known=false,unsupported=false;
+    tb_pacing_recovery::State state;
+    RecoveryExperiment() {
+        const char* option=getenv("TB_EXPERIMENTAL_ONLINE_PACING");
+        enabled=option && std::string(option)=="stale-phase";
+        if(enabled)fprintf(stderr,"[online pacing] experimental stale-phase recovery enabled\n");
+    }
+};
+RecoveryExperiment& recovery() {static auto* value=new RecoveryExperiment;return *value;}
+}
+
+// Kept separate from the read-only recorder. Exact opt-in is mandatory, and
+// lifecycle hooks drop all provenance before the next session can use it.
+extern "C" void tb_pacing_experiment(ppu_context* c,unsigned op) {
+    auto& experiment=recovery();
+    if(!experiment.enabled)return;
+    std::lock_guard guard(experiment.mutex);
+    if(op==15 || op==11) {
+        experiment.queue=0;experiment.state={};experiment.role_known=false;experiment.unsupported=false;
+        return;
+    }
+    if(op==14) {
+        const uint64_t ids=(uint64_t(uint32_t(c->gpr[29]))<<32)|uint32_t(c->gpr[3]);
+        if(experiment.role_known && ids!=experiment.role_ids) {
+            experiment.queue=0;experiment.state={};experiment.unsupported=false;
+        }
+        experiment.role_ids=ids;experiment.role_known=true;
+        return;
+    }
+    if(experiment.unsupported)return;
+    const uint32_t queue=uint32_t(op==8 || op==2?c->gpr[28]:c->gpr[30]);
+    if(!valid(queue))return;
+    if(!experiment.queue)experiment.queue=queue;
+    if(queue!=experiment.queue) {
+        experiment.state={};experiment.unsupported=true;return;
+    }
+    auto& state=experiment.state;
+    if(op==7) {
+        if(!valid(c->gpr[6]))return;
+        state.sample(vm_read32(c->gpr[6]+0xc),uint32_t(c->gpr[5]),vm_read32(queue+0x20));
+    } else if(op==8)state.select(vm_read32(queue+0x20),vm_read32(queue+0x24));
+    else if(op==2)state.publish(uint32_t(c->gpr[11]),vm_read32(queue+0x24));
+    else if(op==12) {
+        // This exact title path has already requested recovery for a newer
+        // host frame. Unknown role/state or untracked estimates fall back.
+        if(c->gpr[3]!=0 || !vm_read8(queue+0x14) || c->gpr[2]<0x12534 ||
+           !valid(c->gpr[2]-0x2534))return;
+        const uint32_t field=vm_read32(c->gpr[2]-0x2534);
+        if(!valid(field) || field<0x10124 || !vm_read8(field-0x124+0x121))return;
+        const uint32_t before=vm_read32(field);
+        const uint32_t origin=state.field.frame;
+        const uint32_t pending=vm_read32(queue+0x20),retained=vm_read32(queue+0x24);
+        if(!state.recover(uint32_t(c->gpr[31]),uint32_t(c->gpr[28]),before,
+                          pending,retained))return;
+        vm_write32(queue+0x20,0);vm_write32(queue+0x24,0);vm_write32(field,0);
+        auto& recorder=trace();
+        if(recorder.active.load(std::memory_order_acquire) && !recorder.clock_only) {
+            Event event;event.kind=14;event.object=queue;
+            event.sequence=uint32_t(c->gpr[31]);event.previous_us=uint32_t(c->gpr[28]);
+            event.correction=before;event.guest_us=origin;
+            event.interval_bits=pending;event.result=retained;recorder.push(event);
+        }
+    }
 }
 
 // op 0: pacing function entry; 1: original floating comparison, 2: correction
 // store completed; 3/4: sendto entry/exit; 5/6: recvfrom entry/exit;
 // 7: received frame snapshot subtraction; 8: peak selection;
 // 9: constructed numeric frame header; 10: completed pacing-field reset;
-// 11: original network-clock calibration completed.
+// 11: original network-clock calibration completed;
+// 12: recovery phase requested; 13: incoming/local frame pair;
+// 14: title role-comparison identifiers.
 extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
     auto& t=trace();
     if(!t.active.load(std::memory_order_acquire))return;
@@ -157,6 +230,19 @@ extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
         e.kind=10;e.object=uint32_t(c->gpr[30]);e.socket=uint32_t(c->gpr[3]);
         e.previous_us=c->gpr[22];e.guest_us=c->gpr[31];e.sequence=uint32_t(c->gpr[28]);
         e.interval_bits=uint32_t(c->gpr[24]);e.result=uint32_t(c->gpr[25]);e.correction=uint32_t(c->gpr[23]);
+    } else if(op==12) {
+        e.kind=11;e.object=uint32_t(c->gpr[30]);
+        e.sequence=uint32_t(c->gpr[31]);e.previous_us=uint32_t(c->gpr[28]);
+        e.correction=uint32_t(c->gpr[31]-c->gpr[28]);
+    } else if(op==13) {
+        if(!valid(c->gpr[3]))return;
+        e.kind=12;e.object=uint32_t(c->gpr[30]);
+        e.sequence=uint32_t(c->gpr[31]);e.previous_us=uint32_t(c->gpr[28]);
+        e.guest_us=uint32_t(c->gpr[26]);e.interval_bits=vm_read32(c->gpr[3]+0x10);
+    } else if(op==14) {
+        e.kind=13;e.object=uint32_t(c->gpr[31]);
+        e.sequence=uint32_t(c->gpr[29]);e.result=uint32_t(c->gpr[3]);e.flags=c->gpr[7]==0;
+        if(valid(c->gpr[1]+0xa0))e.lr=uint32_t(vm_read64(c->gpr[1]+0xa0));
     } else return;
     t.push(e);
 }

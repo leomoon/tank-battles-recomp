@@ -1,6 +1,6 @@
 # Online frame pacing audit
 
-The invited player's lower completed-frame rate is associated with the title's original synchronization loop. The loop adds a positive, frame-indexed network-clock correction to a monotonic pacing deadline. It also changes pacing phases when the peer advances. This audit establishes the arithmetic and observed mechanism, but does not establish a recompilation defect or a safe way to remove required synchronization. No gameplay correction is implemented by this work.
+The invited player's lower completed-frame rate is associated with the title's original synchronization loop. The loop adds a positive, frame-indexed network-clock correction to a monotonic pacing deadline. It also changes pacing phases when the peer advances. This audit establishes the arithmetic and observed mechanism, but does not establish a recompilation defect or a safe way to remove required synchronization. The original behavior remains the default. Step 4 adds a developer-only candidate for a demonstrated conflict between an older timing estimate and a newer recovery frame; it is not approved for ordinary play.
 
 The repeatable baselines and diagnostic method are described in [ONLINE_FPS_BASELINES.md](ONLINE_FPS_BASELINES.md) and [ONLINE_PACING_DIAGNOSTICS.md](ONLINE_PACING_DIAGNOSTICS.md). Local evidence is recorded in `analysis/online-fps/step1/RESULT.md`, `step2/RESULT.md` and `step3/RESULT.md`. Generated chunk numbers can change; guest function and instruction addresses below identify this title's NPUB30154 executable.
 
@@ -105,36 +105,55 @@ All retained subtraction, maximum-selection, halving and deadline observations m
 
 The reversible B-host result supports a causal connection between network/frame phase, positive correction and the lower completed-frame cadence. It contradicts a simple model in which larger peer delay always adds a fixed ping penalty to each frame. The unequal response between host assignments also shows why a fixed cap, blanket zero, or permanent artificial packet delay is not an established solution. Short phases can include scene and scheduling changes; this sweep is a mechanism experiment, not a performance acceptance result.
 
-The next implementation decision must account for frame-phase requests, calibrated clock offsets, the separate requested interval, and legitimate recovery waits. No candidate is enabled by this audit. A future experiment must retain the original path by default, preserve elapsed simulation time and peer frame progression, handle session resets, and prove complete-round synchronization before its FPS gain is accepted. Equivalent paired RPCS3 timing and original PS3 timing have not been captured; original console behavior remains unknown. Cross-machine checks remain pending as recorded in the baseline plan.
+The next implementation decision must account for frame-phase requests, calibrated clock offsets, the separate requested interval, and legitimate recovery waits. The developer experiment below retains the original path by default. It must prove preserved elapsed simulation time, peer frame progression, session resets and complete-round synchronization before its FPS gain is accepted. Equivalent paired RPCS3 timing and original PS3 timing have not been captured; original console behavior remains unknown. Cross-machine checks remain pending as recorded in the baseline plan.
 
-## Step 4 decision: preserve the original synchronization path
+## Step 4 candidate: invalidate a superseded frame-phase estimate
 
-Step 4 reached its explicit evidence gate without establishing a safe causal correction. Its implementation and experiment-switch tasks remain deferred. The added clock-calibration capture is read-only; there is no alternative pacing algorithm, developer FPS toggle, synchronization cap, packet delay or new pacing state in the production path. A source/configuration failure is preferable to silently attaching a hook to an unexpected instruction layout.
+The first Step 4 investigation did not identify a causal signaling or calibration defect. Its complete, lossless ten-sample exchange had elapsed response times of 24–57 microseconds, all adjustments matched the original arithmetic, and their differences from the latest-response midpoint were at most nine microseconds. The unchanged game still showed approximately 59.2 host FPS and 43.8 invited FPS in a short Field of War II observation. `scripts/online_clock_report.py` checks these wrapped numeric differences. That observation does not justify replacing clock calibration or signaling latency.
 
-The extra investigation tested whether the title's calibration could explain the several-millisecond steady-state correction. `func_001D511C` uses its latest remote timestamp with half an average of elapsed response times. Mixing the latest sample with an average of older response times can be biased under changing delay. That is a testable concern, but its relevance must be demonstrated before changing the game clock.
+The subsequent paired frame trace identified a more specific conflict. Host A completed 59.60 game FPS and invited B completed 49.16 FPS during 25 seconds on Field of War I. Every one of the 1,490 captured host frame headers matched an incoming client frame, with a mean header-construction-to-processing interval of 0.067 ms on this host. There were no duplicate incoming frame indices. The title's identity comparison stayed at local/owner IDs 16/16 on A and 33/16 on B; it did not transiently mistake the invited account for the owner.
 
-The new hook observes the original epoch write after `0x001D55b8`, without replacing it. A complete, lossless ten-sample private-room exchange had elapsed response times of 24–57 microseconds. All ten adjustments matched the original arithmetic and lay within the latest response's inferred offset bounds. Their differences from the latest-response midpoint were at most nine microseconds; the final difference was three microseconds. The unchanged game subsequently showed approximately 59.2 host FPS and 43.8 invited FPS in a short diagnostic observation. That observation used Field of War II and ordinary finite round settings, so it is not a replacement for the matched Field of War I baseline. It does show the slowdown while this captured calibration has no measured millisecond-scale midpoint bias.
+B requested 265 recovery phases. The host frame was one ahead of B on 264 requests and two ahead on one request. In all 265 cases, the next pacing wait exited with the recovery flag set. On 249 of those exits it still applied a positive correction, averaging 2.447 ms across all 265 exits. The latest positive timing samples at those requests were between one and seven host frames older than the recovery frame. The host trace was lossless; B dropped one diagnostic record, so its counts describe retained events rather than a complete event history. Separately recorded gameplay FPS is not calculated from diagnostic event counts.
 
-For an observed receive time `now`, the echoed request stamp `sent` and the remote response stamp `remote`, the offline check compares the original adjustment with:
+This supports an experimental hypothesis: a positive phase estimate from an older frame should not continue to delay catch-up after a newer host frame establishes that the client is behind. It does not establish that every positive correction is wrong, that the original PS3 behaved differently, or that the candidate is correct under all network conditions. The original path therefore remains the default.
 
-```text
-rtt = unsigned32(now - sent)
-lower_offset = signed32(remote - now)
-upper_offset = lower_offset + rtt
-latest_midpoint = signed32(remote - now + floor(rtt / 2))
-original_adjustment = signed32(remote - now + floor(mean_recorded_rtt / 2))
+### Exact developer opt-in
+
+```sh
+TB_EXPERIMENTAL_ONLINE_PACING=stale-phase ./TankBattlesRecomp ...
 ```
 
-The bounds assume nonnegative path delays and stable clocks during each exchange. They do not establish symmetric paths, one-way latency, cross-machine clock accuracy or acceptable behavior under arbitrary network changes. Differences use the protocol's 32-bit wrap semantics. The absolute RTC epoch is 64-bit and must not be reconstructed by subtracting an unsigned negative adjustment from it without accounting for that distinction. `scripts/online_clock_report.py` reports differences without interpreting those wrapped high bits as an FPS cause.
+Only the exact value `stale-phase` enables the candidate. Unset, empty, `0`, `1` and misspelled values all leave the original path active. The startup log names the enabled experiment. This is a developer environment switch, not a launcher setting or a release default.
 
-| Evaluated change | Decision and evidence |
-| --- | --- |
-| Replace signaling latency | Deferred. Its first-ACK measurement can include handshake time, but no causal dependency from that value to the sustained FPS loss was established. |
-| Replace calibration averaging | Deferred. A synthetic changing-delay case demonstrates possible bias; the observed exchange is consistent within nine microseconds while the slowdown persists. A synthetic possibility alone does not justify a game-clock change. |
-| Clear or cap the positive correction | Rejected as a candidate for this step. The field already clears at each normal pacing return, and its positive value is a synchronization request. No evidence establishes how much can safely be removed. |
-| Suppress recovery phases or count their pacing returns as frames | Rejected. The phase path participates in the original frame progression, and pacing returns have already been shown to differ from completed game frames. |
-| Permanently add packet delay or clock offset | Rejected. The reversible sweep had unequal results across host assignments and does not establish a correct protocol or timing change. |
+The title executable's `tb_pacing_experiment` is separate from the read-only recorder. It follows the original positive-sample acceptance, maximum selection and halving through exact hooks. `online_pacing_recovery.h` tracks the source frame and expected value of the pending peak, retained peak and published pacing correction. A matching value alone is insufficient; its frame provenance must also be known. Equal maxima keep conservative provenance, and ambiguous ordering falls back to the title's behavior.
 
-Any later candidate must preserve packet formats and ordering, remote frame identities, simulation duration, input delivery, required waits under poor network conditions and complete-round agreement. It must specify whether a correction is a phase target or synchronization debt before changing how it is consumed. It must account for receive-side phase requests and the separate nominal interval. Unknown session state, unsupported instruction layouts, stale samples, clock boundaries, stalls, reconnects, role swaps and map changes must retain the original behavior. New state would require explicit lifecycle resets and deterministic tests. A candidate may be enabled only through an exact developer opt-in after those rules are implemented; the shipped default must remain original until later acceptance succeeds.
+At the existing receive-side recovery request, immediately before the title writes its phase flag, invalidation is permitted only when all of the following hold:
 
-No new pacing state was introduced, so there is no candidate state to reset or enable. Existing recorder tests verify guest-register and memory preservation with recording disabled, active and filtered to clock-only events. Offline tests cover wrapped/negative clock differences, large prior response delays, incomplete exchanges, multiple interleaved transports and new exchanges. Those tests establish observation correctness, not a validated replacement algorithm. Step 5 candidate acceptance remains pending. The next evidence needed is a demonstrated error in frame progression or timing with a proposed correction that retains the required recovery behavior, rather than another FPS-only workaround.
+- The original client-role branch has been taken, the queue is active and nominal pacing is enabled.
+- The received host frame is newer than the client's current frame under unambiguous 32-bit frame ordering.
+- A positive published correction still equals the tracked value and comes from an older host frame.
+- Every nonzero pending or retained peak also equals its tracked value and comes from an older host frame. A fresh, unknown or overwritten peak preserves the original control signal.
+- This is a newer recovery request than the last request on which the candidate acted.
+
+Only then does the candidate clear those superseded pending/retained estimates and the corresponding pacing correction. It leaves the title's original recovery flag, recovery counter, nominal interval, clock epoch, frame increment, simulation updates, input handling, packet format and packet delivery paths intact. A new valid positive timing sample follows the original path again. This is selective invalidation of a tracked older-frame phase estimate, not a blanket zero or a magnitude cap. Whether the old estimate can safely be superseded in every required scenario remains subject to Step 5 acceptance.
+
+### State, fallback and validation
+
+Provenance resets at network-manager start/teardown, queue construction/reinitialization, transport teardown, clock calibration, the previous-timestamp reset callback and changes in the title's local/owner identifier pair. An unexpected concurrent queue invalidates provenance and disables the experiment until a lifecycle reset. No sample from a previous session may qualify a new session's correction for invalidation. Missing, stale, ambiguous or unsupported state keeps the title's original behavior.
+
+The helper has no timers, background mutation or altered clock source. Both source and consumer configuration attach the same hooks through `scripts/patch_online_pacing.py`; generated chunks are not persistently hand-edited. The title object and packaged header carry the candidate without adding a runtime archive ABI dependency. Read-only diagnostics still observe original values before an experimental action, and kind 14 records each actual invalidation separately.
+
+Deterministic tests cover exact opt-in/default behavior, tracking through the title's halving, preservation of fresh and unknown estimates, overwritten values, repeated recovery requests, negative timing samples, large values, frame-index wrap and its ambiguous half-period, and clearing provenance between sessions. Register-preservation tests also cover the native adapter. The candidate remains disabled for ordinary use until complete-round correctness, changing network conditions, host swaps, map changes, reconnects and three-player acceptance establish that it preserves required synchronization. Short diagnostic FPS checks do not satisfy that acceptance.
+
+### Initial live comparison
+
+A short Field of War I comparison used Native/100%, FXAA off, PulseAudio, two human slots with neutral input and two CPU tanks, infinite lives/time, and visible ungrouped windows. The same-machine test-only port translator ran with zero added delay. Builds finished before measurement. Completed game frames came from independent `TB_GAMEPLAY_TIMING`, rather than pacing calls, vblank or window presentations.
+
+| 20-second run | Host A completed FPS | Invited B completed FPS | B mean correction at wait exit | Retained B invalidations |
+| --- | ---: | ---: | ---: | ---: |
+| Candidate disabled | 59.65 | 46.20 | 3.041 ms | 0 |
+| Candidate enabled only on B | 59.60 | 50.25 | 0.764 ms | 162 |
+
+All 162 retained invalidations followed a host frame one ahead of the client; their source frames were one to four frames older than that host frame. The host recorded no experimental actions. Both recordings completed, but B dropped one diagnostic record in the disabled run and two in the enabled run; retained counts do not establish complete action histories. Gameplay FPS uses a separate recorder. The disabled run preceded the final added role/lifecycle reset hooks; its experiment was disabled, so those hooks return without changing guest state. The final candidate executable and changed-source hashes are recorded in `analysis/online-fps/step4/candidate-verification.json`.
+
+The candidate did not restore 60 completed FPS. A single short comparison does not establish a repeatable performance improvement, particularly given the phase sensitivity in Step 3. It establishes that the opt-in hook activates during gameplay while an unchanged peer remains connected. No full-round outcome, simulation-speed, adverse-network, three-player or separate-machine acceptance is claimed. The detailed records are in `analysis/online-fps/step4/RESULT.md`; Steps 5 and 6 remain required before considering a release default.
