@@ -56,7 +56,17 @@ s32 tb_trophy_abort_handle(SceNpTrophyHandle handle)
     }''')],
  'libs/system/cellMsgDialog.c':[(
   'static int                   s_dialog_open = 0;',
-  'static int                   s_dialog_open = 0;\nint tb_system_dialog_active(void) { return s_dialog_open; }')],
+  'static int                   s_dialog_open = 0;\nint tb_system_dialog_active(void) { return s_dialog_open; }'),
+ ('            result = CELL_MSGDIALOG_BUTTON_NONE;',
+  # This is the headless USER dismissal only. A title-driven Close() still
+  # returns NONE; progress notices still wait for Close/Abort. Tank Battles
+  # maps NONE to result 4 and keeps waiting after a disconnect; ESCAPE
+  # completes its cancellable notice and returns to the menu.
+  '            result = (type & CELL_MSGDIALOG_TYPE_DISABLE_CANCEL_ON)\n                ? CELL_MSGDIALOG_BUTTON_NONE : CELL_MSGDIALOG_BUTTON_ESCAPE;'),
+ ('            printf("[cellMsgDialog] Auto-responding: NONE (no buttons)\\n");',
+  '            printf("[cellMsgDialog] Auto-responding: %s (no buttons)\\n",\n                   result == CELL_MSGDIALOG_BUTTON_ESCAPE ? "ESCAPE" : "NONE");'),
+ ('        queue_dialog_callback(cb, CELL_MSGDIALOG_BUTTON_NONE, s_userdata);',
+  '        queue_dialog_callback(cb, (s_type & CELL_MSGDIALOG_TYPE_DISABLE_CANCEL_ON)\n            ? CELL_MSGDIALOG_BUTTON_NONE : CELL_MSGDIALOG_BUTTON_ESCAPE, s_userdata);')],
  'runtime/syscalls/sys_ppu_thread.c':[(
   '    if (priority < 256)\n        SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);',
   '    /* Tank Battles SurMixer producers use guest priorities 400..404.\n     * Preserve their precedence over the main thread (1001) on Windows. */\n    if (priority < 512) {\n        SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);\n        if (getenv("AUDIO_RATE")) fprintf(stderr,"[audio-priority] guest=%d host=%d name=%s\\n",\n            priority,GetThreadPriority(t->host_thread),t->name);\n    }')],
