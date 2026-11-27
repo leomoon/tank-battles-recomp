@@ -72,19 +72,18 @@ class Schedules(unittest.TestCase):
 #include <cassert>
 int main() {
  unsigned frame;bool recovered=false;unsigned last=0;
- tb_pacing_recovery::State state;
+ tb_pacing_recovery::RenderState state;state.role(33,16);
+ uint64_t now=100;
  while(std::cin>>frame) {
-  state.sample(frame,8000,0);state.select(8000,0);state.publish(4000,4000);
-  // Controlled harness: a recovery for the following frame at one-frame lag.
   const unsigned remote=frame+1;
-  const bool used=state.recover(remote,frame,4000,0,4000);
+  state.observe(1,2,remote,frame,now,true);state.request(1,remote,frame,now);
+  state.advance(2,remote);
+  const bool used=state.consume(remote,now,true,true);
   const bool expected=!recovered || tb_pacing_recovery::newer(remote,last);
   assert(used==expected);
   if(used) {last=remote;recovered=true;}
-  // A current-frame estimate must always retain the original behavior.
-  tb_pacing_recovery::State fresh;
-  fresh.sample(remote,8000,0);fresh.select(8000,0);fresh.publish(4000,4000);
-  assert(!fresh.recover(remote,frame,4000,0,4000));
+  assert(!state.consume(remote,now,true,true));
+  ++now;
  }
 }
 '''

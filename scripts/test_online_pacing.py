@@ -2,7 +2,7 @@
 import json,os,shutil,subprocess,tempfile,unittest
 from pathlib import Path
 from pacing_report import report
-from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POLL,CALIBRATION,FRAME_SAMPLE,PHASE_REQUEST,ROLE_IDS,MAIN,RENDER_GATE,UPDATE_CALL
+from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POLL,CALIBRATION,FRAME_SAMPLE,PHASE_REQUEST,ROLE_IDS,MAIN,RENDER_GATE,UPDATE_CALL,ADVANCE_CALL
 
 ROOT=Path(__file__).resolve().parents[1]
 class PacingHooks(unittest.TestCase):
@@ -18,7 +18,7 @@ class PacingHooks(unittest.TestCase):
   for name in ('00169438','001696DC','00170A60','001D3A2C','001A3368'):
    extra='        vm_write64(ctx->gpr[31] + 0x18, ctx->gpr[3]);\n' if name=='00169438' else '        vm_write64(ctx->gpr[9] + 0x110, ctx->gpr[3]);\n' if name=='001A3368' else ''
    bodies += [f'void func_{name}(ppu_context* ctx) {{\n    PPU_MM_SNAP\n'+extra+'}\n']
-  bodies += [MAIN+RENDER_GATE+UPDATE_CALL+'}\n']
+  bodies += [MAIN+ADVANCE_CALL+UPDATE_CALL+RENDER_GATE+'}\n']
   for n,body in enumerate(bodies):(root/f'ppu_recomp_{n:03}.cpp').write_text(INCLUDE+body)
  def test_instruction_hooks_are_scoped_idempotent_and_register_neutral(self):
   with tempfile.TemporaryDirectory() as d:
@@ -33,7 +33,7 @@ class PacingHooks(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'ppu_recomp_000.cpp';p.write_text('void fixture() {}\n');patch_pacing(d);self.assertEqual(p.read_text(),'void fixture() {}\n')
  def test_unexpected_missing_and_ambiguous_layouts_fail_before_edits(self):
-  for mutation in ('anchor','function','duplicate','format','audit_function','reset','extra_reset','calibration','phase','frame','role','lifecycle'):
+  for mutation in ('anchor','function','duplicate','format','audit_function','reset','extra_reset','calibration','phase','frame','role','lifecycle','advance'):
    with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as d:
     root=Path(d);self.fixture(root)
     if mutation=='anchor':
@@ -50,6 +50,8 @@ class PacingHooks(unittest.TestCase):
      p=root/'ppu_recomp_004.cpp';p.write_text(p.read_text().replace(PHASE_REQUEST if mutation=='phase' else FRAME_SAMPLE,'        /* changed instruction */\n'))
     elif mutation=='role':
      p=root/'ppu_recomp_007.cpp';p.write_text(p.read_text().replace(ROLE_IDS,'        /* changed identity comparison */\n'))
+    elif mutation=='advance':
+     p=root/'ppu_recomp_013.cpp';p.write_text(p.read_text().replace(ADVANCE_CALL,'        /* missing advance */\n'))
     elif mutation=='lifecycle':
      p=root/'ppu_recomp_008.cpp';p.write_text(p.read_text().replace(' + 0x18,',' + 0x20,'))
     elif mutation=='calibration':
@@ -83,78 +85,29 @@ uint8_t memory[0x20000]={};uint8_t* vm_base=memory;
 extern "C" void tb_pacing_hook(ppu_context*,unsigned);
 extern "C" void tb_pacing_experiment(ppu_context*,unsigned);
 int main(int argc,char** argv) {
- if(argc>1 && !strcmp(argv[1],"render-probe")) {
-  ppu_context c{};memory[0x13014]=1;memory[0x10121]=1;memory[0x10122]=1;
-  auto request=[&](unsigned delta) {c.gpr[29]=33;c.gpr[3]=16;tb_pacing_experiment(&c,14);
-    c.gpr[30]=0x13000;c.gpr[31]=101+delta;c.gpr[28]=101;c.gpr[3]=0;tb_pacing_experiment(&c,12);};
-  request(1);c.gpr[7]=0x10122;c.gpr[29]=1;c.cr=0x12345678;
-  const auto before=c;uint8_t saved[sizeof(memory)];memcpy(saved,memory,sizeof(memory));
+ if(argc>1 && (!strcmp(argv[1],"render-candidate") || !strcmp(argv[1],"render-audit"))) {
+  ppu_context c{};
+  if(!strcmp(argv[1],"render-audit")) {tb_pacing_hook(&c,0);std::this_thread::sleep_for(std::chrono::milliseconds(50));}
+  memory[0x13014]=1;memory[0x10121]=1;memory[0x10122]=1;
   const bool enabled=getenv("TB_EXPERIMENTAL_ONLINE_PACING") && !strcmp(getenv("TB_EXPERIMENTAL_ONLINE_PACING"),"recovery-render");
+  auto request=[&](unsigned delta) {
+    c.gpr[29]=33;c.gpr[3]=16;tb_pacing_experiment(&c,14);
+    c.gpr[30]=0x13000;c.gpr[3]=0x14000;c.gpr[31]=101+delta;c.gpr[28]=101;
+    vm_write32(0x14020,101);tb_pacing_experiment(&c,13);
+    c.gpr[3]=0;tb_pacing_experiment(&c,12);
+  };
+  request(1);vm_write32(0x14020,102);c.gpr[3]=0x14000;tb_pacing_experiment(&c,19);c.gpr[7]=0x10122;c.gpr[29]=1;c.cr=0x12345678;
+  const auto before=c;uint8_t saved[sizeof(memory)];memcpy(saved,memory,sizeof(memory));
   tb_pacing_experiment(&c,17);if(c.gpr[29]!=(enabled?0:1))return 30;
   c.gpr[29]=1;if(memcmp(&c,&before,sizeof(c)) || memcmp(saved,memory,sizeof(memory)))return 31;
-  tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 32;
-  request(2);c.gpr[7]=0x10122;c.gpr[29]=1;tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 33;
-  request(1);tb_pacing_experiment(&c,15);c.gpr[7]=0x10122;c.gpr[29]=1;
-  tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 34;
-  return 0;
- }
- if(argc>1 && !strcmp(argv[1],"deadline-probe")) {
-  ppu_context c{};memory[0x13014]=1;
-  memory[0x10121]=1;memory[0x10122]=0;memory[0x1012d]=1;
-  auto request=[&] {c.gpr[29]=33;c.gpr[3]=16;tb_pacing_experiment(&c,14);
-    c.gpr[30]=0x13000;c.gpr[31]=102;c.gpr[28]=101;c.gpr[3]=0;tb_pacing_experiment(&c,12);};
-  request();c.gpr[31]=0x10000;c.cr=0x123456f8;
-  const auto before=c;uint8_t saved[sizeof(memory)];memcpy(saved,memory,sizeof(memory));
-  tb_pacing_experiment(&c,16);
-  const bool enabled=getenv("TB_EXPERIMENTAL_ONLINE_PACING") && !strcmp(getenv("TB_EXPERIMENTAL_ONLINE_PACING"),"recovery-no-wait");
-  if(c.cr!=(enabled?(before.cr&~128u):before.cr))return 20;
-  c.cr=before.cr;if(memcmp(&c,&before,sizeof(c)) || memcmp(saved,memory,sizeof(memory)))return 21;
-  tb_pacing_experiment(&c,16);if(c.cr!=before.cr)return 22; // Only one bypass per request.
-  request();tb_pacing_experiment(&c,15);c.gpr[31]=0x10000;
-  tb_pacing_experiment(&c,16);if(c.cr!=before.cr)return 23;
-  c.gpr[29]=16;c.gpr[3]=16;tb_pacing_experiment(&c,14);
-  c.gpr[30]=0x13000;c.gpr[31]=102;c.gpr[28]=101;c.gpr[3]=0;tb_pacing_experiment(&c,12);
-  c.gpr[31]=0x10000;tb_pacing_experiment(&c,16);if(c.cr!=before.cr)return 24;
-  return 0;
- }
- if(argc>1 && !strcmp(argv[1],"candidate")) {
-  ppu_context c{};c.gpr[2]=0x18000;
-  vm_write32(0x18000-0x2534,0x10124);memory[0x10121]=1;memory[0x13014]=1;
-  tb_pacing_experiment(&c,15);
-  c.gpr[30]=0x13000;c.gpr[6]=0x12000;c.gpr[5]=8000;vm_write32(0x1200c,100);
-  tb_pacing_experiment(&c,7);vm_write32(0x13020,8000);
-  c.gpr[28]=0x13000;tb_pacing_experiment(&c,8);
-  vm_write32(0x13020,0);vm_write32(0x13024,4000);vm_write32(0x10124,4000);
-  c.gpr[11]=4000;tb_pacing_experiment(&c,2);
-  c.gpr[30]=0x14000;tb_pacing_experiment(&c,16);c.gpr[30]=0x13000;
-  c.gpr[3]=0;c.gpr[31]=101;c.gpr[28]=100;const auto before=c;
-  tb_pacing_experiment(&c,12);
-  if(memcmp(&before,&c,sizeof(c)))return 10;
-  const bool enabled=getenv("TB_EXPERIMENTAL_ONLINE_PACING") && !strcmp(getenv("TB_EXPERIMENTAL_ONLINE_PACING"),"stale-phase");
-  if(vm_read32(0x10124)!=(enabled?0:4000) || vm_read32(0x13024)!=(enabled?0:4000))return 11;
-  // Reset and role/queue transitions must discard all earlier provenance.
-  auto seed=[&] {
-   tb_pacing_experiment(&c,15);
-   c.gpr[29]=33;c.gpr[3]=16;tb_pacing_experiment(&c,14);
-   vm_write32(0x13020,0);vm_write32(0x13024,0);
-   c.gpr[30]=0x13000;c.gpr[6]=0x12000;c.gpr[5]=8000;
-   tb_pacing_experiment(&c,7);vm_write32(0x13020,8000);
-   c.gpr[28]=0x13000;tb_pacing_experiment(&c,8);
-   vm_write32(0x13020,0);vm_write32(0x13024,4000);vm_write32(0x10124,4000);
-   c.gpr[11]=4000;tb_pacing_experiment(&c,2);
-   c.gpr[3]=0;c.gpr[31]=101;c.gpr[28]=100;c.gpr[30]=0x13000;
-  };
-  for(unsigned reset: {11u,15u,14u,7u}) {
-   seed();
-   if(reset==14) {c.gpr[29]=33;c.gpr[3]=33;}
-   if(reset==7)c.gpr[30]=0x14000; // Unexpected second queue: disable until reset.
-   tb_pacing_experiment(&c,reset);
-   c.gpr[3]=0;c.gpr[30]=0x13000;
-   tb_pacing_experiment(&c,12);
-   if(vm_read32(0x10124)!=4000 || vm_read32(0x13024)!=4000)return 12;
-  }
-  seed();tb_pacing_experiment(&c,12);
-  if(vm_read32(0x10124)!=(enabled?0:4000))return 13;
+  request(1);c.gpr[7]=0x10122;c.gpr[29]=1;
+  tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 32; // Duplicate host frame.
+  tb_pacing_experiment(&c,15);request(2);c.gpr[7]=0x10122;c.gpr[29]=1;
+  tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 33;
+  tb_pacing_experiment(&c,15);request(1);vm_write32(0x14020,102);
+  c.gpr[7]=0x10122;c.gpr[29]=1;tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 34;
+  tb_pacing_experiment(&c,15);request(1);tb_pacing_experiment(&c,15);
+  c.gpr[7]=0x10122;c.gpr[29]=1;tb_pacing_experiment(&c,17);if(c.gpr[29]!=1)return 35;
   return 0;
  }
  ppu_context c{};c.gpr[31]=0x10000;c.gpr[30]=0x11000;c.gpr[11]=1234;c.fpr[0]=999;c.fpr[1]=888;c.cr=128;
@@ -205,22 +158,23 @@ int main(int argc,char** argv) {
   return trace
  def test_disabled_creates_no_output_and_preserves_guest(self):
   self.assertFalse(self.run_fixture('off',False).exists())
- def test_recovery_requires_exact_opt_in_and_resets_session_provenance(self):
-  for value in (None,'','0','1','stale-phase-typo','stale-phase'):
-   with self.subTest(value=value):
-    env={k:v for k,v in os.environ.items() if not k.startswith('TB_PACING_') and k!='TB_EXPERIMENTAL_ONLINE_PACING'}
-    if value is not None:env['TB_EXPERIMENTAL_ONLINE_PACING']=value
-    subprocess.run([str(self.exe),'candidate'],env=env,check=True)
- def test_deadline_probe_is_one_shot_role_scoped_and_changes_only_branch(self):
-  for option in (None,'0','recovery-no-wait-typo','recovery-no-wait'):
+ def test_render_candidate_scopes_mutation_and_retires_previous_options(self):
+  for option in (None,'','0','1','stale-phase','recovery-no-wait','recovery-render-typo','recovery-render'):
    env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_'))}
    if option is not None:env['TB_EXPERIMENTAL_ONLINE_PACING']=option
-   subprocess.run([str(self.exe),'deadline-probe'],env=env,check=True)
- def test_render_probe_preserves_phase_memory_and_requires_exact_one_frame_recovery(self):
-  for option in (None,'stale-phase','recovery-no-wait','recovery-render-typo','recovery-render'):
-   env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_'))}
-   if option is not None:env['TB_EXPERIMENTAL_ONLINE_PACING']=option
-   subprocess.run([str(self.exe),'render-probe'],env=env,check=True)
+   subprocess.run([str(self.exe),'render-candidate'],env=env,check=True)
+ def test_render_guard_metadata_preserves_frame_indices_and_action_meaning(self):
+  trace=self.root/'render-guard.jsonl';trigger=self.root/'render-guard.trigger';trigger.touch()
+  env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_'))}
+  env.update(TB_PACING_TRACE=str(trace),TB_PACING_TRIGGER=str(trigger),TB_PACING_SECONDS='1',TB_PACING_FRAME_ONLY='1',TB_EXPERIMENTAL_ONLINE_PACING='recovery-render')
+  subprocess.run([str(self.exe),'render-audit'],env=env,check=True)
+  rows=[json.loads(line) for line in trace.read_text().splitlines()]
+  self.assertEqual(rows[0]['dropped'],0)
+  actions=[row for row in rows[1:] if row['kind']==16]
+  self.assertEqual(len(actions),1)
+  self.assertEqual((actions[0]['object'],actions[0]['local_sequence'],actions[0]['previous_guest_us']),(0x10000,102,101))
+  first=next(row for row in rows[1:] if row['kind']==19)
+  self.assertEqual((first['object'],first['interval_bits'],first['local_sequence'],first['previous_guest_us'],first['observed_guest_us'],first['flags']),(0x14000,0x13000,102,101,102,29))
  def test_enabled_records_numeric_metadata_and_preserves_guest(self):
   path=self.run_fixture('on',True)
   rows=[json.loads(l) for l in path.read_text().splitlines()]

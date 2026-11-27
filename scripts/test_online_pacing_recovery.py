@@ -1,4 +1,4 @@
-"""Deterministic stale-phase experiment provenance and lifecycle checks."""
+"""One-frame render eligibility, ownership, ordering and lifecycle checks."""
 import shutil
 import subprocess
 import tempfile
@@ -7,42 +7,47 @@ from pathlib import Path
 
 
 class RecoveryTests(unittest.TestCase):
-    def test_phase_estimate_invalidation_requires_known_older_frames(self):
+    def test_render_decision_requires_fresh_owned_single_frame_request(self):
         compiler=shutil.which('g++') or shutil.which('clang++')
         if not compiler:self.skipTest('C++ compiler unavailable')
         root=Path(__file__).resolve().parents[1]
         source=r'''
 #include "online_pacing_recovery.h"
 #include <cassert>
+#include <initializer_list>
 using namespace tb_pacing_recovery;
-State estimate(uint32_t frame,uint32_t delta=8000) {
- State s;s.sample(frame,delta,0);s.select(delta,0);s.publish(delta/2,delta/2);return s;
+RenderState seed(uint32_t remote=102,uint32_t local=101) {
+ RenderState s;s.role(33,16);s.observe(1,2,remote,local,100,true);s.request(1,remote,local,100);s.advance(2,remote);return s;
 }
 int main() {
- auto s=estimate(100);
- assert(!s.recover(100,100,4000,0,4000)); // Same frame: preserve the wait.
- assert(!s.recover(99,100,4000,0,4000));  // Local ahead: preserve the wait.
- assert(s.recover(101,100,4000,0,4000));  // New host frame supersedes old estimate.
- assert(!s.recover(101,100,4000,0,4000)); // Never consume twice.
- s=estimate(101);assert(!s.recover(101,100,4000,0,4000)); // Fresh estimate.
- s=estimate(100);assert(!s.recover(101,100,4001,0,4000)); // Untracked overwrite.
- s=estimate(100);assert(!s.recover(101,100,4000,1,4000)); // Unknown pending sample.
- s=estimate(100);s.sample(101,9000,0);
- assert(!s.recover(101,100,4000,9000,4000)); // Fresh pending control signal.
- s=estimate(100);s.sample(99,9000,0);
- assert(s.recover(101,100,4000,9000,4000)); // Both tracked estimates are older.
- s=estimate(100);s.select(0,4000);s.publish(2000,2000);
- assert(s.recover(101,100,2000,0,2000)); // Original halving retains provenance.
- s=estimate(0xffffffff);assert(s.recover(0,0xffffffff,4000,0,4000));
- s=estimate(0);assert(!s.recover(0x80000000,1,4000,0,4000)); // Ambiguous half-wrap.
- s=estimate(100);s={};assert(!s.recover(101,100,4000,0,4000)); // Session reset.
- s=estimate(200);assert(s.recover(201,200,4000,0,4000)); // Fresh new session.
- s=estimate(100);s.sample(100,0xffffffff,0);assert(s.pending_value==0); // Negative delta.
- s=estimate(100,0x7fffffff);assert(s.recover(101,100,0x3fffffff,0,0x3fffffff));
- s=estimate(100);s.select(0,0);s.publish(0,0);
- assert(!s.recover(101,100,4000,0,4000)); // A cleared title peak cannot be resurrected.
- s=estimate(100);s.sample(102,8000,0);s.select(8000,4000);s.publish(4000,4000);
- assert(!s.recover(101,100,4000,0,4000)); // Newer peak wins.
+ RenderState raw;raw.role(33,16);raw.observe(1,2,102,101,100,true);raw.request(1,102,101,100);
+ assert(!raw.consume(102,101,true,true)); // Numerical catch-up alone is insufficient.
+ auto s=seed();s.advance(2,102);assert(!s.consume(102,101,true,true)); // Two advances invalidate.
+ s=seed();s.advance(3,102);assert(!s.consume(102,101,true,true)); // Wrong manager.
+ s=seed();assert(s.consume(102,101,true,true));assert(!s.consume(102,102,true,true));
+ s.request(1,102,101,102);assert(!s.consume(102,102,true,true));
+ for(auto gap:{0u,2u,0xffffffffu,0x80000000u}) {s=seed(101+gap,101);assert(!s.consume(102,101,true,true));}
+ s=seed(0,0xffffffff);assert(s.consume(0,101,true,true));
+ s=seed();assert(!s.consume(103,101,true,true)); // A later update cannot use it.
+ s=seed();assert(!s.consume(102,50000101,true,true));
+ s=seed();assert(!s.consume(102,99,true,true));
+ s=seed();assert(!s.consume(102,101,false,true));
+ s=seed();assert(!s.consume(102,101,true,false));
+ s=seed();s.observe(1,2,102,102,101,true);assert(!s.consume(102,101,true,true));
+ s=seed();s.observe(1,2,103,103,101,true);assert(!s.consume(102,101,true,true));
+ s=seed();s.observe(1,2,101,101,101,true);assert(!s.consume(102,101,true,true));
+ s=seed();s.observe(1,2,102,101,50000099,true);s.request(1,102,101,50000101);
+ assert(!s.consume(102,50000101,true,true)); // Duplicate cannot refresh age.
+ s=seed();s.observe(3,2,103,102,101,true);assert(s.unsupported && !s.consume(102,101,true,true));
+ s=seed();s.observe(1,3,103,102,101,true);assert(s.unsupported && !s.consume(102,101,true,true));
+ s=seed();s.observe(1,2,102+0x80000000u,101,101,true);assert(!s.consume(102,101,true,true));
+ s=seed();s.role(16,16);assert(!s.consume(102,101,true,true));
+ s=seed();s.role(44,16);assert(!s.consume(102,101,true,true));
+ s=seed();auto generation=s.generation;s.reset();assert(s.generation==generation+1 && !s.consume(102,101,true,true));
+ s.role(44,55);s.observe(3,4,1,0,101,true);s.request(3,1,0,101);s.advance(4,1);assert(s.consume(1,102,true,true));
+ s=seed();s.role(33,0);s.observe(1,2,102,101,100,true);s.request(1,102,101,100);assert(!s.consume(102,101,true,true));
+ RenderState unknown;unknown.observe(1,2,102,101,100,true);unknown.request(1,102,101,100);assert(!unknown.consume(102,101,true,true));
+ s=seed();s.observe(1,2,103,102,101,false);assert(!s.consume(102,101,true,true));
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

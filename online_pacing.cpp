@@ -82,7 +82,7 @@ struct Trace {
         fclose(file);
     }
     void push(Event e) {
-        if(frame_only && e.kind!=1 && e.kind!=2 && e.kind!=3 && e.kind!=9 && e.kind!=11 && e.kind!=14 && e.kind!=15 && e.kind!=16 && e.kind!=17 && e.kind!=18 && e.kind!=6 && e.kind!=7 && e.kind!=8 && e.kind!=12)return;
+        if(frame_only && e.kind!=1 && e.kind!=2 && e.kind!=3 && e.kind!=9 && e.kind!=11 && e.kind!=14 && e.kind!=15 && e.kind!=16 && e.kind!=17 && e.kind!=18 && e.kind!=19 && e.kind!=6 && e.kind!=7 && e.kind!=8 && e.kind!=12)return;
         e.ns=tb_host_now();
         if(e.ns<start || e.ns>end) return;
         e.tx=tx.load(std::memory_order_relaxed);e.rx=rx.load(std::memory_order_relaxed);
@@ -104,131 +104,59 @@ thread_local Event io[2];
 bool valid(uint64_t p) {return vm_base && p>=0x10000 && p<=0xfffffe00ull;}
 
 struct RecoveryExperiment {
-    bool enabled=false, deadline_probe=false, render_probe=false;
-    bool pending_catchup=false, control_enabled=true;
-    uint64_t requested_ns=0, control_next_ns=0;
-    uint32_t recovery_frame=0, recovery_local=0;
-    std::string control_path;
+    const bool enabled=[] {
+        const char* value=getenv("TB_EXPERIMENTAL_ONLINE_PACING");
+        const bool on=value && std::string(value)=="recovery-render";
+        if(on)fprintf(stderr,"[online pacing] experimental one-frame recovery rendering enabled\n");
+        return on;
+    }();
     std::mutex mutex;
-    uint32_t queue=0;
-    uint64_t role_ids=0;
-    bool role_known=false,unsupported=false;
-    tb_pacing_recovery::State state;
-    RecoveryExperiment() {
-        const char* option=getenv("TB_EXPERIMENTAL_ONLINE_PACING");
-        enabled=option && std::string(option)=="stale-phase";
-        deadline_probe=option && std::string(option)=="recovery-no-wait";
-        render_probe=option && std::string(option)=="recovery-render";
-        deadline_probe=deadline_probe || render_probe;
-        enabled=enabled || deadline_probe;
-        if(deadline_probe) {
-            if(const char* path=getenv("TB_EXPERIMENTAL_PACING_CONTROL"))control_path=path;
-            fprintf(stderr,"[online pacing] developer %s probe enabled\n",render_probe?"recovery-render":"recovery-no-wait");
-        }
-        if(enabled && !deadline_probe)fprintf(stderr,"[online pacing] experimental stale-phase recovery enabled\n");
-    }
+    tb_pacing_recovery::RenderState state;
 };
 RecoveryExperiment& recovery() {static auto* value=new RecoveryExperiment;return *value;}
 }
 
-// Kept separate from the read-only recorder. Exact opt-in is mandatory, and
-// lifecycle hooks drop all provenance before the next session can use it.
 extern "C" void tb_pacing_experiment(ppu_context* c,unsigned op) {
     auto& experiment=recovery();
-    if(!experiment.enabled || (op==16 && (!experiment.deadline_probe || experiment.render_probe)) || (op==17 && !experiment.render_probe))return;
+    if(!experiment.enabled)return;
     std::lock_guard guard(experiment.mutex);
-    if(op==15 || op==11) {
-        experiment.queue=0;experiment.state={};experiment.role_known=false;experiment.unsupported=false;experiment.pending_catchup=false;
-        return;
-    }
-    if(op==14) {
-        const uint64_t ids=(uint64_t(uint32_t(c->gpr[29]))<<32)|uint32_t(c->gpr[3]);
-        if(experiment.role_known && ids!=experiment.role_ids) {
-            experiment.queue=0;experiment.state={};experiment.unsupported=false;experiment.pending_catchup=false;
-        }
-        experiment.role_ids=ids;experiment.role_known=true;
-        return;
-    }
-    if(experiment.deadline_probe) {
-        if(op==12) {
-            experiment.pending_catchup=false;
-            if(!experiment.role_known || uint32_t(experiment.role_ids>>32)==uint32_t(experiment.role_ids) ||
-               c->gpr[3]!=0 || !valid(c->gpr[30]) || !vm_read8(c->gpr[30]+0x14))return;
-            const auto delta=uint32_t(c->gpr[31])-uint32_t(c->gpr[28]);
-            if(!delta || delta>=0x80000000u)return;
-            experiment.pending_catchup=true;experiment.requested_ns=tb_host_now();
-            experiment.recovery_frame=uint32_t(c->gpr[31]);experiment.recovery_local=uint32_t(c->gpr[28]);
-        } else if((op==16 || op==17) && experiment.pending_catchup) {
-            const auto ns=tb_host_now();
-            if(ns>experiment.requested_ns+50000000ull) {experiment.pending_catchup=false;return;}
-            if(op==17 && (!valid(c->gpr[7]) || c->gpr[7]<0x10122 || c->gpr[29]!=1 ||
-               uint32_t(experiment.recovery_frame-experiment.recovery_local)!=1))return;
-            const uint32_t pacer=op==17?uint32_t(c->gpr[7])-0x122:uint32_t(c->gpr[31]);
-            if(!valid(pacer) || !vm_read8(pacer+0x121))return;
-            if(op==16 && (vm_read8(pacer+0x122) || !vm_read8(pacer+0x12d) || !(c->cr&(1u<<7))))return;
-            if(op==17 && vm_read8(pacer+0x122)!=1)return;
-            // A file is optional and confined to this explicit developer probe.
-            // Missing/malformed content selects the original behavior. Poll at
-            // most four times a second, never once per microsecond wait poll.
-            if(!experiment.control_path.empty() && ns>=experiment.control_next_ns) {
-                experiment.control_next_ns=ns+250000000ull;char option[8]={};
-                auto path=std::filesystem::path(std::u8string(experiment.control_path.begin(),experiment.control_path.end()));
-#ifdef _WIN32
-                FILE* file=_wfopen(path.c_str(),L"rb");
-#else
-                FILE* file=fopen(path.c_str(),"rb");
-#endif
-                experiment.control_enabled=file && fgets(option,sizeof(option),file) && std::string(option)=="1\n";
-                if(file)fclose(file);
-            }
-            if(!experiment.control_enabled)return;
-            experiment.pending_catchup=false;
-            // Alter only this one original loop branch. Original timestamps,
-            // correction/queue state, phase selection and update delta remain
-            // owned by the title. This is a causal probe, not a release fix.
-            if(op==16)c->cr &= ~(1u<<7);
-            else c->gpr[29]=0; // Select the actual render path for this one catch-up update.
-            auto& recorder=trace();
-            if(recorder.active.load(std::memory_order_acquire)) {
-                Event event;event.kind=op==16?15:16;event.object=pacer;
-                event.sequence=experiment.recovery_frame;event.previous_us=experiment.recovery_local;
-                event.correction=vm_read32(pacer+0x124);recorder.push(event);
-            }
-        }
-        return;
-    }
-    if(experiment.unsupported)return;
-    const uint32_t queue=uint32_t(op==8 || op==2?c->gpr[28]:c->gpr[30]);
-    if(!valid(queue))return;
-    if(!experiment.queue)experiment.queue=queue;
-    if(queue!=experiment.queue) {
-        experiment.state={};experiment.unsupported=true;return;
-    }
     auto& state=experiment.state;
-    if(op==7) {
-        if(!valid(c->gpr[6]))return;
-        state.sample(vm_read32(c->gpr[6]+0xc),uint32_t(c->gpr[5]),vm_read32(queue+0x20));
-    } else if(op==8)state.select(vm_read32(queue+0x20),vm_read32(queue+0x24));
-    else if(op==2)state.publish(uint32_t(c->gpr[11]),vm_read32(queue+0x24));
-    else if(op==12) {
-        // This exact title path has already requested recovery for a newer
-        // host frame. Unknown role/state or untracked estimates fall back.
-        if(c->gpr[3]!=0 || !vm_read8(queue+0x14) || c->gpr[2]<0x12534 ||
-           !valid(c->gpr[2]-0x2534))return;
-        const uint32_t field=vm_read32(c->gpr[2]-0x2534);
-        if(!valid(field) || field<0x10124 || !vm_read8(field-0x124+0x121))return;
-        const uint32_t before=vm_read32(field);
-        const uint32_t origin=state.field.frame;
-        const uint32_t pending=vm_read32(queue+0x20),retained=vm_read32(queue+0x24);
-        if(!state.recover(uint32_t(c->gpr[31]),uint32_t(c->gpr[28]),before,
-                          pending,retained))return;
-        vm_write32(queue+0x20,0);vm_write32(queue+0x24,0);vm_write32(field,0);
+    if(op==15 || op==11) {state.reset();return;}
+    if(op==14) {state.role(uint32_t(c->gpr[29]),uint32_t(c->gpr[3]));return;}
+    if(op==13) {
+        if(!valid(c->gpr[30]) || !valid(c->gpr[3])) {state.pending=false;return;}
+        state.observe(uint32_t(c->gpr[30]),uint32_t(c->gpr[3]),uint32_t(c->gpr[31]),
+                      uint32_t(c->gpr[28]),tb_host_now(),vm_read8(c->gpr[30]+0x14)!=0);
+    } else if(op==12) {
+        if(c->gpr[3]!=0) {state.pending=false;return;}
+        state.request(uint32_t(c->gpr[30]),uint32_t(c->gpr[31]),uint32_t(c->gpr[28]),tb_host_now());
+    } else if(op==19) {
+        if(!valid(c->gpr[3])) {state.pending=false;return;}
+        state.advance(uint32_t(c->gpr[3]),vm_read32(c->gpr[3]+0x20));
+    } else if(op==17) {
+        if(!valid(c->gpr[7]) || c->gpr[7]<0x10122 || !valid(state.manager) || !valid(state.queue)) {
+            state.pending=false;return;
+        }
+        const uint32_t pacer=uint32_t(c->gpr[7])-0x122;
+        // Verify the frame advanced by the original title call, then updated.
+        // A request cannot render a later update or survive supersession.
+        const bool active=vm_read8(state.queue+0x14) && vm_read8(pacer+0x121);
+        auto& diagnostic=trace();
+        if(diagnostic.active.load(std::memory_order_acquire) && c->gpr[29]==1) {
+            Event event;event.kind=19;event.object=state.manager;event.sequence=state.remote;
+            event.previous_us=state.local;event.guest_us=vm_read32(state.manager+0x20);
+            event.flags=unsigned(state.pending) | unsigned(state.unsupported)<<1 | unsigned(state.seen)<<2 | unsigned(state.invited())<<3 | unsigned(state.advanced)<<4;
+            event.result=uint32_t(tb_host_now()-state.observed_ns);event.interval_bits=state.queue;
+            diagnostic.push(event);
+        }
+        if(!state.consume(vm_read32(state.manager+0x20),tb_host_now(),active,
+                          c->gpr[29]==1 && vm_read8(pacer+0x122)==1))return;
+        c->gpr[29]=0; // Only this loaded render decision changes.
         auto& recorder=trace();
-        if(recorder.active.load(std::memory_order_acquire) && !recorder.clock_only) {
-            Event event;event.kind=14;event.object=queue;
-            event.sequence=uint32_t(c->gpr[31]);event.previous_us=uint32_t(c->gpr[28]);
-            event.correction=before;event.guest_us=origin;
-            event.interval_bits=pending;event.result=retained;recorder.push(event);
+        if(recorder.active.load(std::memory_order_acquire)) {
+            Event event;event.kind=16;event.object=pacer;event.sequence=state.remote;
+            event.previous_us=state.local;event.correction=vm_read32(pacer+0x124);
+            recorder.push(event);
         }
     }
 }

@@ -13,6 +13,7 @@ FRAME_SAMPLE='        ctx->gpr[28] = vm_read32(ctx->gpr[3] + 0x20);\n'
 PHASE_REQUEST='        ctx->gpr[31] = vm_read32(ctx->gpr[2] + -0x2540);\n'
 MAIN='void func_000E0A68(ppu_context* ctx) {\n    PPU_MM_SNAP\n'
 UPDATE_CALL='        ctx->lr = 0x000E0DA8; func_0001F518(ctx); DRAIN_TRAMPOLINE(ctx);\n'
+ADVANCE_CALL='        ctx->lr = 0x000E1008; func_00169238(ctx); DRAIN_TRAMPOLINE(ctx);\n'
 RENDER_GATE='        ctx->gpr[29] = vm_read8(ctx->gpr[7] + 0x0);\n'
 ROLE_IDS='        ctx->gpr[7] = ctx->gpr[29] ^ ctx->gpr[3];\n'
 
@@ -50,10 +51,10 @@ def patch_pacing(directory):
                 replacements=[(anchor,anchor+'        tb_pacing_experiment(ctx, 15);\n')]
             else:replacements=[(sig,sig+'    tb_pacing_experiment(ctx, 15);\n')]
         elif sig==MAIN:
-            replacements=[(RENDER_GATE,RENDER_GATE+'        tb_pacing_hook(ctx, 17);\n        tb_pacing_experiment(ctx, 17);\n'), (UPDATE_CALL,'        tb_pacing_hook(ctx, 18);\n'+UPDATE_CALL)]
+            replacements=[(RENDER_GATE,RENDER_GATE+'        tb_pacing_hook(ctx, 17);\n        tb_pacing_experiment(ctx, 17);\n'), (UPDATE_CALL,'        tb_pacing_hook(ctx, 18);\n'+UPDATE_CALL), (ADVANCE_CALL,ADVANCE_CALL+'        tb_pacing_experiment(ctx, 19);\n')]
         elif sig==PACING:
-            body=body.replace('        tb_pacing_hook(ctx, 1);\n        if (', '        tb_pacing_hook(ctx, 1);\n        tb_pacing_experiment(ctx, 16);\n        if (')
-            replacements=[(PACING,PACING+'    tb_pacing_hook(ctx, 0);\n'),(POLL,POLL.replace('        if (','        tb_pacing_hook(ctx, 1);\n        tb_pacing_experiment(ctx, 16);\n        if (',1))]
+            body=body.replace('        tb_pacing_experiment(ctx, 16);\n','')
+            replacements=[(PACING,PACING+'    tb_pacing_hook(ctx, 0);\n'),(POLL,POLL.replace('        if (','        tb_pacing_hook(ctx, 1);\n        if (',1))]
         elif sig==CORRECTION:
             peak='loc_0016F014:\n        ctx->gpr[30] = (int64_t)(int32_t)(0);\n'
             replacements=[(STORE,STORE+'        tb_pacing_hook(ctx, 2);\n'),(peak,peak+'        tb_pacing_hook(ctx, 8);\n')]
@@ -85,9 +86,11 @@ def patch_pacing(directory):
             if body.count(new)==1:continue
             if body.count(old)!=1:raise ValueError('Unexpected title pacing diagnostic instruction layout')
             body=body.replace(old,new,1)
+        for retired in (2,7,8):
+            body=body.replace(f'        tb_pacing_experiment(ctx, {retired});\n','')
         # Append provenance hooks after existing numeric observations. The
         # recorder remains read-only and sees the original operands first.
-        for op in (2,7,8,11,12,14):
+        for op in (11,12,13,14):
             old=f'        tb_pacing_hook(ctx, {op});\n'
             new=old+f'        tb_pacing_experiment(ctx, {op});\n'
             if old in body and new not in body:body=body.replace(old,new)
