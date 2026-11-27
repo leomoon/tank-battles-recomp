@@ -26,7 +26,8 @@ jobs:
           python3 -m unittest discover -s scripts -p 'test_online_pacing*.py'
           python3 -m unittest discover -s scripts -p 'test_online_network_lab.py'
           python3 -m unittest discover -s scripts -p 'test_patch_network_events.py'
-          python3 -m unittest discover -s scripts -p 'test_flip_callbacks.py'
+          # This is a standalone native fixture, not a unittest module.
+          python3 scripts/test_flip_callbacks.py
           python3 -m unittest discover -s scripts -p 'test_message_dialog.py'
       - name: Launcher and overlay test dependencies
         timeout-minutes: 15
