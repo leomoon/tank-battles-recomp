@@ -1,8 +1,8 @@
 # Online frame pacing audit
 
-Current Step 7 implementation: only exact `TB_EXPERIMENTAL_ONLINE_PACING=recovery-render` enables the candidate. `stale-phase` and `recovery-no-wait` are retired and select original behavior. The older experiment descriptions below are investigation history. The current candidate and acceptance limits are described at the end of this document.
+Guarded one-frame recovery rendering is enabled by default. No environment variable is needed for ordinary play. For a developer comparison, `TB_ONLINE_PACING=original` selects the original render-skip behavior and `TB_ONLINE_PACING=recovery-render` explicitly selects the default helper. Unset, empty and unknown values use the helper; unknown nonempty values emit a diagnostic. The retired `TB_EXPERIMENTAL_ONLINE_PACING` selector and test-file control have no effect.
 
-The invited player's lower completed-frame rate is associated with the title's original synchronization loop. The loop adds a positive, frame-indexed network-clock correction to a monotonic pacing deadline. It also changes pacing phases when the peer advances. This audit establishes the arithmetic and observed mechanism, but does not establish a recompilation defect or a safe way to remove required synchronization. The original behavior remains the default. Step 4 adds a developer-only candidate for a demonstrated conflict between an older timing estimate and a newer recovery frame; it is not approved for ordinary play.
+The helper changes only one loaded render decision after a fresh exactly-one-frame recovery request and a witnessed original frame advance. It preserves guest clocks, update delta, phase/correction memory, counters, protocol and real flip completion. Steady two- and three-player evidence restores invited completed FPS from roughly 46–48 to 58–60 on the tested hardware. Strike-heavy shared slowdown remains a documented limit. The original-console timing policy has not been established. Sections labelled historical describe earlier rejected probes and do not provide current configuration instructions.
 
 The repeatable baselines and diagnostic method are described in [ONLINE_FPS_BASELINES.md](ONLINE_FPS_BASELINES.md) and [ONLINE_PACING_DIAGNOSTICS.md](ONLINE_PACING_DIAGNOSTICS.md). Local evidence is recorded in `analysis/online-fps/step1/RESULT.md`, `step2/RESULT.md` and `step3/RESULT.md`. Generated chunk numbers can change; guest function and instruction addresses below identify this title's NPUB30154 executable.
 
@@ -109,7 +109,7 @@ The reversible B-host result supports a causal connection between network/frame 
 
 The next implementation decision must account for frame-phase requests, calibrated clock offsets, the separate requested interval, and legitimate recovery waits. The developer experiment below retains the original path by default. It must prove preserved elapsed simulation time, peer frame progression, session resets and complete-round synchronization before its FPS gain is accepted. Equivalent paired RPCS3 timing and original PS3 timing have not been captured; original console behavior remains unknown. Cross-machine checks remain pending as recorded in the baseline plan.
 
-## Step 4 candidate: invalidate a superseded frame-phase estimate
+## Historical Step 4 candidate: invalidate a superseded frame-phase estimate
 
 The first Step 4 investigation did not identify a causal signaling or calibration defect. Its complete, lossless ten-sample exchange had elapsed response times of 24–57 microseconds, all adjustments matched the original arithmetic, and their differences from the latest-response midpoint were at most nine microseconds. The unchanged game still showed approximately 59.2 host FPS and 43.8 invited FPS in a short Field of War II observation. `scripts/online_clock_report.py` checks these wrapped numeric differences. That observation does not justify replacing clock calibration or signaling latency.
 
@@ -119,7 +119,7 @@ B requested 265 recovery phases. The host frame was one ahead of B on 264 reques
 
 This supports an experimental hypothesis: a positive phase estimate from an older frame should not continue to delay catch-up after a newer host frame establishes that the client is behind. It does not establish that every positive correction is wrong, that the original PS3 behaved differently, or that the candidate is correct under all network conditions. The original path therefore remains the default.
 
-### Exact developer opt-in
+### Historical developer opt-in (retired)
 
 ```sh
 TB_EXPERIMENTAL_ONLINE_PACING=stale-phase ./TankBattlesRecomp ...
@@ -160,7 +160,7 @@ All 162 retained invalidations followed a host frame one ahead of the client; th
 
 The candidate did not restore 60 completed FPS. A single short comparison does not establish a repeatable performance improvement, particularly given the phase sensitivity in Step 3. It establishes that the opt-in hook activates during gameplay while an unchanged peer remains connected. No full-round outcome, simulation-speed, adverse-network, three-player or separate-machine acceptance is claimed. The detailed records are in `analysis/online-fps/step4/RESULT.md`; Steps 5 and 6 remain required before considering a release default.
 
-## Step 5 investigation status
+## Historical Step 5 investigation status
 
 The isolated packet-condition harness and its validation workflow are documented in [ONLINE_CORRECTNESS_TESTING.md](ONLINE_CORRECTNESS_TESTING.md). Mixed original-host/candidate-invitee rounds in both host assignments reached agreed debriefs, including one round with packet faults and a bounded process stall. These observations do not establish precise movement/hit/pickup equivalence or a sustained FPS gain; the healthy invitee still fluctuated around the high 40s. Full Step 5 acceptance remains pending in `analysis/online-fps/step5/RESULT.md`. The investigation also found the independent public-room capacity bug, fixed separately in commit `3370a80`; that browser fix does not depend on the pacing experiment.
 
@@ -178,15 +178,15 @@ The separate `recovery-render` developer probe permits one actual render for a f
 
 The probe leaves the invited peer exactly one frame behind more often in these traces, which requires explicit validation before a production correction. Semaphore waiting remains active and need not decrease when rendering cadence improves; it was an elapsed-time location rather than proof of a defective wait. Shared nominal-interval adjustment also remains relevant to the final achievable cadence. Detailed interventions, lossless traces, phase partitions, timing limits and the next decision are in `analysis/online-fps/step6/RESULT.md`. Step 7 must refine the candidate and verify sustained performance and correctness. Ordinary behavior remains the original path without an exact developer opt-in.
 
-## Step 7 candidate invariants
+## Current recovery-render invariants
 
 The portable `tb_pacing_recovery::RenderState` owns one pending render decision, scoped to observed local/owner IDs, queue, manager and a lifecycle generation. It observes decoded host/local frame pairs before the original recovery branch. Only a fresh exactly-one-frame deficit can request an action. A validated hook immediately after the original frame-advance call at `0x000E1008` must observe exactly the requested next frame on the same manager. The render gate then rereads that frame after the main update. A missing or repeated advance, a later frame, or a superseding observation invalidates eligibility. Merely requiring the original local counter at the gate was rejected by live evidence: all 147 recovery requests in the lossless guard trace had already advanced once, so that condition suppressed every action. A host frame can act at most once. Duplicate/reordered observations do not refresh its 50 ms lifetime; superseding equal/newer state, unknown roles, zero IDs, disabled pacing, unsupported ownership changes and larger or ambiguous gaps preserve the title's behavior. Lifecycle resets clear pending state and advance the generation; a role change starts a new identity epoch.
 
-An accepted action changes only the loaded `r29` skip decision. It preserves guest memory, the original phase flags, correction/peak state, clocks, nominal interval, update delta, frame counters, packets, and actual flip completion. The same helper and exact hooks are used by source and consumer builds. The candidate is opt-in and has no test-file polling or deadline bypass. Stale-phase mutation and its estimate-tracking implementation are removed; earlier result files preserve their evidence.
+An accepted action changes only the loaded `r29` skip decision. It preserves guest memory, the original phase flags, correction/peak state, clocks, nominal interval, update delta, frame counters, packets, and actual flip completion. The same helper and exact hooks are used by source and consumer builds. The helper is enabled by default and has no test-file polling or deadline bypass. Stale-phase mutation and its estimate-tracking implementation are removed; earlier result files preserve their evidence.
 
 Step 7’s controlled steady-gameplay gate is complete. Three warmed 60-second samples per mode and host assignment measured original invited 45.75–47.47 FPS versus candidate 58.33–59.67. Matched three-player samples measured original invitees 46.45–47.75 versus candidate 59.00–59.48. Every candidate host sample also stayed in 58–60 FPS. Host mean FPS declined by less than 1%, with small measurable increases in occasional approximately 33 ms tail events, retained in the results rather than claiming zero overhead. Separate lossless traces kept updates near real time and decoded frame gaps bounded around equal or one frame apart; the countdown fell 112 to 91 across 21.03 seconds. All accepted intervals used visible ungrouped windows; locked, hidden and monitor-off attempts were excluded. Twenty-two focused native tests and source/consumer/package checks pass. Detailed measurements and limitations are in `analysis/online-fps/step7/RESULT.md`.
 
-Strike-heavy gameplay still drops both host and invitee to roughly 39–41 FPS in the user observation, owned-window captures and overlapping timing logs. Its cause and original/candidate comparison remain open. Step 8 owns that shared slowdown, full-round movement/input/hit correctness and adverse-network acceptance. The candidate remains opt-in; Step 9 owns any default change.
+Strike-heavy gameplay still drops both host and invitee to roughly 39–41 FPS in the user observation, owned-window captures and overlapping timing logs. Its cause and original/candidate comparison remain open. Step 8 owns that shared slowdown, full-round movement/input/hit correctness and adverse-network acceptance. The shared strike limitation is recorded below; current activation is described at the top of this document.
 
 
 ## Step 8 shared strike-time result

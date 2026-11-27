@@ -90,7 +90,7 @@ int main(int argc,char** argv) {
   ppu_context c{};
   if(!strcmp(argv[1],"render-audit")) {tb_pacing_hook(&c,0);std::this_thread::sleep_for(std::chrono::milliseconds(50));}
   memory[0x13014]=1;memory[0x10121]=1;memory[0x10122]=1;
-  const bool enabled=getenv("TB_EXPERIMENTAL_ONLINE_PACING") && !strcmp(getenv("TB_EXPERIMENTAL_ONLINE_PACING"),"recovery-render");
+  const bool enabled=!getenv("TB_ONLINE_PACING") || strcmp(getenv("TB_ONLINE_PACING"),"original");
   auto request=[&](unsigned delta) {
     c.gpr[29]=33;c.gpr[3]=16;tb_pacing_experiment(&c,14);
     c.gpr[30]=0x13000;c.gpr[3]=0x14000;c.gpr[31]=101+delta;c.gpr[28]=101;
@@ -159,7 +159,7 @@ int main(int argc,char** argv) {
  def tearDownClass(cls):cls.tmp.cleanup()
  def run_fixture(self,name,enabled,overflow=False,early=False,audit=False,clock_only=False,frame_only=False):
   trace=self.root/(name+'.jsonl');trigger=self.root/(name+'.trigger');trigger.touch()
-  env={k:v for k,v in os.environ.items() if not k.startswith('TB_PACING_') and k!='TB_EXPERIMENTAL_ONLINE_PACING'}
+  env={k:v for k,v in os.environ.items() if not k.startswith('TB_PACING_') and k not in ('TB_EXPERIMENTAL_ONLINE_PACING','TB_ONLINE_PACING')}
   if enabled:env.update(TB_PACING_TRACE=str(trace),TB_PACING_TRIGGER=str(trigger),TB_PACING_SECONDS='1',TB_PACING_ROLE='host')
   if clock_only:env['TB_PACING_CLOCK_ONLY']='1'
   if frame_only:env['TB_PACING_FRAME_ONLY']='1'
@@ -167,15 +167,20 @@ int main(int argc,char** argv) {
   return trace
  def test_disabled_creates_no_output_and_preserves_guest(self):
   self.assertFalse(self.run_fixture('off',False).exists())
- def test_render_candidate_scopes_mutation_and_retires_previous_options(self):
-  for option in (None,'','0','1','stale-phase','recovery-no-wait','recovery-render-typo','recovery-render'):
-   env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_'))}
-   if option is not None:env['TB_EXPERIMENTAL_ONLINE_PACING']=option
+ def test_release_default_and_original_control_scope_mutation(self):
+  for option in (None,'','original','0','1','stale-phase','recovery-no-wait','recovery-render-typo','recovery-render'):
+   env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_','TB_ONLINE_PACING'))}
+   if option is not None:env['TB_ONLINE_PACING']=option
+   subprocess.run([str(self.exe),'render-candidate'],env=env,check=True)
+ def test_retired_selector_cannot_disable_release_default(self):
+  for old in ('original','stale-phase','recovery-no-wait'):
+   env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_','TB_ONLINE_PACING'))}
+   env['TB_EXPERIMENTAL_ONLINE_PACING']=old
    subprocess.run([str(self.exe),'render-candidate'],env=env,check=True)
  def test_render_guard_metadata_preserves_frame_indices_and_action_meaning(self):
   trace=self.root/'render-guard.jsonl';trigger=self.root/'render-guard.trigger';trigger.touch()
-  env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_'))}
-  env.update(TB_PACING_TRACE=str(trace),TB_PACING_TRIGGER=str(trigger),TB_PACING_SECONDS='1',TB_PACING_FRAME_ONLY='1',TB_EXPERIMENTAL_ONLINE_PACING='recovery-render')
+  env={k:v for k,v in os.environ.items() if not k.startswith(('TB_PACING_','TB_EXPERIMENTAL_','TB_ONLINE_PACING'))}
+  env.update(TB_PACING_TRACE=str(trace),TB_PACING_TRIGGER=str(trigger),TB_PACING_SECONDS='1',TB_PACING_FRAME_ONLY='1',TB_ONLINE_PACING='recovery-render')
   subprocess.run([str(self.exe),'render-audit'],env=env,check=True)
   rows=[json.loads(line) for line in trace.read_text().splitlines()]
   self.assertEqual(rows[0]['dropped'],0)

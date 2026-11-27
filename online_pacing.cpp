@@ -105,9 +105,13 @@ bool valid(uint64_t p) {return vm_base && p>=0x10000 && p<=0xfffffe00ull;}
 
 struct RecoveryExperiment {
     const bool enabled=[] {
-        const char* value=getenv("TB_EXPERIMENTAL_ONLINE_PACING");
-        const bool on=value && std::string(value)=="recovery-render";
-        if(on)fprintf(stderr,"[online pacing] experimental one-frame recovery rendering enabled\n");
+        // Ordinary players use the validated helper. This developer control
+        // selects the original path for diagnostics, never a user setting.
+        const char* value=getenv("TB_ONLINE_PACING");
+        const bool on=!value || !*value || std::string(value)!="original";
+        if(value && *value && std::string(value)!="original" && std::string(value)!="recovery-render")
+            fprintf(stderr,"[online pacing] unknown comparison option; using recovery rendering\n");
+        fprintf(stderr,"[online pacing] %s\n",on?"guarded recovery rendering enabled":"original rendering selected");
         return on;
     }();
     std::mutex mutex;

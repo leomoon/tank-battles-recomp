@@ -21,6 +21,12 @@ jobs:
           python3 -m unittest discover -s scripts -p test_toolchain.py
           python3 -m unittest discover -s scripts -p test_package_builder.py
           python3 -m unittest discover -s scripts -p test_audit_builder.py
+      - name: Online pacing, recovery and packet conditions
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_online_pacing*.py'
+          python3 -m unittest discover -s scripts -p 'test_online_network_lab.py'
+          python3 -m unittest discover -s scripts -p 'test_patch_network_events.py'
+          python3 -m unittest discover -s scripts -p 'test_flip_callbacks.py'
       - name: Launcher and overlay test dependencies
         timeout-minutes: 15
         run: |
