@@ -2,13 +2,13 @@
 import json,os,shutil,subprocess,tempfile,unittest
 from pathlib import Path
 from pacing_report import report
-from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POLL,CALIBRATION,FRAME_SAMPLE,PHASE_REQUEST,ROLE_IDS,MAIN,RENDER_GATE,UPDATE_CALL,ADVANCE_CALL
+from patch_online_pacing import patch_pacing,INCLUDE,PACING,CORRECTION,STORE,POLL,CALIBRATION,FRAME_SAMPLE,PHASE_REQUEST,ROLE_IDS,MAIN,RENDER_GATE,UPDATE_CALL,ADVANCE_CALL,INTERVAL,INTERVAL_SELECTED,INTERVAL_INPUT,INTERVAL_CALL
 
 ROOT=Path(__file__).resolve().parents[1]
 class PacingHooks(unittest.TestCase):
  def fixture(self,root):
   resets='        vm_write32(ctx->gpr[31] + 0x124, ctx->gpr[0]);\n'*3
-  bodies=[PACING+'loc_001A3C34:\n'+POLL+resets+'}\n',CORRECTION+'loc_0016F014:\n        ctx->gpr[30] = (int64_t)(int32_t)(0);\n'+STORE+'}\n']
+  bodies=[PACING+'loc_001A3C34:\n'+POLL+resets+'}\n',CORRECTION+'loc_0016F014:\n        ctx->gpr[30] = (int64_t)(int32_t)(0);\n'+STORE+INTERVAL_CALL+'}\n']
   for function,nid in [('0093BD84','1F953B9F'),('0093BE84','9647570B')]:
    bodies.append(f'void func_{function}(ppu_context* ctx) {{\n    PPU_MM_SNAP\n        ps3_hle_call(0x{nid}u, ctx); return;  /* import stub */\n}}\n')
   bodies += ['void func_0016DD64(ppu_context* ctx) {\n    PPU_MM_SNAP\n'+FRAME_SAMPLE+PHASE_REQUEST+'        ctx->gpr[5] = ctx->gpr[26] - ctx->gpr[4];\n}\n',
@@ -19,6 +19,7 @@ class PacingHooks(unittest.TestCase):
    extra='        vm_write64(ctx->gpr[31] + 0x18, ctx->gpr[3]);\n' if name=='00169438' else '        vm_write64(ctx->gpr[9] + 0x110, ctx->gpr[3]);\n' if name=='001A3368' else ''
    bodies += [f'void func_{name}(ppu_context* ctx) {{\n    PPU_MM_SNAP\n'+extra+'}\n']
   bodies += [MAIN+ADVANCE_CALL+UPDATE_CALL+RENDER_GATE+'}\n']
+  bodies += [INTERVAL+INTERVAL_SELECTED+INTERVAL_INPUT+'}\n']
   for n,body in enumerate(bodies):(root/f'ppu_recomp_{n:03}.cpp').write_text(INCLUDE+body)
  def test_instruction_hooks_are_scoped_idempotent_and_register_neutral(self):
   with tempfile.TemporaryDirectory() as d:
@@ -134,7 +135,15 @@ int main(int argc,char** argv) {
   c.gpr[1]=clock_before.gpr[1];
   c.gpr[7]=clock_before.gpr[7];
   if(memcmp(&clock_before,&c,sizeof(c)))return 5;
-  c=before;
+  c.gpr[2]=0x18000;c.gpr[30]=0x13000;c.gpr[29]=0x13000;c.gpr[10]=0x14000;c.fpr[11]=0.021;
+  vm_write32(0x18000-0x255c,0x15000);vm_write32(0x18000-0x2550,0x15004);
+  vm_write32(0x15000,0x3c888889);vm_write32(0x15004,0x3ca3d70a);
+  vm_write32(0x18000-0x2548,0x3f000000);vm_write32(0x13040,0x3cac0831);
+  vm_write32(0x14010,0x3cac0831);vm_write32(0x1400c,102);
+  const auto interval_before=c;uint8_t interval_memory[sizeof(memory)];memcpy(interval_memory,memory,sizeof(memory));
+  for(unsigned op=20;op<=22;++op)tb_pacing_hook(&c,op);
+  if(memcmp(&interval_before,&c,sizeof(c)) || memcmp(interval_memory,memory,sizeof(memory)))return 7;
+  memset(memory,0,sizeof(memory));c=before;
  }
  if(memcmp(&before,&c,sizeof(c)))return 2;
  for(auto b:memory)if(b)return 3;
@@ -207,7 +216,11 @@ int main(int argc,char** argv) {
  def test_frame_only_capture_preserves_guest_and_retains_frame_events(self):
   rows=[json.loads(l) for l in self.run_fixture('frame-only',True,audit=True,frame_only=True).read_text().splitlines()]
   self.assertEqual(rows[0]['dropped'],0)
-  self.assertEqual({r['kind'] for r in rows[1:]},{1,2,3,6,7,8,9,11,12,18})
+  self.assertEqual({r['kind'] for r in rows[1:]},{1,2,3,6,7,8,9,11,12,18,20,21,22})
+  interval={r['kind']:r for r in rows[1:] if r['kind'] in (20,21,22)}
+  self.assertEqual(interval[20]['interval_bits'],0x3c888889)
+  self.assertEqual(interval[21]['interval_bits'],0x3cac0831)
+  self.assertEqual(interval[22]['local_sequence'],102)
  def test_overflow_is_bounded_and_counted(self):
   rows=[json.loads(l) for l in self.run_fixture('overflow',True,True).read_text().splitlines()]
   self.assertFalse(report(self.root/'overflow.jsonl')['usable_timeline'])

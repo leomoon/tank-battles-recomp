@@ -82,7 +82,7 @@ struct Trace {
         fclose(file);
     }
     void push(Event e) {
-        if(frame_only && e.kind!=1 && e.kind!=2 && e.kind!=3 && e.kind!=9 && e.kind!=11 && e.kind!=14 && e.kind!=15 && e.kind!=16 && e.kind!=17 && e.kind!=18 && e.kind!=19 && e.kind!=6 && e.kind!=7 && e.kind!=8 && e.kind!=12)return;
+        if(frame_only && e.kind!=1 && e.kind!=2 && e.kind!=3 && e.kind!=9 && e.kind!=11 && e.kind!=14 && e.kind!=15 && e.kind!=16 && e.kind!=17 && e.kind!=18 && e.kind!=19 && e.kind!=20 && e.kind!=21 && e.kind!=22 && e.kind!=6 && e.kind!=7 && e.kind!=8 && e.kind!=12)return;
         e.ns=tb_host_now();
         if(e.ns<start || e.ns>end) return;
         e.tx=tx.load(std::memory_order_relaxed);e.rx=rx.load(std::memory_order_relaxed);
@@ -168,6 +168,7 @@ extern "C" void tb_pacing_experiment(ppu_context* c,unsigned op) {
 // 11: original network-clock calibration completed;
 // 12: recovery phase requested; 13: incoming/local frame pair;
 // 14: title role-comparison identifiers.
+// 20/21/22: adaptive interval maximum, output and member timing input.
 extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
     auto& t=trace();
     if(!t.active.load(std::memory_order_acquire))return;
@@ -181,6 +182,7 @@ extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
         if(!valid(c->gpr[31]) || !valid(c->gpr[30]))return;
         e.kind=waiting?1:2;e.object=uint32_t(c->gpr[31]);e.polls=polls;
         e.previous_us=vm_read64(e.object+0x110);e.guest_us=c->gpr[3];
+        e.socket=uint32_t(c->gpr[30]);e.result=vm_read32(c->gpr[30]);
         e.interval_bits=vm_read32(c->gpr[30]+4);e.correction=uint32_t(c->gpr[11]);
         e.flags=uint32_t(vm_read8(e.object+0x120))<<24 | uint32_t(vm_read8(e.object+0x121))<<16 | uint32_t(vm_read8(e.object+0x122))<<8 | vm_read8(e.object+0x12d);
         e.deadline_guest_us=c->fpr[0];e.observed_float_us=c->fpr[1];
@@ -216,6 +218,21 @@ extern "C" void tb_pacing_hook(ppu_context* c,unsigned op) {
         e.kind=9;e.object=uint32_t(c->gpr[31]);e.correction=vm_read32(e.object+0x124);
         e.previous_us=vm_read64(e.object+0x110);
         e.flags=uint32_t(vm_read8(e.object+0x122))<<16 | uint32_t(vm_read8(e.object+0x12c))<<8 | vm_read8(e.object+0x12d);
+    } else if(op==20) {
+        if(!valid(c->gpr[30]) || !valid(c->gpr[2]-0x255c))return;
+        const uint32_t local_average=vm_read32(c->gpr[2]-0x255c);
+        const uint32_t target=vm_read32(c->gpr[2]-0x2550);
+        if(!valid(local_average) || !valid(target))return;
+        e.kind=20;e.object=uint32_t(c->gpr[30]);e.observed_float_us=c->fpr[11];
+        e.interval_bits=vm_read32(local_average);e.result=vm_read32(target);
+        e.correction=vm_read32(c->gpr[2]-0x2548);
+    } else if(op==21) {
+        if(!valid(c->gpr[29]))return;
+        e.kind=21;e.object=uint32_t(c->gpr[29]);e.interval_bits=vm_read32(e.object+0x40);
+    } else if(op==22) {
+        if(!valid(c->gpr[10]))return;
+        e.kind=22;e.object=uint32_t(c->gpr[10]);e.interval_bits=vm_read32(e.object+0x10);
+        e.sequence=vm_read32(e.object+0xc);e.flags=vm_read8(e.object+0x15);
     } else if(op==18) {
         e.kind=18;e.object=uint32_t(c->gpr[3]);
         const float delta=float(c->fpr[1]);memcpy(&e.interval_bits,&delta,sizeof(delta));

@@ -15,6 +15,10 @@ MAIN='void func_000E0A68(ppu_context* ctx) {\n    PPU_MM_SNAP\n'
 UPDATE_CALL='        ctx->lr = 0x000E0DA8; func_0001F518(ctx); DRAIN_TRAMPOLINE(ctx);\n'
 ADVANCE_CALL='        ctx->lr = 0x000E1008; func_00169238(ctx); DRAIN_TRAMPOLINE(ctx);\n'
 RENDER_GATE='        ctx->gpr[29] = vm_read8(ctx->gpr[7] + 0x0);\n'
+INTERVAL='void func_0016D038(ppu_context* ctx) {\n    PPU_MM_SNAP\n'
+INTERVAL_SELECTED='loc_0016D274:\n'
+INTERVAL_INPUT='        { uint32_t tmp = vm_read32(ctx->gpr[10] + 0x10); float ftmp; memcpy(&ftmp, &tmp, 4); ctx->fpr[13] = ftmp; }\n'
+INTERVAL_CALL='        ctx->lr = 0x0016F070; func_0016D038(ctx); DRAIN_TRAMPOLINE(ctx);\n'
 ROLE_IDS='        ctx->gpr[7] = ctx->gpr[29] ^ ctx->gpr[3];\n'
 
 
@@ -24,7 +28,7 @@ def patch_pacing(directory):
     edits={}
     # Validate all present functions before writing any file. Small game-free
     # fixtures contain none; a partially present title is rejected.
-    signatures=[PACING,CORRECTION,'void func_0093BD84(ppu_context* ctx) {\n    PPU_MM_SNAP\n','void func_0093BE84(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
+    signatures=[PACING,CORRECTION,INTERVAL,'void func_0093BD84(ppu_context* ctx) {\n    PPU_MM_SNAP\n','void func_0093BE84(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
     signatures+=['void func_0016DD64(ppu_context* ctx) {\n    PPU_MM_SNAP\n', 'void func_0015B0BC(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
     signatures+=['void func_001D511C(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
     signatures+=['void func_0015361C(ppu_context* ctx) {\n    PPU_MM_SNAP\n']
@@ -55,9 +59,11 @@ def patch_pacing(directory):
         elif sig==PACING:
             body=body.replace('        tb_pacing_experiment(ctx, 16);\n','')
             replacements=[(PACING,PACING+'    tb_pacing_hook(ctx, 0);\n'),(POLL,POLL.replace('        if (','        tb_pacing_hook(ctx, 1);\n        if (',1))]
+        elif sig==INTERVAL:
+            replacements=[(INTERVAL_SELECTED,INTERVAL_SELECTED+'        tb_pacing_hook(ctx, 20);\n'),(INTERVAL_INPUT,INTERVAL_INPUT+'        tb_pacing_hook(ctx, 22);\n')]
         elif sig==CORRECTION:
             peak='loc_0016F014:\n        ctx->gpr[30] = (int64_t)(int32_t)(0);\n'
-            replacements=[(STORE,STORE+'        tb_pacing_hook(ctx, 2);\n'),(peak,peak+'        tb_pacing_hook(ctx, 8);\n')]
+            replacements=[(INTERVAL_CALL,INTERVAL_CALL+'        tb_pacing_hook(ctx, 21);\n'),(STORE,STORE+'        tb_pacing_hook(ctx, 2);\n'),(peak,peak+'        tb_pacing_hook(ctx, 8);\n')]
         elif '0016DD64' in sig:
             anchor='        ctx->gpr[5] = ctx->gpr[26] - ctx->gpr[4];\n'
             replacements=[(anchor,anchor+'        tb_pacing_hook(ctx, 7);\n'),
